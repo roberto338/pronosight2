@@ -9,6 +9,15 @@ import { state } from './state.js';
 // GEMINI API (via /api/gemini)
 // ══════════════════════════════════════════════
 export async function callGemini(messages, { useSearch = false, maxTokens = 1000, model = null } = {}) {
+  // Détection automatique : Render ou localhost
+  const baseUrl = window.location.hostname === 'localhost' 
+    ? 'http://localhost:3000' 
+    : 'https://pronosight2.onrender.com';
+  
+  const url = `${baseUrl}/api/gemini`;
+  
+  console.log('📤 Envoi à:', url);
+
   const body = { 
     messages: messages, 
     useSearch: useSearch, 
@@ -16,15 +25,7 @@ export async function callGemini(messages, { useSearch = false, maxTokens = 1000
     model: model || null
   };
 
-  console.log('📤 Envoi à /api/gemini:', body);
-
   try {
-    // S'assurer que l'URL est correcte (localhost:3000)
-    const baseUrl = window.location.origin; // http://localhost:3000
-    const url = `${baseUrl}/api/gemini`;
-    
-    console.log('📍 URL appelée:', url);
-    
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -48,11 +49,7 @@ export async function callGemini(messages, { useSearch = false, maxTokens = 1000
     
     return data;
   } catch (e) {
-    console.error('❌ Erreur fetch détaillée:', {
-      message: e.message,
-      name: e.name,
-      stack: e.stack
-    });
+    console.error('❌ Erreur fetch:', e);
     throw e;
   }
 }
