@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PronoSight — IA Pronostics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800;900&family=Barlow+Condensed:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/main.css">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PronoSight">
+<meta name="theme-color" content="#00aaff">
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="logo-wrap">
+    <div class="logo-icon">🔮</div>
+    <div>
+      <div class="logo">PronoSight</div>
+      <div class="logo-sub">Intelligence artificielle · Pronostics sportifs</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">&#x1F319;</button>
+    <div class="version-badge">v3.1</div>
+    <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+  </div>
+</header>
+
+<div class="main-nav">
+  <button class="nav-btn active" id="nav-dash" onclick="switchNav('dash')">&#x1F3E0; Dashboard</button>
+  <button class="nav-btn" id="nav-prono" onclick="switchNav('prono')">&#x1F52E; Pronostics</button>
+  <button class="nav-btn" id="nav-quickpick" onclick="switchNav('quickpick')">&#x26A1; Quick Pick</button>
+  <button class="nav-btn" id="nav-bankroll" onclick="switchNav('bankroll')">&#x1F4B0; Bankroll</button>
+  <button class="nav-btn" id="nav-combo" onclick="switchNav('combo')">&#x1F3B2; Combinés</button>
+  <button class="nav-btn" id="nav-parlay" onclick="switchNav('parlay')">&#x1F3B0; Parlay manuel</button>
+  <button class="nav-btn" id="nav-alerts" onclick="switchNav('alerts')">&#x1F514; Alertes</button>
+  <button class="nav-btn" id="nav-live" onclick="switchNav('live')">&#x1F534; Live</button>
+  <button class="nav-btn" id="nav-today" onclick="switchNav('today')">&#x1F4C5; Aujourd'hui</button>
+  <button class="nav-btn" id="nav-history" onclick="switchNav('history')">&#x1F4CB; Historique <span class="nav-badge" id="histBadge">0</span></button>
+</div>
+<div class="combo-panel visible" id="dashView">
+  <div class="card">
+    <div class="dash-grid" id="dashStats">
+      <div class="dash-stat">
+        <div class="dash-stat-val" id="dashBankroll" style="color:#00dd55">--</div>
+        <div class="dash-stat-lbl">Bankroll</div>
+        <div class="dash-stat-bar" style="background:#00dd55;width:60%"></div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-val" id="dashWinrate" style="color:#ffcc00">--%</div>
+        <div class="dash-stat-lbl">Win Rate</div>
+        <div class="dash-stat-bar" style="background:#ffcc00;width:45%"></div>
+      </div>
+      <div class="dash-stat">
+        <div class="dash-stat-val" id="dashPnl" style="color:#00aaff">--</div>
+        <div class="dash-stat-lbl">P&amp;L Total</div>
+        <div class="dash-stat-bar" style="background:#00aaff;width:50%"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="dash-section">
+      <div class="dash-section-title">Derniers picks</div>
+      <div id="dashRecentPicks"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="dash-section">
+      <div class="dash-section-title">Ligues favorites</div>
+      <div id="dashFavLeagues"></div>
+    </div>
+  </div>
+</div>
+
+<div id="pronoView" style="display:none">
+<div class="sport-tabs">
+  <button class="tab active" data-sport="football" onclick="selectSport('football')">⚽ Football</button>
+  <button class="tab" data-sport="basket" onclick="selectSport('basket')">🏀 Basketball</button>
+</div>
+
+<div class="steps-bar">
+  <div class="step-item"><div class="step-num active" id="s1n">1</div><div class="step-label active" id="s1l">Ligue</div></div>
+  <div class="step-line"></div>
+  <div class="step-item"><div class="step-num" id="s2n">2</div><div class="step-label" id="s2l">Match</div></div>
+  <div class="step-line"></div>
+  <div class="step-item"><div class="step-num" id="s3n">3</div><div class="step-label" id="s3l">Analyse</div></div>
+</div>
+
+<!-- STEP 1 -->
+<div id="step1panel">
+  <div class="card">
+    <div class="card-title">🏆 <span class="ct-accent">Étape 1</span> — Choisis ta ligue</div>
+    <input class="league-search" id="leagueSearch" type="text" placeholder="🔍 Rechercher... (Ligue 1, NBA, Serie A, Botola...)" oninput="filterLeagues()">
+    <div class="league-categories" id="leagueCats"></div>
+    <div class="leagues-grid" id="leaguesGrid"></div>
+  </div>
+</div>
+
+<!-- STEP 2 -->
+<div id="step2panel" style="display:none">
+  <div class="card">
+    <div class="card-title">📅 <span class="ct-accent">Étape 2</span> — Choisis le match</div>
+    <div id="matchesContainer"><div class="match-loading"><div class="mini-spinner"></div>Chargement des matchs...</div></div>
+    <div class="or-divider">OU SAISIR</div>
+    <div class="manual-row">
+      <input class="team-input" id="team1" type="text" placeholder="Équipe domicile">
+      <div class="vs-badge">VS</div>
+      <input class="team-input" id="team2" type="text" placeholder="Équipe extérieur">
+    </div>
+
+    <div class="cup-leg-row" id="cupLegRow">
+      <div class="cup-leg-label">&#x1F3C6; Score match aller</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="leg1Score" class="ev-input" type="text" placeholder="ex: 4-0" style="max-width:110px">
+        <span style="font-size:11px;color:var(--muted)">Laisse vide si inconnu</span>
+      </div>
+    </div>
+    <!-- EV INPUT -->
+    <div class="ev-row">
+      <div class="ev-row-label">💰 Pari à Valeur (EV+)</div>
+      <div class="ev-inputs">
+        <div class="ev-field">
+          <label>Cote bookmaker</label>
+          <input class="ev-input" id="evOdds" type="number" step="0.01" min="1" placeholder="ex: 2.10">
+        </div>
+        <div class="ev-field">
+          <label>Marché (1=dom / X=nul / 2=ext)</label>
+          <input class="ev-input" id="evMarket" type="text" placeholder="ex: 1, X, 2, Over 2.5">
+        </div>
+      </div>
+    </div>
+
+    <!-- KELLY INPUT -->
+    <div class="kelly-row">
+      <div class="kelly-label">📊 Mise Kelly</div>
+      <div class="ev-inputs">
+        <div class="kelly-field">
+          <label>Ma bankroll (€)</label>
+          <input class="kelly-input" id="kellyBankroll" type="number" min="1" placeholder="ex: 500">
+        </div>
+        <div class="kelly-field">
+          <label>Fraction Kelly (0.25 conseillé)</label>
+          <input class="kelly-input" id="kellyFraction" type="number" step="0.05" min="0.05" max="1" value="0.25" placeholder="0.25">
+        </div>
+      </div>
+    </div>
+  </div>
+  <button class="analyze-btn" id="analyzeBtn" onclick="analyze()">⚡ <span>ANALYSER CE MATCH</span></button>
+</div>
+
+<div class="error-box" id="errorBox"></div>
+
+<div class="loading" id="loading">
+  <div class="big-spinner" id="bigSpinner"></div>
+  <div class="loading-text">Analyse IA en cours...</div>
+  <div class="loading-steps">
+    <div class="loading-step" id="ls1">🔍 Recherche des données récentes...</div>
+    <div class="loading-step" id="ls2">📊 Calcul des probabilités...</div>
+    <div class="loading-step" id="ls3">💰 Calcul EV+ et mise optimale...</div>
+    <div class="loading-step" id="ls4">✅ Génération du rapport...</div>
+  </div>
+</div>
+
+<div class="results" id="results"></div>
+
+</div><!-- /pronoView -->
+
+<div class="parlay-panel" id="parlayView"><div class="card">
+  <div class="card-title">&#x1F3B0; <span class="ct-accent">Parlay Builder</span></div>
+  <div id="parlayLegs"></div>
+  <button class="parlay-add-btn" id="parlayAddBtn" onclick="addParlayLeg()">+ Ajouter un match (max 6)</button>
+  <div style="margin-bottom:10px"><label style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;letter-spacing:1px;display:block;margin-bottom:3px">MISE (€)</label><input class="parlay-input" id="parlayStake" type="number" min="1" placeholder="20" style="max-width:130px"></div>
+  <button class="parlay-calc-btn" onclick="calcParlay()">&#x26A1; CALCULER MON PARLAY</button>
+  <div id="parlayResult" style="display:none"></div>
+</div></div>
+
+<div class="alerts-panel" id="alertsView"><div class="card">
+  <div class="card-title">&#x1F514; <span class="ct-accent">Alertes</span></div>
+  <div class="alert-perm-banner" id="alertPermBanner">
+    <div class="alert-perm-text">&#x1F514; Active les notifications pour les signaux haute confiance</div>
+    <button class="alert-perm-btn" onclick="requestNotifPerm()">Activer</button>
+  </div>
+  <div class="alert-threshold">
+    <label>Seuil de confiance minimum</label>
+    <input type="range" min="50" max="90" value="70" step="5" id="alertThresh" oninput="document.getElementById('alertThreshVal').textContent=this.value+'%'">
+    <div class="alert-threshold-val" id="alertThreshVal">70%</div>
+  </div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:10px">LIGUES FAVORITES</div>
+  <div class="alert-fav-grid" id="alertFavGrid"></div>
+  <button class="alert-scan-btn" id="alertScanBtn" onclick="scanAlerts()">&#x1F50D; SCANNER MES LIGUES</button>
+  <div id="alertResults"></div>
+</div></div>
+
+<div class="history-panel" id="historyView">
+  <div class="hist-stats">
+    <div class="hist-stat"><div class="hist-stat-val" id="hTotal">0</div><div class="hist-stat-lbl">ANALYSES</div></div>
+    <div class="hist-stat"><div class="hist-stat-val" id="hWins" style="color:var(--accent3)">0</div><div class="hist-stat-lbl">GAGNÉS</div></div>
+    <div class="hist-stat"><div class="hist-stat-val" id="hLoses" style="color:var(--ev-neg)">0</div><div class="hist-stat-lbl">PERDUS</div></div>
+    <div class="hist-stat"><div class="hist-stat-val" id="hRate" style="color:var(--yellow)">—</div><div class="hist-stat-lbl">TAUX WIN</div></div>
+    <div class="hist-stat"><div class="hist-stat-val" id="hPnl" style="color:#00dd55">—</div><div class="hist-stat-lbl">P&L</div></div>
+    <div class="hist-stat"><div class="hist-stat-val" id="hAvgConf" style="color:#00aaff">—</div><div class="hist-stat-lbl">CONF. MOY</div></div>
+  </div>
+  <div id="hLeagueStats" style="margin-bottom:12px"></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--muted)">HISTORIQUE</div>
+    <button class="hist-clear-btn" onclick="clearHistory()">🗑 Tout effacer</button>
+  </div>
+  <div id="histList"></div>
+</div>
+<div class="qp-panel" id="quickpickView"><div class="card">
+  <div class="qp-header">
+    <div><div class="card-title">&#x26A1; <span class="ct-accent">Quick Pick</span> du jour</div><div style="font-size:12px;color:var(--muted);margin-top:2px">Meilleurs matchs du jour dans tes ligues favorites</div></div>
+    <button class="qp-scan-btn" id="qpScanBtn" onclick="runQuickPick()">&#x1F50D; SCANNER</button>
+  </div>
+  <div id="qpResults"><div style="text-align:center;padding:40px;color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:12px">Lance un scan pour voir les meilleures opportunités du jour &#x1F3AF;</div></div>
+</div></div>
+
+<div class="bankroll-panel" id="bankrollView"><div class="card">
+  <div class="card-title">&#x1F4B0; <span class="ct-accent">Bankroll Tracker</span></div>
+  <div class="bk-summary">
+    <div class="bk-stat"><div class="bk-stat-val" id="bkCurrent">—</div><div class="bk-stat-lbl">BANKROLL</div></div>
+    <div class="bk-stat"><div class="bk-stat-val" id="bkProfit">—</div><div class="bk-stat-lbl">PROFIT NET</div></div>
+    <div class="bk-stat"><div class="bk-stat-val" id="bkROI">—</div><div class="bk-stat-lbl">ROI</div></div>
+    <div class="bk-stat"><div class="bk-stat-val" id="bkStreak">—</div><div class="bk-stat-lbl">SÉRIE</div></div>
+  </div>
+  <div class="bk-chart" id="bkChart"><canvas id="bkCanvas" style="width:100%;height:100%"></canvas></div>
+  <div class="bk-setup">
+    <div class="bk-setup-title">CONFIGURER MA BANKROLL</div>
+    <div class="bk-input-row">
+      <div><label style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;letter-spacing:1px;display:block;margin-bottom:3px">BANKROLL INITIALE (€)</label><input class="bk-input" id="bkInitial" type="number" min="1" placeholder="ex: 500"></div>
+      <button class="bk-btn" onclick="setBankroll()">Définir</button>
+    </div>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <div style="font-size:10px;letter-spacing:2px;color:var(--muted);font-family:'JetBrains Mono',monospace">HISTORIQUE DES MISES</div>
+    <button class="bk-reset-btn" onclick="resetBankroll()">&#x1F5D1; Reset</button>
+  </div>
+  <div class="bk-log" id="bkLog"><div style="text-align:center;padding:20px;color:var(--muted);font-size:12px;font-family:'JetBrains Mono',monospace">Aucune mise enregistrée</div></div>
+</div></div>
+
+
+<div class="combo-panel" id="comboView"><div class="card">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <div>
+      <div class="card-title">&#x1F3B2; <span class="ct-accent">Combinés Auto</span></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;max-width:440px;line-height:1.5">L'IA analyse les matchs du jour et génère 3 combinés : sécurisé, valeur, équilibré.</div>
+    </div>
+    <button class="combo-build-btn" id="comboBuildBtn" onclick="buildCombos()">&#x2728; GÉNÉRER</button>
+  </div>
+  <div class="combo-settings">
+    <div><label>Ligues</label><select class="combo-sel" id="comboLeagueFilter"><option value="">Mes favoris</option><option value="football">Football</option><option value="basket">Basketball</option></select></div>
+    <div><label>Sélections</label><select class="combo-sel" id="comboSize"><option value="2">Doublé</option><option value="3" selected>Triplé</option><option value="4">Quadruplé (4)</option><option value="5">5 sélections</option><option value="6">6 sélections</option><option value="7">7 sélections</option><option value="8">8 sélections</option><option value="9">9 sélections</option><option value="10">10 sélections</option></select></div>
+    <div><label>Mise (€)</label><input class="combo-sel" id="comboStake" type="number" min="1" value="20" style="width:90px"></div>
+  </div>
+  <div id="comboResults"><div style="text-align:center;padding:40px;color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:12px">Clique sur "Générer" &#x1F3B2;</div></div>
+</div></div>
+<div class="disclaimer">⚠️ PronoSight est un outil d'analyse IA — pas un conseil financier. Jouez de façon responsable. Interdit aux mineurs.</div>
+</div>
+
+
+
+<div id="apiKeyModal">
+  <div id="akBox">
+    <div id="akTitle">CLE API ANTHROPIC</div>
+    <p id="akDesc">PronoSight a besoin de ta cle API Gemini.<br>Va sur <b style="color:#fff">console.anthropic.com</b> &rarr; API Keys &rarr; Create Key.</p>
+    <input id="akInput" type="password" placeholder="AIza...">
+    <button id="akBtn" onclick="_saveKey()">ENREGISTRER</button>
+    <p id="akErr">Cle invalide (doit commencer par sk-ant-)</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════ -->
+<!-- LIVE SCORES VIEW -->
+<!-- ══════════════════════════════════════════ -->
+<div class="history-panel" id="todayView">
+  <div class="today-header">
+    <div class="today-title-row">
+      <div class="today-title">📅 MATCHS DU JOUR</div>
+      <div class="today-date" id="todayDate"></div>
+      <button class="today-refresh-btn" onclick="fetchTodayMatches(true)">🔄</button>
+    </div>
+    <div class="today-filter-row">
+      <button class="today-filter-btn active" onclick="filterToday('all',this)">Tous</button>
+      <button class="today-filter-btn" onclick="filterToday('live',this)">🔴 Live</button>
+      <button class="today-filter-btn" onclick="filterToday('soccer',this)">⚽ Football</button>
+      <button class="today-filter-btn" onclick="filterToday('basketball',this)">🏀 Basket</button>
+    </div>
+  </div>
+  <div id="todayContent" class="today-content">
+    <div class="today-loading">⏳ Clique sur l'onglet pour charger les matchs du jour...</div>
+  </div>
+</div>
+
+<div id="liveView" class="history-panel">
+  <div class="live-header">
+    <div class="live-title-row">
+      <div class="live-pulse"><span></span></div>
+      <div class="live-title">SCORES EN DIRECT</div>
+      <div id="liveLastUpdate" class="live-update-ts"></div>
+    </div>
+    <div class="live-controls">
+      <select id="liveSportFilter" onchange="filterLive()" class="live-select">
+        <option value="all">⚽🏀 Tous les sports</option>
+        <option value="soccer">⚽ Football</option>
+        <option value="basketball">🏀 Basketball</option>
+      </select>
+      <button class="live-refresh-btn" id="liveRefreshBtn" onclick="fetchLive(true)">🔄 Actualiser</button>
+    </div>
+    <div class="live-api-row" id="liveApiRow">
+      <div class="live-api-hint">🔑 Clé API-Football (optionnelle, gratuite sur api-football.com)</div>
+      <input id="liveApiKey" class="live-api-input" type="password" placeholder="Votre clé API-Football...">
+      <button class="live-api-save" onclick="saveLiveKey()">Enregistrer</button>
+    </div>
+  </div>
+
+  <div id="liveLeagueTabs" class="live-league-tabs"></div>
+  <div id="liveContent" class="live-content">
+    <div class="live-empty">
+      <div style="font-size:48px">📡</div>
+      <div style="margin-top:12px;font-weight:700;font-size:16px">Chargement des scores...</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">Connexion aux sources de données</div>
+    </div>
+  </div>
+  <div id="liveAutoRefreshBar" class="live-refresh-bar">
+    <div id="liveRefreshFill" class="live-refresh-fill"></div>
+  </div>
+</div>
+
+<button id="akChange" onclick="showApiKeyModal()">API KEY</button>
+<button id="pwaInstallBtn" onclick="installPWA()" style="display:none;position:fixed;bottom:20px;right:16px;background:var(--accent);color:#000;border:none;border-radius:12px;padding:10px 16px;font-weight:800;font-size:12px;cursor:pointer;font-family:'Exo 2',sans-serif;letter-spacing:1px;z-index:9999;align-items:center;gap:6px;box-shadow:0 4px 20px rgba(0,170,255,.4)">
+  📲 Installer l'app
+</button>
+<button id="oddsKeyBtn" onclick="showOddsKeyModal()" style="position:fixed;top:12px;right:90px;background:none;border:1px solid #333;color:#888;font-size:9px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:monospace;letter-spacing:1px;z-index:1000">📡 ODDS KEY</button>
+<button id="fdKeyBtn" onclick="showFdKeyModal()" style="position:fixed;top:12px;right:178px;background:none;border:1px solid #333;color:#888;font-size:9px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:monospace;letter-spacing:1px;z-index:1000">📅 FD KEY</button>
+
+<div id="fdKeyModal" style="position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:99999;display:none;align-items:center;justify-content:center">
+  <div style="background:#141414;border:2px solid var(--accent);border-radius:16px;padding:32px;max-width:440px;width:90%;font-family:'Exo 2',sans-serif">
+    <div style="color:var(--accent);font-size:12px;letter-spacing:3px;margin-bottom:14px;font-weight:800">📅 FOOTBALL-DATA.ORG</div>
+    <p style="color:#aaa;font-size:13px;line-height:1.6;margin-bottom:16px">
+      Matchs du jour en temps réel — toutes compétitions.<br>
+      <strong style="color:#fff">Gratuit, 10 req/min</strong> — pas de CB.<br>
+      Va sur <b style="color:var(--accent)">football-data.org</b> → Register → My Account → API Token.
+    </p>
+    <input id="fdKeyInput" type="password" placeholder="Ton token football-data.org..."
+      style="width:100%;background:#0a0a0a;border:1px solid #333;border-radius:8px;padding:12px;color:#fff;font-size:14px;font-family:monospace;margin-bottom:12px;box-sizing:border-box">
+    <div style="display:flex;gap:10px">
+      <button onclick="_saveFdKey()" style="flex:1;background:var(--accent);color:#000;border:none;border-radius:8px;padding:12px;font-weight:800;font-size:13px;cursor:pointer;font-family:'Exo 2',sans-serif;letter-spacing:1px">ENREGISTRER</button>
+      <button onclick="document.getElementById('fdKeyModal').style.display='none'" style="background:#222;color:#888;border:1px solid #333;border-radius:8px;padding:12px 16px;cursor:pointer">✕</button>
+    </div>
+    <div id="fdKeyStatus" style="margin-top:10px;font-size:12px;color:#888;font-family:monospace;min-height:16px"></div>
+  </div>
+</div>
+
+<div id="oddsKeyModal" style="position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:99999;display:none;align-items:center;justify-content:center">
+  <div style="background:#141414;border:2px solid #00aaff;border-radius:16px;padding:32px;max-width:440px;width:90%;font-family:'Exo 2',sans-serif">
+    <div style="color:#00aaff;font-size:12px;letter-spacing:3px;margin-bottom:14px;font-weight:800">📡 THE ODDS API</div>
+    <p style="color:#aaa;font-size:13px;line-height:1.6;margin-bottom:16px">
+      Cotes réelles de 40+ bookmakers (Bet365, Unibet, Betclic...).<br>
+      <strong style="color:#fff">500 requêtes/mois gratuites</strong> — pas de CB.<br>
+      Va sur <b style="color:#00aaff">the-odds-api.com</b> → Sign Up → Copy API Key.
+    </p>
+    <input id="oddsKeyInput" type="password" placeholder="Clé The Odds API..." 
+      style="width:100%;background:#0a0a0a;border:1px solid #333;border-radius:8px;padding:12px;color:#fff;font-size:14px;font-family:monospace;margin-bottom:12px;box-sizing:border-box">
+    <div style="display:flex;gap:10px">
+      <button onclick="_saveOddsKey()" style="flex:1;background:#00aaff;color:#000;border:none;border-radius:8px;padding:12px;font-weight:800;font-size:13px;cursor:pointer;font-family:'Exo 2',sans-serif;letter-spacing:1px">ENREGISTRER</button>
+      <button onclick="document.getElementById('oddsKeyModal').style.display='none'" style="background:#222;color:#888;border:1px solid #333;border-radius:8px;padding:12px 16px;cursor:pointer">✕</button>
+    </div>
+    <div id="oddsKeyStatus" style="margin-top:10px;font-size:12px;color:#888;font-family:monospace;min-height:16px"></div>
+    <div id="oddsKeyStatusInfo" style="margin-top:12px;padding:10px;background:#0a0a0a;border-radius:8px;font-size:11px;color:#555;font-family:monospace">
+      ⚠️ Aucune clé — cotes estimées par IA
+    </div>
+  </div>
+</div>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
