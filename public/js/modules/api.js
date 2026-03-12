@@ -367,7 +367,135 @@ export async function fetchRealOdds(team1, team2, leagueId) {
     return null;
   }
 }
+// Récupérer les données détaillées d'un match depuis football-data.org
+export async function fetchMatchDetails(team1, team2, leagueId) {
+  if (!state.apiStatus?.footballData) return null;
+  
+  try {
+    // Chercher l'ID de la compétition
+    const compId = FD_COMP_MAP[leagueId];
+    if (!compId) return null;
+    
+    // Récupérer les matchs de la compétition
+    const today = new Date().toISOString().split('T')[0];
+    const nextWeek = new Date(Date.now() + 7*86400000).toISOString().split('T')[0];
+    
+    const data = await fdFetch(`competitions/${compId}/matches`, {
+      dateFrom: today,
+      dateTo: nextWeek,
+      status: 'SCHEDULED'
+    });
+    
+    if (!data?.matches) return null;
+    
+    // Chercher le match correspondant
+    const match = data.matches.find(m => 
+      (m.homeTeam.name.includes(team1) || team1.includes(m.homeTeam.name)) &&
+      (m.awayTeam.name.includes(team2) || team2.includes(m.awayTeam.name))
+    );
+    
+    if (!match) return null;
+    
+    // Récupérer les stats des équipes
+    const [homeStats, awayStats] = await Promise.all([
+      fdFetch(`teams/${match.homeTeam.id}/matches`, { limit: 5, status: 'FINISHED' }),
+      fdFetch(`teams/${match.awayTeam.id}/matches`, { limit: 5, status: 'FINISHED' })
+    ]);
+    
+    return {
+      matchId: match.id,
+      homeTeam: {
+        name: match.homeTeam.name,
+        lastMatches: homeStats?.matches?.map(m => ({
+          result: m.score.winner === 'HOME_TEAM' ? 'W' : m.score.winner === 'AWAY_TEAM' ? 'L' : 'D',
+          score: `${m.score.fullTime.home || 0}-${m.score.fullTime.away || 0}`,
+          opponent: m.homeTeam.id === match.homeTeam.id ? m.awayTeam.name : m.homeTeam.name
+        })) || []
+      },
+      awayTeam: {
+        name: match.awayTeam.name,
+        lastMatches: awayStats?.matches?.map(m => ({
+          result: m.score.winner === 'AWAY_TEAM' ? 'W' : m.score.winner === 'HOME_TEAM' ? 'L' : 'D',
+          score: `${m.score.fullTime.home || 0}-${m.score.fullTime.away || 0}`,
+          opponent: m.awayTeam.id === match.awayTeam.id ? m.homeTeam.name : m.awayTeam.name
+        })) || []
+      },
+      head2head: await fetchHeadToHead(match.homeTeam.id, match.awayTeam.id)
+    };
+  } catch (e) {
+    console.warn('Erreur fetchMatchDetails:', e);
+    return null;
+  }
+}
 
+// Récupérer l'historique des confrontations
+async function fetchHeadToHead(homeTeamId, awayTeamId) {
+  try {
+    const data = await fdFetch(`teams/${homeTeamId}/matches`, {
+      limit: 10,
+      status: 'FINISHED',
+      opponentId: awayTeamId
+    });
+    
+    return data?.matches?.map(m => ({
+      score: `${m.score.fullTime.home || 0}-${m.score.fullTime.away || 0}`,
+      winner: m.score.winner,
+      date: new Date(m.utcDate).toLocaleDateString('fr-FR')
+    })) || [];
+  } catch {
+    return [];
+  }
+}
+
+// Récupérer les stats en direct pour un match
+export async function fetchLiveStats(matchId) {
+  if (!matchId) return null;
+  
+  try {
+    // Utiliser TheSportsDB pour les stats en direct
+    const data = await tsdbFetch('lookupevent.php', { id: matchId });
+    
+    if (!data?.events?.[0]) return null;
+    
+    const event = data.events[0];
+    
+    return {
+      possession: {
+        home: event.intHomeShots || 0,
+        away: event.intAwayShots || 0
+      },
+      shots: {
+        home: event.intHomeShots || 0,
+        away: event.intAwayShots || 0
+      },
+      shotsOnTarget: {
+        home: event.intHomeShotsOnTarget || 0,
+        away: event.intAwayShotsOnTarget || 0
+      },
+      corners: {
+        home: event.intHomeCorners || 0,
+        away: event.intAwayCorners || 0
+      },
+      fouls: {
+        home: event.intHomeFouls || 0,
+        away: event.intAwayFouls || 0
+      },
+      cards: {
+        home: {
+          yellow: event.intHomeYellowCards || 0,
+          red: event.intHomeRedCards || 0
+        },
+        away: {
+          yellow: event.intAwayYellowCards || 0,
+          red: event.intAwayRedCards || 0
+        }
+      },
+      minute: event.intMinute || 0
+    };
+  } catch {
+    return null;
+  }
+}
 // ══════════════════════════════════════════════
 // API STATUS
 // ══════════════════════════════════════════════
