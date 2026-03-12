@@ -155,6 +155,7 @@ async function pickLeague(id) {
 async function loadMatches() {
   const container = document.getElementById('matchesContainer');
   
+  // Vider le conteneur et afficher le chargement
   container.innerHTML = '<div class="match-loading"><div class="mini-spinner"></div>Chargement des matchs...</div>';
   
   const cacheKey = state.selectedLeague.id;
@@ -166,21 +167,33 @@ async function loadMatches() {
     return; 
   }
 
+  // Essayer TheSportsDB d'abord (c'est gratuit et fiable)
+  const tsdbId = TSDB_LEAGUE_MAP[state.selectedLeague.id];
+  if (tsdbId) {
+    try {
+      const events = await getLeagueEvents(tsdbId);
+      if (events && events.length > 0) {
+        // Les événements sont déjà au format match grâce à notre nouvelle fonction
+        MATCH_CACHE[cacheKey] = { matches: events, ts: Date.now() };
+        renderMatches(events, false);
+        return;
+      }
+    } catch (e) {
+      console.log('TheSportsDB indisponible, passage à Gemini');
+    }
+  }
+
+  // Si TheSportsDB échoue, essayer Gemini
   try {
     const lname = state.selectedLeague.name + ' (' + state.selectedLeague.country + ')';
     
-    // Prompt TRÈS explicite avec exemple
-    const prompt = `Liste les matchs de ${lname} prévus pour aujourd'hui (${new Date().toLocaleDateString('fr-FR')}) et demain.
-
-IMPORTANT - Tu dois UNIQUEMENT retourner un objet JSON valide, sans texte avant, sans texte après, sans explication.
-
-Exemple du format EXACT attendu:
-{"matches":[
-  {"team1":"PSG","team2":"Monaco","date":"06/03","time":"21:00","live":false},
-  {"team1":"Lyon","team2":"Marseille","date":"07/03","time":"17:00","live":false}
-]}
-
-Ne retourne que ce JSON, rien d'autre.`;
+    const today = new Date();
+    const todayStr = today.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+    
+    const prompt = `Liste les matchs de ${lname} pour aujourd'hui (${todayStr}) et demain.
+    
+Retourne UNIQUEMENT ce JSON: {"matches":[{"team1":"Nom","team2":"Nom","date":"JJ/MM","time":"HH:MM","live":false}]}
+Exemple: {"matches":[{"team1":"PSG","team2":"Monaco","date":"${todayStr}","time":"21:00","live":false}]}`;
     
     const data = await callGemini([{
       role: 'user',
@@ -188,72 +201,36 @@ Ne retourne que ce JSON, rien d'autre.`;
     }], { useSearch: true, maxTokens: 800 });
     
     const text = extractText(data);
-    console.log('📝 Réponse brute:', text);
+    const parsed = extractJSON(text);
     
-    // Essayer d'extraire le JSON
-    let parsed = null;
-    
-    // Méthode 1: extractJSON normal
-    parsed = extractJSON(text);
-    
-    // Méthode 2: Si ça échoue, chercher manuellement
-    if (!parsed) {
-      const jsonMatch = text.match(/\{"matches":\[.*?\]\}/s);
-      if (jsonMatch) {
-        try {
-          parsed = JSON.parse(jsonMatch[0]);
-        } catch {}
-      }
-    }
-    
-    // Méthode 3: Chercher les matchs individuellement
-    if (!parsed) {
-      const matchPattern = /\{"team1":"[^"]*","team2":"[^"]*","date":"[^"]*","time":"[^"]*","live":(?:true|false)\}/g;
-      const matches = text.match(matchPattern);
-      if (matches && matches.length > 0) {
-        parsed = { matches: matches.map(m => JSON.parse(m)) };
-      }
-    }
-    
-    if (parsed?.matches && Array.isArray(parsed.matches)) {
-      // Sauvegarder dans le cache pour 1 heure
+    if (parsed?.matches && Array.isArray(parsed.matches) && parsed.matches.length > 0) {
       MATCH_CACHE[cacheKey] = { matches: parsed.matches, ts: Date.now() };
       renderMatches(parsed.matches, false);
       return;
-    } else {
-      // Si pas de matchs trouvés, afficher un message
-      container.innerHTML = '<div class="match-loading" style="color:var(--accent2)">Aucun match trouvé pour cette ligue.<br>Utilisez la saisie manuelle ci-dessous ↓</div>';
-      
-      // Pré-remplir avec des exemples pour la ligue sélectionnée
-      const examples = {
-        'ligue1': { team1: 'PSG', team2: 'Monaco' },
-        'pl': { team1: 'Manchester City', team2: 'Arsenal' },
-        'laliga': { team1: 'Real Madrid', team2: 'Barcelona' },
-        'bundesliga': { team1: 'Bayern Munich', team2: 'Dortmund' },
-        'seriea': { team1: 'Inter Milan', team2: 'Juventus' }
-      };
-      
-      const example = examples[state.selectedLeague.id];
-      if (example) {
-        setTimeout(() => {
-          document.getElementById('team1').placeholder = example.team1;
-          document.getElementById('team2').placeholder = example.team2;
-        }, 100);
-      }
-      return;
     }
   } catch (e) {
-    console.error('Erreur chargement matchs:', e);
-    
-    // Gestion spécifique des erreurs
-    if (e.message.includes('429') || e.message.includes('rate limit')) {
-      container.innerHTML = '<div class="match-loading" style="color:var(--accent2)">⏳ Limite API atteinte. Attendez 1 minute.<br>Utilisez la saisie manuelle ↓</div>';
-    } else {
-      container.innerHTML = '<div class="match-loading" style="color:var(--accent2)">⚠️ Erreur de chargement.<br>Saisie manuelle disponible ↓</div>';
-    }
-    return;
+    console.error('Erreur Gemini:', e);
+  }
+  
+  // Si tout échoue, afficher la saisie manuelle
+  container.innerHTML = '<div class="match-loading" style="color:var(--accent2)">Aucun match trouvé automatiquement.<br>Utilisez la saisie manuelle ci-dessous ↓</div>';
+  
+  // Pré-remplir avec des exemples selon la ligue
+  const examples = {
+    'ligue1': { team1: 'PSG', team2: 'Monaco' },
+    'pl': { team1: 'Manchester City', team2: 'Arsenal' },
+    'laliga': { team1: 'Real Madrid', team2: 'Barcelona' },
+    'bundesliga': { team1: 'Bayern Munich', team2: 'Dortmund' },
+    'seriea': { team1: 'Inter Milan', team2: 'Juventus' }
+  };
+  
+  const ex = examples[state.selectedLeague.id];
+  if (ex) {
+    document.getElementById('team1').placeholder = ex.team1;
+    document.getElementById('team2').placeholder = ex.team2;
   }
 }
+
 function clearMatchCache() {
   if (state.selectedLeague) delete MATCH_CACHE[state.selectedLeague.id];
   loadMatches();
