@@ -203,7 +203,7 @@ Format exact attendu :
     const data = await callGemini([{
       role: 'user',
       content: prompt
-    }], { useSearch: true, maxTokens: 800 });
+    }], { useSearch: true, maxTokens: 2000 });
     
     const text = extractText(data);
     const parsed = extractJSON(text);
@@ -406,7 +406,7 @@ async function analyze() {
       const searchData = await callGemini([{
         role: 'user',
         content: `${t1} vs ${t2} (${league} ${matchDate}): donne moi en 3 lignes: forme récente, blessures, historique des confrontations.`
-      }], { useSearch: true, maxTokens: 800 });
+      }], { useSearch: true, maxTokens: 2000 });
       webInfo = extractText(searchData);
     } catch { webInfo = 'Recherche web indisponible'; }
 
@@ -453,7 +453,7 @@ Retourne CE JSON EXACT:
 }`;
 
     const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000 });
-    const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000 });
+
     
     // ⚠️ VÉRIFICATION DU JSON AVANT PARSING
     const text = extractText(data);
