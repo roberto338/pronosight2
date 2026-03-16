@@ -78,7 +78,9 @@ export function extractJSON(text) {
   }
   
   try {
-    return JSON.parse(match[0]);
+    // Clean control characters inside JSON strings
+    const cleaned = match[0].replace(/[\x00-\x1F\x7F]/g, ' ');
+    return JSON.parse(cleaned);
   } catch (e) {
     console.warn('Premier échec JSON:', e.message);
   }
@@ -99,6 +101,7 @@ export function extractJSON(text) {
   while (closeBraces < openBraces) { repaired += '}'; closeBraces++; }
   
   try {
+    repaired = repaired.replace(/[\x00-\x1F\x7F]/g, ' ');
     const result = JSON.parse(repaired);
     console.log('✅ JSON réparé avec succès');
     return result;
