@@ -411,15 +411,13 @@ async function analyze() {
     } catch { webInfo = 'Recherche web indisponible'; }
 
     // Prompt amélioré
-    const prompt = `Tu es un expert en analyse sportive. Analyse en FRANCAIS uniquement.
-Match : ${t1} vs ${t2} | Ligue : ${league} | Date : ${matchDate}
+    const prompt = `Analyse sportive expert. Réponds UNIQUEMENT en JSON valide.
+Match: ${t1} vs ${t2} | ${league} | ${matchDate}
+Infos: ${webInfo.slice(0, 1200)}
+JSON avec ces clés exactes (remplace les valeurs):
+{"sport":"${sport}","team1":"${t1}","team2":"${t2}","team1_emoji":"🏠","team2_emoji":"🏃","league":"${league}","match_date":"${matchDate}","is_live":${isLive},"proba_home":55,"proba_draw":25,"proba_away":20,"score_pred":"2-1","score_pred_pct":18,"alt_score1":"1-1","alt_score1_pct":14,"alt_score2":"1-0","alt_score2_pct":12,"market_btts":"Oui","market_btts_conf":62,"market_over_line":"2.5","market_over":"Over","market_over_conf":58,"market_handicap":"-1","market_handicap_conf":50,"best_bet":"Victoire ${t1}","best_bet_market":"1","best_bet_confidence":68,"stars":3,"traffic_light":"vert","analysis":"Analyse en 3 phrases.","simple_explanation":"Explication simple avec emojis.","team1_form":["W","D","W","L","W"],"team2_form":["L","W","D","W","L"],"blessures_team1":[],"blessures_team2":[],"key_factors":[{"icon":"📊","text":"Facteur 1"},{"icon":"🏠","text":"Facteur 2"},{"icon":"💪","text":"Facteur 3"}],"odds_home":1.85,"odds_draw":3.40,"odds_away":4.20,"odds_source":"estimation"}${leg1Ctx}`;
 
-INFOS WEB : ${webInfo.slice(0, 1500)}
-
-Retourne UNIQUEMENT un JSON valide sans backticks :
-{"sport":"${sport}","team1":"${t1}","team2":"${t2}","team1_emoji":"emoji","team2_emoji":"emoji","league":"${league}","match_date":"${matchDate}","is_live":${isLive},"proba_home":0,"proba_draw":0,"proba_away":0,"score_pred":"2-1","score_pred_pct":18,"alt_score1":"1-1","alt_score1_pct":15,"alt_score2":"1-0","alt_score2_pct":12,"market_btts":"Oui","market_btts_conf":65,"market_over_line":"2.5","market_over":"Over","market_over_conf":60,"market_handicap":"-1 Dom","market_handicap_conf":55,"best_bet":"meilleur pari","best_bet_market":"1","best_bet_confidence":70,"stars":4,"traffic_light":"vert","analysis":"3 phrases expert","simple_explanation":"2 phrases simples avec emojis","team1_form":["W","W","L","D","W"],"team2_form":["L","W","D","W","L"],"blessures_team1":["Joueur1"],"blessures_team2":["Joueur2"],"key_factors":[{"icon":"📊","text":"facteur 1"},{"icon":"🏠","text":"facteur 2"},{"icon":"💪","text":"facteur 3"},{"icon":"⚔️","text":"facteur 4"},{"icon":"📈","text":"facteur 5"}],"odds_home":0,"odds_draw":0,"odds_away":0,"odds_source":"estimation IA"}${leg1Ctx}`;
-
-    const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000 });
+    const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000, jsonMode: true });
 
     
     // ⚠️ VÉRIFICATION DU JSON AVANT PARSING

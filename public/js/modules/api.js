@@ -9,7 +9,35 @@ import { state } from './state.js';
 // ══════════════════════════════════════════════
 // GEMINI API (via /api/gemini)
 // ══════════════════════════════════════════════
-export async function callGemini(messages, { useSearch = false, maxTokens = 1000, model = null } = {}) {
+export async function callGemini(messages, { useSearch = false, maxTokens = 4096, model = null, jsonMode = false } = {}) {
+  const body = { messages, maxTokens, jsonMode };
+  if (model) body.model = model;
+  if (useSearch) body.useSearch = true;
+
+  console.log('📤 Envoi à /api/gemini:', { maxTokens, useSearch, jsonMode, model });
+
+  const resp = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    console.error('❌ Erreur HTTP:', resp.status, errText);
+    throw new Error('HTTP ' + resp.status + ': ' + errText);
+  }
+
+  const data = await resp.json();
+
+  if (data.error) {
+    throw new Error(data.error.message || JSON.stringify(data.error));
+  }
+  if (!data.content || !data.content.length) throw new Error('Réponse vide');
+  
+  console.log('✅ Réponse reçue:', data);
+  return data;
+} = {}) {
   const baseUrl = window.location.hostname === 'localhost'
     ? 'http://localhost:3000'
     : 'https://pronosight2.onrender.com';
@@ -64,51 +92,121 @@ export function extractText(data) {
   return (data.content || [])
     .filter(b => b.type === 'text')
     .map(b => b.text)
-    .join('\n')
+    .join('')
     .trim();
 }
 
 /** Extract JSON from Gemini text response — with auto-repair for truncated JSON */
 export function extractJSON(text) {
-  // Nettoie les backticks markdown
-  let clean = text.replace(/```json|\n```|```/g, '').trim();
-  
-  // Trouve le premier { et le dernier }
+  // Nettoyage agressif
+  let clean = text
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  // Supprime TOUT ce qui est avant le premier {
   const firstBrace = clean.indexOf('{');
-  const lastBrace = clean.lastIndexOf('}');
-  
   if (firstBrace === -1) {
-    console.warn('🔍 Pas de JSON trouvé dans:', text.slice(0, 200));
+    console.warn('🔍 Pas de { trouvé dans:', clean.slice(0, 200));
     return null;
   }
-  
-  // Extrait le JSON brut
-  let jsonStr = lastBrace > firstBrace 
-    ? clean.substring(firstBrace, lastBrace + 1)
-    : clean.substring(firstBrace);
-  
-  // Supprime les caractères de contrôle (retours ligne dans les strings, tabs, etc.)
-  jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ');
-  
-  // Compacte les espaces multiples
-  jsonStr = jsonStr.replace(/\s+/g, ' ');
-  
+  clean = clean.substring(firstBrace);
+
+  // Supprime TOUT ce qui est après le dernier }
+  const lastBrace = clean.lastIndexOf('}');
+  if (lastBrace !== -1) {
+    clean = clean.substring(0, lastBrace + 1);
+  }
+
+  // Supprime les caractères de contrôle
+  clean = clean.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, ' ');
+
   // Essai 1: Parse direct
   try {
-    const result = JSON.parse(jsonStr);
-    console.log('✅ JSON parsé directement');
+    const result = JSON.parse(clean);
+    console.log('✅ JSON parsé directement (' + Object.keys(result).length + ' clés)');
     return result;
   } catch (e) {
-    console.warn('⚠️ Premier échec JSON:', e.message);
+    console.warn('⚠️ Échec parse direct:', e.message);
   }
-  
-  // Essai 2: Réparation automatique du JSON tronqué
-  let repaired = jsonStr;
-  
-  // Supprime la dernière valeur incomplète (clé sans valeur, valeur coupée)
-  // Cas: ,"key  ou  ,"key":  ou  ,"key":"val  ou  ,"key":123
-  repaired = repaired
-    .replace(/,\s*"[^"]*"?\s*:?\s*"?[^",}\]]*$/, '')  // trailing incomplete kv
+
+  // Essai 2: Compacte tout sur une ligne et re-parse
+  let oneLine = clean.replace(/\n/g, ' ').replace(/\r/g, ' ').replace(/\s+/g, ' ');
+  try {
+    const result = JSON.parse(oneLine);
+    console.log('✅ JSON parsé après compactage');
+    return result;
+  } catch (e) {
+    console.warn('⚠️ Échec compactage:', e.message);
+  }
+
+  // Essai 3: Réparation agressive du JSON tronqué
+  let repaired = oneLine;
+
+  // Coupe après la dernière propriété complète "key":"value" ou "key":number
+  const lastComplete = Math.max(
+    repaired.lastIndexOf('",'),
+    repaired.lastIndexOf('},'),
+    repaired.lastIndexOf('],'),
+    repaired.lastIndexOf('e,'),  // true/false
+    repaired.search(/\d,(?=[^"]*$)/)  // number,
+  );
+
+  if (lastComplete > repaired.length * 0.3) {
+    repaired = repaired.substring(0, lastComplete + 1);
+  }
+
+  // Supprime les virgules traînantes
+  repaired = repaired.replace(/,\s*$/, '');
+  repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+
+  // Ferme les guillemets
+  const quotes = (repaired.match(/"/g) || []).length;
+  if (quotes % 2 !== 0) repaired += '"';
+
+  // Ferme les crochets et accolades
+  let ob = (repaired.match(/\[/g) || []).length;
+  let cb = (repaired.match(/\]/g) || []).length;
+  let oc = (repaired.match(/\{/g) || []).length;
+  let cc = (repaired.match(/\}/g) || []).length;
+  while (cb < ob) { repaired += ']'; cb++; }
+  while (cc < oc) { repaired += '}'; cc++; }
+
+  try {
+    const result = JSON.parse(repaired);
+    console.log('✅ JSON réparé (' + Object.keys(result).length + ' clés)');
+    return result;
+  } catch (e) {
+    console.error('❌ Échec réparation:', e.message);
+    console.error('   Fin du JSON:', repaired.slice(-150));
+  }
+
+  // Essai 4: Troncature brutale — coupe de plus en plus jusqu'à ce que ça parse
+  for (let cutoff = repaired.length - 1; cutoff > repaired.length * 0.3; cutoff -= 50) {
+    let chunk = repaired.substring(0, cutoff);
+    // Nettoie la fin
+    chunk = chunk.replace(/,\s*"[^"]*$/, '');
+    chunk = chunk.replace(/,\s*$/, '');
+    const q = (chunk.match(/"/g) || []).length;
+    if (q % 2 !== 0) chunk += '"';
+    ob = (chunk.match(/\[/g) || []).length;
+    cb = (chunk.match(/\]/g) || []).length;
+    oc = (chunk.match(/\{/g) || []).length;
+    cc = (chunk.match(/\}/g) || []).length;
+    while (cb < ob) { chunk += ']'; cb++; }
+    while (cc < oc) { chunk += '}'; cc++; }
+    try {
+      const result = JSON.parse(chunk);
+      if (Object.keys(result).length >= 5) {
+        console.log('✅ JSON récupéré par troncature (' + Object.keys(result).length + ' clés)');
+        return result;
+      }
+    } catch { /* continue cutting */ }
+  }
+
+  console.error('❌ ÉCHEC TOTAL — impossible de parser le JSON');
+  return null;
+}\]]*$/, '')  // trailing incomplete kv
     .replace(/,\s*$/, '')                                     // trailing comma
     .replace(/:\s*$/, ': null')                                // trailing colon
     .replace(/,\s*\]/, ']')                                  // comma before ]

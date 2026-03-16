@@ -65,7 +65,7 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
   }
 
   try {
-    const { messages, useSearch = false, maxTokens = 4096, model = null } = req.body;
+    const { messages, useSearch = false, maxTokens = 4096, model = null, jsonMode = false } = req.body;
 
     // Convertir les messages au format Gemini
     const geminiMessages = [];
@@ -84,6 +84,7 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
       generationConfig: {
         maxOutputTokens: Math.min(maxTokens || 4096, 8192),
         temperature: 0.7,
+        ...(jsonMode ? { responseMimeType: "application/json" } : {})
       }
     };
 
