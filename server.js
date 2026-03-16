@@ -38,18 +38,21 @@ app.use(express.json({ limit: '1mb' }));
 const geminiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  validate: false,
   message: { error: { message: '⏳ Trop de requêtes — attends 1 minute' } }
 });
 
 const oddsLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 20,
+  validate: false,
   message: { error: 'Rate limit odds' }
 });
 
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  validate: false,
   message: { error: 'Rate limit' }
 });
 
