@@ -650,6 +650,7 @@ function renderResults(d, evData, kellyData, leg1Score) {
       <span class="result-tracker-label">Résultat de ce pari :</span>
       <button class="result-btn result-win"  onclick="markLastResult('win')"  id="rbWin">✅ Gagné</button>
       <button class="result-btn result-lose" onclick="markLastResult('lose')" id="rbLose">❌ Perdu</button>
+      <button class="result-btn result-draw" onclick="markLastResult('draw')" id="rbDraw">🤝 Nul</button>
       <button class="result-btn result-push" onclick="markLastResult('push')" id="rbPush">↩️ Push</button>
     </div>
     <div class="match-banner"><div class="match-banner-inner">
@@ -1652,11 +1653,11 @@ function markLastResult(val) {
   saveHist(h);
   renderDashboard();
   // Feedback visuel sur les boutons
-  ['rbWin','rbLose','rbPush'].forEach(id => {
+  ['rbWin','rbLose','rbDraw','rbPush'].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.classList.remove('result-btn-active');
   });
-  const activeId = val === 'win' ? 'rbWin' : val === 'lose' ? 'rbLose' : 'rbPush';
+  const activeId = val === 'win' ? 'rbWin' : val === 'lose' ? 'rbLose' : val === 'draw' ? 'rbDraw' : 'rbPush';
   const activeBtn = document.getElementById(activeId);
   if (activeBtn) activeBtn.classList.add('result-btn-active');
 }

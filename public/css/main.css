@@ -684,6 +684,7 @@ body.light-mode::before{background:none}
 .result-btn{padding:7px 14px;border:1px solid var(--border2);border-radius:20px;background:transparent;color:var(--text2);font-size:12px;font-weight:700;font-family:'Exo 2',sans-serif;cursor:pointer;transition:all .2s}
 .result-win:hover,.result-win.result-btn-active{background:rgba(0,221,85,.15);border-color:#00dd55;color:#00dd55}
 .result-lose:hover,.result-lose.result-btn-active{background:rgba(255,51,51,.15);border-color:#ff3333;color:#ff3333}
+.result-draw:hover,.result-draw.result-btn-active{background:rgba(170,68,255,.12);border-color:var(--purple);color:var(--purple)}
 .result-push:hover,.result-push.result-btn-active{background:rgba(255,204,0,.1);border-color:var(--yellow);color:var(--yellow)}
 
 /* ── CHAT IA ── */
