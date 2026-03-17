@@ -944,6 +944,26 @@ function renderDashboard() {
       rp.onclick = () => switchNav('history');
     }
   }
+
+  const fl = document.getElementById('dashFavLeagues');
+  if (fl) {
+    const favs = getFavs();
+    if (!favs.length) {
+      fl.innerHTML = '<div class="dash-empty" style="font-size:11px">Aucune ligue favorite<br><button class="dash-cta" onclick="switchNav(\'alerts\')">🔔 Choisir des ligues</button></div>';
+    } else {
+      fl.innerHTML = LEAGUES.filter(l => favs.includes(l.id)).slice(0, 6).map(l => {
+        const lHist = hist.filter(h => h.league && h.league.includes(l.name));
+        const lRes = lHist.filter(h => h.result !== 'pending');
+        const lWr = lRes.length ? Math.round(lRes.filter(h => h.result === 'win').length / lRes.length * 100) : null;
+        const col = lWr === null ? '#888' : lWr >= 60 ? '#00dd55' : lWr >= 40 ? '#ffcc00' : '#ff3333';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;cursor:pointer" onclick="pickLeague('${l.id}');switchNav('prono')">
+          <div style="font-size:16px">${l.flag}</div>
+          <div style="flex:1"><div style="font-weight:600">${l.name}</div><div style="color:var(--muted);font-size:10px">${l.country}</div></div>
+          <div style="font-weight:700;color:${col}">${lWr !== null ? lWr + '%' : '—'}</div>
+        </div>`;
+      }).join('');
+    }
+  }
 }
 
 // ══════════════════════════════════════════════
