@@ -19,6 +19,9 @@ let parlayCount = 0;
 // INITIALISATION
 // ══════════════════════════════════════════════
 async function initApp() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+  }
   if (localStorage.getItem('ps_theme') === 'light') {
     document.body.classList.add('light-mode');
     const btn = document.getElementById('themeBtn');
@@ -652,6 +655,7 @@ function renderResults(d, evData, kellyData, leg1Score) {
       <button class="result-btn result-lose" onclick="markLastResult('lose')" id="rbLose">❌ Perdu</button>
       <button class="result-btn result-draw" onclick="markLastResult('draw')" id="rbDraw">🤝 Nul</button>
       <button class="result-btn result-push" onclick="markLastResult('push')" id="rbPush">↩️ Push</button>
+      <button class="result-btn result-share" onclick="shareAnalysis()" id="rbShare">📤 Partager</button>
     </div>
     <div class="match-banner"><div class="match-banner-inner">
       <div class="team-block"><span class="team-emoji">${d.team1_emoji || '⚽'}</span><div class="team-big">${d.team1}</div></div>
@@ -1662,6 +1666,144 @@ function markLastResult(val) {
   if (activeBtn) activeBtn.classList.add('result-btn-active');
 }
 window.markLastResult = markLastResult;
+
+async function shareAnalysis() {
+  const h = getHist();
+  const it = h[0];
+  if (!it) return;
+
+  const canvas = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = 600 * dpr;
+  canvas.height = 320 * dpr;
+  canvas.style.width = '600px';
+  canvas.style.height = '320px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  // Background
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, 600, 320);
+
+  // Accent border top
+  const grad = ctx.createLinearGradient(0, 0, 600, 0);
+  grad.addColorStop(0, '#00aaff');
+  grad.addColorStop(1, '#7b2fff');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 600, 4);
+
+  // Logo
+  ctx.font = 'bold 13px monospace';
+  ctx.fillStyle = '#00aaff';
+  ctx.fillText('🔮 PRONOSIGHT', 24, 32);
+
+  // League
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#666';
+  ctx.fillText((it.league || '').toUpperCase(), 24, 52);
+
+  // Teams
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillStyle = '#ffffff';
+  const matchStr = `${it.team1}  vs  ${it.team2}`;
+  ctx.fillText(matchStr, 24, 96);
+
+  // Separator line
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(24, 112);
+  ctx.lineTo(576, 112);
+  ctx.stroke();
+
+  // Best bet
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#888';
+  ctx.fillText('PARI RECOMMANDÉ', 24, 138);
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillStyle = '#00dd55';
+  ctx.fillText(it.best_bet || '—', 24, 162);
+
+  // Confidence
+  const conf = it.confidence || 0;
+  const confColor = conf >= 70 ? '#00dd55' : conf >= 55 ? '#ffcc00' : '#ff6633';
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#888';
+  ctx.fillText('CONFIANCE', 220, 138);
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillStyle = confColor;
+  ctx.fillText(`${conf}%`, 220, 166);
+
+  // Odds
+  if (it.odds) {
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#888';
+    ctx.fillText('COTE', 340, 138);
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillStyle = '#00aaff';
+    ctx.fillText(`×${parseFloat(it.odds).toFixed(2)}`, 340, 166);
+  }
+
+  // EV
+  if (it.ev != null) {
+    const evColor = it.ev > 0 ? '#00dd55' : '#ff3333';
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#888';
+    ctx.fillText('EV', 450, 138);
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillStyle = evColor;
+    ctx.fillText(`${it.ev > 0 ? '+' : ''}${it.ev.toFixed(1)}%`, 450, 166);
+  }
+
+  // Stars
+  const stars = '★'.repeat(it.stars || 3) + '☆'.repeat(5 - (it.stars || 3));
+  ctx.font = '18px sans-serif';
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillText(stars, 24, 210);
+
+  // Date
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#444';
+  ctx.fillText(`Analyse du ${it.date} — pronosight.app`, 24, 240);
+
+  // Disclaimer
+  ctx.font = '10px monospace';
+  ctx.fillStyle = '#333';
+  ctx.fillText('⚠️ Outil d\'analyse IA — pas un conseil financier. Jouez responsable.', 24, 300);
+
+  // Convert to blob and share
+  canvas.toBlob(async blob => {
+    const file = new File([blob], 'pronosight-analyse.png', { type: 'image/png' });
+    const shareData = {
+      title: `PronoSight — ${it.team1} vs ${it.team2}`,
+      text: `${it.best_bet} (${conf}% confiance)\n🔮 PronoSight`,
+      files: [file]
+    };
+    try {
+      if (navigator.canShare && navigator.canShare(shareData)) {
+        await navigator.share(shareData);
+      } else {
+        // Fallback: download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'pronosight-analyse.png';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'pronosight-analyse.png';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    }
+  }, 'image/png');
+}
+window.shareAnalysis = shareAnalysis;
 
 window.chatQuickSuggestion = chatQuickSuggestion;
 window.handleChatKey = handleChatKey;
