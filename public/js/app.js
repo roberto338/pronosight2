@@ -19,6 +19,11 @@ let parlayCount = 0;
 // INITIALISATION
 // ══════════════════════════════════════════════
 async function initApp() {
+  if (localStorage.getItem('ps_theme') === 'light') {
+    document.body.classList.add('light-mode');
+    const btn = document.getElementById('themeBtn');
+    if (btn) btn.innerHTML = '☀️';
+  }
   clearOldCaches();
   const status = await fetchApiStatus();
   console.log('PronoSight v4.0 — APIs:', status);
