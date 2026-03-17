@@ -405,16 +405,6 @@ async function analyze() {
     // Récupérer les données football-data si disponibles
     const fdData = await fetchMatchDetails(t1, t2, state.selectedLeague?.id);
     
-    // Récupérer des infos web
-    let webInfo = '';
-    try {
-      const searchData = await callGemini([{
-        role: 'user',
-        content: `${t1} vs ${t2} (${league} ${matchDate}): donne moi en 3 lignes: forme récente, blessures, historique des confrontations.`
-      }], { useSearch: false, maxTokens: 2000 });
-      webInfo = extractText(searchData);
-    } catch { webInfo = 'Recherche web indisponible'; }
-
     // Score match aller (coupe / double confrontation)
     const leg1Val = (document.getElementById('leg1Score') || { value: '' }).value.trim();
     const leg1Ctx = leg1Val ? ` Score match aller: ${leg1Val}.` : '';
@@ -426,7 +416,6 @@ MATCH: ${t1} vs ${t2}
 COMPÉTITION: ${league}
 DATE: ${matchDate}${leg1Ctx}
 SPORT: ${sport}
-INFOS RÉCENTES: ${webInfo.slice(0, 1200)}
 
 Retourne EXACTEMENT cet objet JSON avec toutes ces clés, en remplaçant chaque valeur par ta vraie analyse:
 {

@@ -108,7 +108,19 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
       }
     }
 
-    // Convertir les messages au format Gemini
+    // ── Groq en primaire (sauf useSearch — Groq ne supporte pas Google Search) ──
+    if (!useSearch) {
+      try {
+        const groqResult = await callGroq(messages, maxTokens, jsonMode);
+        if (cacheKey) analysisCache.set(cacheKey, { data: groqResult, ts: Date.now() });
+        console.log('[Groq] OK (primaire)');
+        return res.json(groqResult);
+      } catch (groqErr) {
+        console.warn('[Groq primaire]', groqErr.message, '— bascule Gemini');
+      }
+    }
+
+    // ── Gemini (primaire pour useSearch, fallback sinon) ──
     const geminiMessages = [];
     for (const msg of messages) {
       if (msg.role === 'user') {
@@ -119,7 +131,6 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
     }
 
     const modelName = model || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-
     const requestBody = {
       contents: geminiMessages,
       generationConfig: {
@@ -128,36 +139,29 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
         ...(jsonMode ? { responseMimeType: "application/json" } : {})
       }
     };
-
-    if (useSearch) {
-      requestBody.tools = [{ googleSearch: {} }];
-    }
+    if (useSearch) requestBody.tools = [{ googleSearch: {} }];
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-    const fetchBody = JSON.stringify(requestBody);
-
-    // Un seul appel Gemini — si 429, on bascule immédiatement sur Groq
-    // (les retries n'aident pas quand le quota est épuisé)
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: fetchBody
+      body: JSON.stringify(requestBody)
     });
     const data = await response.json();
 
     const isRateLimited = response.status === 429 ||
       !!(data.error && (data.error.message || '').match(/quota|rate/i));
 
-    // ── Groq fallback si Gemini encore limité ──
+    // ── Si Gemini aussi limité → dernier recours Groq (sans search) ──
     if (isRateLimited) {
-      console.warn('[Gemini] Quota épuisé après retries — bascule sur Groq');
+      console.warn('[Gemini] 429 — dernier recours Groq sans search');
       try {
         const groqResult = await callGroq(messages, maxTokens, jsonMode);
         if (cacheKey) analysisCache.set(cacheKey, { data: groqResult, ts: Date.now() });
-        console.log('[Groq] Réponse OK');
+        console.log('[Groq] OK (dernier recours)');
         return res.json(groqResult);
       } catch (groqErr) {
-        console.error('[Groq fallback]', groqErr.message);
+        console.error('[Groq dernier recours]', groqErr.message);
         return res.status(429).json({
           error: { message: '⏳ Limite de débit atteinte sur Gemini et Groq. Réessaie dans 1 minute.' }
         });
@@ -181,9 +185,7 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
       })) || []
     };
 
-    // ── Cache store ──
     if (cacheKey) analysisCache.set(cacheKey, { data: formattedResponse, ts: Date.now() });
-
     res.json(formattedResponse);
   } catch (err) {
     console.error('[Gemini Proxy]', err.message);
