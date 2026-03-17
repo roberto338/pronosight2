@@ -172,9 +172,9 @@ async function loadMatches() {
     try {
       const events = await getLeagueEvents(tsdbId);
       if (events && events.length > 0) {
-        // Les événements sont déjà au format match grâce à notre nouvelle fonction
-        MATCH_CACHE[cacheKey] = { matches: events, ts: Date.now() };
-        renderMatches(events, false);
+        const formatted = events.map(tsdbToMatch);
+        MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
+        renderMatches(formatted, false);
         return;
       }
     } catch (e) {
