@@ -1,12 +1,12 @@
-# PronoSight v4.0 — Architecture Sécurisée
+# PronoSight v4.1 — Architecture Sécurisée
 
 ## Quoi de neuf ?
 
 ### 🔒 Sécurité (Critique → Résolu)
-- **Backend Express** proxy toutes les API (Claude, Odds, football-data, TheSportsDB)
+- **Backend Express** proxy toutes les API (Gemini, Odds, football-data, TheSportsDB)
 - **Zéro clé API exposée** côté client — tout dans `.env` sur le serveur
 - **Helmet** pour les headers de sécurité + CSP
-- **Rate limiting** par route (15 req/min Claude, 20 req/min Odds)
+- **Rate limiting** par route (15 req/min Gemini, 20 req/min Odds)
 
 ### 📦 Maintenabilité (Élevée → Résolu)
 - **HTML** pur (383 lignes) — plus d'inline scripts ni styles
@@ -31,7 +31,7 @@ npm install
 
 # 2. Configurer les clés API
 cp .env.example .env
-# Éditer .env avec tes clés (seule ANTHROPIC_API_KEY est obligatoire)
+# Éditer .env avec tes clés (seule GEMINI_API_KEY est obligatoire)
 
 # 3. Lancer le serveur
 npm start
@@ -66,7 +66,7 @@ pronosight/
 
 | Route | Source | Clé requise |
 |-------|--------|-------------|
-| `POST /api/claude` | Anthropic | `ANTHROPIC_API_KEY` |
+| `POST /api/gemini` | Google Gemini | `GEMINI_API_KEY` |
 | `GET /api/odds/:sport` | The Odds API | `ODDS_API_KEY` |
 | `GET /api/football-data/*` | football-data.org | `FOOTBALL_DATA_KEY` |
 | `GET /api/tsdb/*` | TheSportsDB | (gratuit) |
