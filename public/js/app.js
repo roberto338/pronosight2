@@ -94,7 +94,7 @@ function switchNav(tab) {
   });
   if (tab === 'history') renderHistory();
   if (tab === 'dash') renderDashboard();
-  if (tab === 'live') fetchLive(false);
+  if (tab === 'live') { fetchLive(false); startLiveAutoRefresh(); } else stopLiveAutoRefresh();
   if (tab === 'today') fetchTodayMatches(false);
   if (tab === 'alerts') renderAlertFavs();
   if (tab === 'bankroll') renderBankroll();
@@ -1173,8 +1173,31 @@ function todayAnalyze(idx) {
 }
 
 // ══════════════════════════════════════════════
-// LIVE SCORES
+// LIVE SCORES + AUTO-REFRESH
 // ══════════════════════════════════════════════
+const LIVE_REFRESH_SEC = 60;
+let _liveInterval = null;
+
+function startLiveAutoRefresh() {
+  stopLiveAutoRefresh();
+  state.liveCountdown = LIVE_REFRESH_SEC;
+  _liveInterval = setInterval(() => {
+    state.liveCountdown--;
+    const fill = document.getElementById('liveRefreshFill');
+    if (fill) fill.style.width = ((LIVE_REFRESH_SEC - state.liveCountdown) / LIVE_REFRESH_SEC * 100) + '%';
+    if (state.liveCountdown <= 0) {
+      state.liveCountdown = LIVE_REFRESH_SEC;
+      fetchLive(true);
+    }
+  }, 1000);
+}
+
+function stopLiveAutoRefresh() {
+  if (_liveInterval) { clearInterval(_liveInterval); _liveInterval = null; }
+  const fill = document.getElementById('liveRefreshFill');
+  if (fill) fill.style.width = '0%';
+}
+
 async function fetchLive(force) {
   const btn = document.getElementById('liveRefreshBtn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Chargement...'; }
@@ -1211,6 +1234,12 @@ async function fetchLive(force) {
     if (content) content.innerHTML = `<div class="live-empty"><div style="font-size:32px">⚠️</div><div style="margin-top:8px">${e.message}</div></div>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Actualiser'; }
+  // Reset bar after manual refresh
+  if (force) {
+    state.liveCountdown = LIVE_REFRESH_SEC;
+    const fill = document.getElementById('liveRefreshFill');
+    if (fill) fill.style.width = '0%';
+  }
   }
 }
 
