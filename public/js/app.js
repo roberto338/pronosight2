@@ -1117,7 +1117,7 @@ function prefillFromLive(t1, t2) {
   switchNav('prono');
   document.getElementById('team1').value = t1;
   document.getElementById('team2').value = t2;
-  showStep(3);
+  showStep(2);
 }
 
 function saveLiveKey() { 
