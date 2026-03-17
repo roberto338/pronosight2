@@ -1041,7 +1041,7 @@ function todayAnalyze(idx) {
   switchNav('prono');
   document.getElementById('team1').value = m.team1;
   document.getElementById('team2').value = m.team2;
-  showStep(3);
+  showStep(2);
 }
 
 // ══════════════════════════════════════════════
