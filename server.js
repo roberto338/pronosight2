@@ -68,9 +68,9 @@ async function callGroq(messages, maxTokens, jsonMode) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
       messages,
-      max_tokens: Math.min(maxTokens || 4096, 8192),
+      max_tokens: Math.min(maxTokens || 4096, 4096),
       temperature: 0.7,
       ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
     })
