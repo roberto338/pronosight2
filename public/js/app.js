@@ -1466,23 +1466,34 @@ window._saveKey = function() {
 };
 
 window.showOddsKeyModal = function() {
-  const key = prompt("Entrez votre clé API The Odds API (optionnelle):");
-  if (key) {
-    localStorage.setItem('ps_oddskey', key);
-    alert('Clé Odds API sauvegardée. Redémarrez le serveur.');
-  }
+  const m = document.getElementById('oddsKeyModal');
+  if (m) { m.style.display = 'flex'; setTimeout(() => document.getElementById('oddsKeyInput')?.focus(), 100); }
 };
 
 window.showFdKeyModal = function() {
-  const key = prompt("Entrez votre clé API football-data.org (optionnelle):");
-  if (key) {
-    localStorage.setItem('ps_fdkey', key);
-    alert('Clé football-data.org sauvegardée. Redémarrez le serveur.');
-  }
+  const m = document.getElementById('fdKeyModal');
+  if (m) { m.style.display = 'flex'; setTimeout(() => document.getElementById('fdKeyInput')?.focus(), 100); }
 };
 
-window._saveOddsKey = window.showOddsKeyModal;
-window._saveFdKey = window.showFdKeyModal;
+window._saveOddsKey = function() {
+  const key = document.getElementById('oddsKeyInput')?.value.trim();
+  const status = document.getElementById('oddsKeyStatus');
+  const info = document.getElementById('oddsKeyStatusInfo');
+  if (!key) { if (status) { status.textContent = '⚠️ Clé vide'; status.style.color = '#ff3333'; } return; }
+  localStorage.setItem('ps_oddskey', key);
+  if (status) { status.textContent = '✅ Clé sauvegardée localement'; status.style.color = '#00dd55'; }
+  if (info) info.textContent = '✅ Clé enregistrée — ajoutez ODDS_API_KEY=' + key.slice(0, 8) + '... dans votre .env pour activer';
+  setTimeout(() => { document.getElementById('oddsKeyModal').style.display = 'none'; }, 1500);
+};
+
+window._saveFdKey = function() {
+  const key = document.getElementById('fdKeyInput')?.value.trim();
+  const status = document.getElementById('fdKeyStatus');
+  if (!key) { if (status) { status.textContent = '⚠️ Clé vide'; status.style.color = '#ff3333'; } return; }
+  localStorage.setItem('ps_fdkey', key);
+  if (status) { status.textContent = '✅ Clé sauvegardée — ajoutez FOOTBALL_DATA_KEY=' + key.slice(0, 8) + '... dans votre .env'; status.style.color = '#00dd55'; }
+  setTimeout(() => { document.getElementById('fdKeyModal').style.display = 'none'; }, 1500);
+};
 
 // ══════════════════════════════════════════════
 // PWA
@@ -1527,12 +1538,6 @@ window.resetBankroll = resetBankroll;
 window.runQuickPick = runQuickPick;
 window.buildCombos = buildCombos;
 window.toggleTheme = toggleTheme;
-window.showApiKeyModal = showApiKeyModal;
-window.showOddsKeyModal = showOddsKeyModal;
-window.showFdKeyModal = showFdKeyModal;
-window._saveKey = _saveKey;
-window._saveOddsKey = _saveOddsKey;
-window._saveFdKey = _saveFdKey;
 window.installPWA = installPWA;
 window.filterToday = filterToday;
 window.todayAnalyze = todayAnalyze;
