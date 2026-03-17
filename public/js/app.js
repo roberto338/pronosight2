@@ -208,7 +208,7 @@ Format exact attendu :
     const data = await callGemini([{
       role: 'user',
       content: prompt
-    }], { useSearch: true, maxTokens: 2000 });
+    }], { useSearch: true, maxTokens: 2000, cacheKey: `matches|${cacheKey}|${todayStr}` });
     
     const text = extractText(data);
     const parsed = extractJSON(text);

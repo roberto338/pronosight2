@@ -136,26 +136,17 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     const fetchBody = JSON.stringify(requestBody);
 
-    const RETRY_DELAYS = [2000, 5000, 10000];
-    let response, data, isRateLimited = false;
+    // Un seul appel Gemini — si 429, on bascule immédiatement sur Groq
+    // (les retries n'aident pas quand le quota est épuisé)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: fetchBody
+    });
+    const data = await response.json();
 
-    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: fetchBody
-      });
-      data = await response.json();
-
-      isRateLimited = response.status === 429 ||
-        !!(data.error && (data.error.message || '').match(/quota|rate/i));
-
-      if (!isRateLimited || attempt === RETRY_DELAYS.length) break;
-
-      const delay = RETRY_DELAYS[attempt];
-      console.warn(`[Gemini] 429 reçu, retry ${attempt + 1}/${RETRY_DELAYS.length} dans ${delay}ms`);
-      await new Promise(r => setTimeout(r, delay));
-    }
+    const isRateLimited = response.status === 429 ||
+      !!(data.error && (data.error.message || '').match(/quota|rate/i));
 
     // ── Groq fallback si Gemini encore limité ──
     if (isRateLimited) {
