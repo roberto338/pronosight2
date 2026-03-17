@@ -56,6 +56,34 @@ const generalLimiter = rateLimit({
   message: { error: 'Rate limit' }
 });
 
+// ── Cache mémoire analyses (2h TTL) ──
+const analysisCache = new Map();
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+
+// ── Fallback Groq (format OpenAI) ──
+async function callGroq(messages, maxTokens, jsonMode) {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) throw new Error('GROQ_API_KEY non configurée');
+  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages,
+      max_tokens: Math.min(maxTokens || 4096, 8192),
+      temperature: 0.7,
+      ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
+    })
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error('Groq HTTP ' + resp.status + ': ' + (err.error?.message || ''));
+  }
+  const groqData = await resp.json();
+  const text = groqData.choices?.[0]?.message?.content || '';
+  return { content: [{ type: 'text', text }] };
+}
+
 // ── Static files ──
 app.use(express.static(join(__dirname, 'public')));
 
@@ -69,7 +97,16 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
   }
 
   try {
-    const { messages, useSearch = false, maxTokens = 4096, model = null, jsonMode = false } = req.body;
+    const { messages, useSearch = false, maxTokens = 4096, model = null, jsonMode = false, cacheKey = null } = req.body;
+
+    // ── Cache hit ──
+    if (cacheKey) {
+      const cached = analysisCache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+        console.log(`[Cache] Hit: ${cacheKey}`);
+        return res.json(cached.data);
+      }
+    }
 
     // Convertir les messages au format Gemini
     const geminiMessages = [];
@@ -82,7 +119,7 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
     }
 
     const modelName = model || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-    
+
     const requestBody = {
       contents: geminiMessages,
       generationConfig: {
@@ -100,7 +137,7 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
     const fetchBody = JSON.stringify(requestBody);
 
     const RETRY_DELAYS = [2000, 5000, 10000];
-    let response, data;
+    let response, data, isRateLimited = false;
 
     for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
       response = await fetch(url, {
@@ -110,23 +147,34 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
       });
       data = await response.json();
 
-      const isRateLimit = response.status === 429 ||
-        (data.error && (data.error.message || '').match(/quota|rate/i));
+      isRateLimited = response.status === 429 ||
+        !!(data.error && (data.error.message || '').match(/quota|rate/i));
 
-      if (!isRateLimit || attempt === RETRY_DELAYS.length) break;
+      if (!isRateLimited || attempt === RETRY_DELAYS.length) break;
 
       const delay = RETRY_DELAYS[attempt];
       console.warn(`[Gemini] 429 reçu, retry ${attempt + 1}/${RETRY_DELAYS.length} dans ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
 
-    if (data.error) {
-      const msg = data.error.message || '';
-      if (response.status === 429 || msg.match(/quota|rate/i)) {
+    // ── Groq fallback si Gemini encore limité ──
+    if (isRateLimited) {
+      console.warn('[Gemini] Quota épuisé après retries — bascule sur Groq');
+      try {
+        const groqResult = await callGroq(messages, maxTokens, jsonMode);
+        if (cacheKey) analysisCache.set(cacheKey, { data: groqResult, ts: Date.now() });
+        console.log('[Groq] Réponse OK');
+        return res.json(groqResult);
+      } catch (groqErr) {
+        console.error('[Groq fallback]', groqErr.message);
         return res.status(429).json({
-          error: { message: '⏳ Limite de débit API atteinte. Réessaie dans quelques secondes.' }
+          error: { message: '⏳ Limite de débit atteinte sur Gemini et Groq. Réessaie dans 1 minute.' }
         });
       }
+    }
+
+    if (data.error) {
+      const msg = data.error.message || '';
       if (msg.includes('billing') || msg.includes('payment')) {
         return res.status(402).json({
           error: { message: '💳 Quota API épuisé. Vérifie ton compte Google Cloud.' }
@@ -141,6 +189,9 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
         text: p.text || ''
       })) || []
     };
+
+    // ── Cache store ──
+    if (cacheKey) analysisCache.set(cacheKey, { data: formattedResponse, ts: Date.now() });
 
     res.json(formattedResponse);
   } catch (err) {
@@ -252,6 +303,7 @@ app.get('/api/tsdb/*', generalLimiter, async (req, res) => {
 app.get('/api/status', (req, res) => {
   res.json({
     gemini: !!process.env.GEMINI_API_KEY,
+    groq: !!process.env.GROQ_API_KEY,
     odds: !!process.env.ODDS_API_KEY,
     footballData: !!process.env.FOOTBALL_DATA_KEY,
     liveApi: !!process.env.LIVE_API_KEY,
@@ -269,6 +321,7 @@ app.listen(PORT, () => {
   console.log(`\n  ⚡ PronoSight v4.0 (GEMINI) — http://localhost:${PORT}\n`);
   console.log('  APIs configurées:');
   console.log(`    Gemini:        ${process.env.GEMINI_API_KEY ? '✅' : '❌ manquante'}`);
+  console.log(`    Groq (fallback):${process.env.GROQ_API_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Odds API:      ${process.env.ODDS_API_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Football-Data: ${process.env.FOOTBALL_DATA_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Live API:      ${process.env.LIVE_API_KEY ? '✅' : '⚠️  optionnelle'}\n`);

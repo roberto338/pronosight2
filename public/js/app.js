@@ -411,7 +411,7 @@ async function analyze() {
       const searchData = await callGemini([{
         role: 'user',
         content: `${t1} vs ${t2} (${league} ${matchDate}): donne moi en 3 lignes: forme récente, blessures, historique des confrontations.`
-      }], { useSearch: true, maxTokens: 2000 });
+      }], { useSearch: false, maxTokens: 2000 });
       webInfo = extractText(searchData);
     } catch { webInfo = 'Recherche web indisponible'; }
 
@@ -484,7 +484,7 @@ RÈGLES ABSOLUES:
 - stars = 1 si confidence < 55, 2 si < 65, 3 si < 75, 4 si < 85, 5 si >= 85
 - Toutes les chaînes en français sauf team1_form/team2_form (W/D/L)`;
 
-    const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000, jsonMode: true });
+    const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000, jsonMode: true, cacheKey: `${t1}|${t2}|${league}` });
 
     
     const text = extractText(data);

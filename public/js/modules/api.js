@@ -9,10 +9,11 @@ import { state } from './state.js';
 // ══════════════════════════════════════════════
 // GEMINI API (via /api/gemini)
 // ══════════════════════════════════════════════
-export async function callGemini(messages, { useSearch = false, maxTokens = 4096, model = null, jsonMode = false } = {}) {
+export async function callGemini(messages, { useSearch = false, maxTokens = 4096, model = null, jsonMode = false, cacheKey = null } = {}) {
   const body = { messages, maxTokens, jsonMode };
   if (model) body.model = model;
   if (useSearch) body.useSearch = true;
+  if (cacheKey) body.cacheKey = cacheKey;
 
   console.log('📤 Envoi à /api/gemini:', { maxTokens, useSearch, jsonMode });
 
