@@ -1096,10 +1096,11 @@ async function fetchTodayMatches(force) {
   if (content) content.innerHTML = '<div class="today-loading">⏳ Chargement...</div>';
 
   try {
+    const tomorrowStr = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     const allMatches = [];
     const promises = TODAY_LEAGUES.map(league =>
       getLeagueEvents(league.tsdb).then(events => {
-        (events || []).filter(e => e.dateEvent === todayStr || e.dateEvent === new Date(Date.now() + 86400000).toISOString().slice(0, 10))
+        (events || []).filter(e => e.dateEvent === todayStr || e.dateEvent === tomorrowStr)
           .forEach(e => {
             const m = tsdbToMatch(e);
             m.leagueName = league.name; m.leagueFlag = league.flag;
