@@ -37,7 +37,7 @@ app.use(express.json({ limit: '1mb' }));
 // ── Rate Limiting ──
 const geminiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 60,
+  max: 12,
   validate: false,
   message: { error: { message: '⏳ Trop de requêtes — attends 1 minute' } }
 });
@@ -97,18 +97,32 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+    const fetchBody = JSON.stringify(requestBody);
 
-    const data = await response.json();
+    const RETRY_DELAYS = [2000, 5000, 10000];
+    let response, data;
+
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: fetchBody
+      });
+      data = await response.json();
+
+      const isRateLimit = response.status === 429 ||
+        (data.error && (data.error.message || '').match(/quota|rate/i));
+
+      if (!isRateLimit || attempt === RETRY_DELAYS.length) break;
+
+      const delay = RETRY_DELAYS[attempt];
+      console.warn(`[Gemini] 429 reçu, retry ${attempt + 1}/${RETRY_DELAYS.length} dans ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
 
     if (data.error) {
       const msg = data.error.message || '';
-      if (response.status === 429 || msg.includes('quota') || msg.includes('rate')) {
+      if (response.status === 429 || msg.match(/quota|rate/i)) {
         return res.status(429).json({
           error: { message: '⏳ Limite de débit API atteinte. Réessaie dans quelques secondes.' }
         });
