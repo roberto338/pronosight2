@@ -560,7 +560,7 @@ RÈGLES ABSOLUES:
     // On va stocker fdData dans d pour qu'il soit accessible dans renderResults
     d.fdData = fdData;
     
-    renderResults(d, evData, kellyData, '', null);
+    renderResults(d, evData, kellyData, '');
     
   } catch (e) {
     console.error('Erreur analyse:', e);
@@ -604,7 +604,7 @@ RÈGLES ABSOLUES:
       fdData: null
     };
     
-    renderResults(defaultAnalysis, null, null, '', null);
+    renderResults(defaultAnalysis, null, null, '');
   } finally {
     btn.disabled = false;
     document.getElementById('loading').classList.remove('visible');
@@ -612,44 +612,7 @@ RÈGLES ABSOLUES:
   }
 }
 
-function processAnalysisResult(d, t1, t2, league, fromCache, realOddsData) {
-  const bookOdds = parseFloat(document.getElementById('evOdds').value) || 0;
-  const evMarket = (document.getElementById('evMarket').value || '').trim();
-  const bankroll = parseFloat(document.getElementById('kellyBankroll').value) || 0;
-  const kellyFraction = parseFloat(document.getElementById('kellyFraction').value) || 0.25;
-  let evData = null, kellyData = null;
-
-  if (bookOdds > 1 && evMarket) {
-    let trueProb = 0;
-    const mLow = evMarket.toLowerCase();
-    if (mLow === '1') trueProb = d.proba_home / 100;
-    else if (mLow === 'x' || mLow === 'nul') trueProb = (d.proba_draw || 0) / 100;
-    else if (mLow === '2') trueProb = d.proba_away / 100;
-    else trueProb = d.best_bet_confidence / 100;
-    if (trueProb > 0) {
-      const ev = calcEV(bookOdds, trueProb);
-      evData = { ev, trueProb, bookOdds, market: evMarket };
-      if (bankroll > 0) kellyData = { ...calcKelly(bookOdds, trueProb, bankroll, kellyFraction), bankroll, fraction: kellyFraction };
-    }
-  }
-
-  const leg1Sv = (document.getElementById('leg1Score') || { value: '' }).value.trim();
-  renderResults(d, evData, kellyData, leg1Sv, realOddsData);
-
-  if (fromCache) {
-    setTimeout(() => {
-      const res = document.getElementById('results');
-      if (res) {
-        const badge = document.createElement('div');
-        badge.innerHTML = '<div style="position:absolute;top:8px;right:8px;background:rgba(0,194,255,.12);color:#00c2ff;font-size:9px;font-family:monospace;padding:3px 7px;border-radius:4px;border:1px solid rgba(0,194,255,.3)">⚡ CACHE</div>';
-        res.style.position = 'relative';
-        res.insertBefore(badge.firstChild, res.firstChild);
-      }
-    }, 100);
-  }
-}
-
-function renderResults(d, evData, kellyData, leg1Score, realOddsData) {
+function renderResults(d, evData, kellyData, leg1Score) {
   const isBk = d.sport === 'basketball';
   let wi = 0;
   if (d.proba_away > d.proba_home && d.proba_away > (d.proba_draw || 0)) wi = 2;
