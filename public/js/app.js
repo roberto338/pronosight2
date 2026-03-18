@@ -1646,42 +1646,112 @@ async function buildCombos() {
   const size = parseInt(document.getElementById('comboSize').value) || 3;
   const stake = parseFloat(document.getElementById('comboStake').value) || 20;
   const lf = document.getElementById('comboLeagueFilter').value;
-  const favs = getFavs();
-  let ctx;
-  if (lf === 'football') ctx = 'Ligue 1, Premier League, La Liga, Bundesliga, Serie A, Champions League, Europa League';
-  else if (lf === 'basket') ctx = 'NBA, Euroleague, NCAAbasket';
-  else if (favs.length) ctx = LEAGUES.filter(l => favs.includes(l.id)).map(l => l.name).join(', ');
-  else ctx = 'Ligue 1, Premier League, La Liga, Bundesliga, Champions League';
 
   const maxTokens = size <= 4 ? 3000 : size <= 6 ? 4500 : size <= 8 ? 6000 : 7500;
 
   try {
-    res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">🔍 Recherche des matchs en cours...</div>';
+    res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">📡 Récupération des vrais matchs...</div>';
 
-    const d1 = await callGemini([{
-      role: 'user',
-      content: `Recherche les VRAIS matchs programmés dans les 3 prochains jours (date: ${new Date().toLocaleDateString('fr-FR')}) dans: ${ctx}. Liste au moins ${size * 4} matchs avec: equipe1, equipe2, compétition, date JJ/MM.`
-    }], { useSearch: true, maxTokens: 1500 });
-    const info = extractText(d1);
+    // ── 1. Ligues à interroger selon le filtre ──
+    const favs = getFavs();
+    let leaguesToFetch;
+    if (lf === 'basket') {
+      leaguesToFetch = TODAY_LEAGUES.filter(l => l.sport === 'basketball');
+    } else if (lf === 'favs' && favs.length) {
+      leaguesToFetch = TODAY_LEAGUES.filter(l => favs.includes(l.id));
+    } else {
+      leaguesToFetch = TODAY_LEAGUES.filter(l => l.sport === 'soccer');
+    }
+    if (!leaguesToFetch.length) leaguesToFetch = TODAY_LEAGUES.filter(l => l.sport === 'soccer');
+
+    // ── 2. Récupérer les vrais matchs des 3 prochains jours ──
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const in3days  = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+    const realMatches = [];
+
+    // Source A : Football-Data.org (top 5 + coupes)
+    const fdLeagues = leaguesToFetch.filter(l => FD_COMP_MAP[l.id] && state.apiStatus?.footballData);
+    await Promise.all(fdLeagues.map(async league => {
+      try {
+        const data = await fdFetch(`competitions/${FD_COMP_MAP[league.id]}/matches?dateFrom=${todayStr}&dateTo=${in3days}`);
+        (data?.matches || []).forEach(m => {
+          if (m.status === 'FINISHED' || m.status === 'IN_PLAY' || m.status === 'PAUSED') return;
+          const match = fdToMatch(m, league);
+          match.leagueId = league.id;
+          realMatches.push(match);
+        });
+      } catch { /* ignore */ }
+    }));
+
+    // Source B : TheSportsDB pour les ligues non couvertes par FD.org
+    const fdLeagueIds = new Set(fdLeagues.map(l => l.id));
+    const tsdbLeagues = leaguesToFetch.filter(l => !fdLeagueIds.has(l.id) && l.tsdb);
+    await Promise.all(tsdbLeagues.map(async league => {
+      try {
+        const events = await getLeagueEvents(league.tsdb);
+        (events || [])
+          .filter(e => e.dateEvent >= todayStr && e.dateEvent <= in3days)
+          .forEach(e => {
+            const m = tsdbToMatch(e);
+            m.leagueName = league.name; m.leagueFlag = league.flag;
+            m.leagueId = league.id; m.sport = league.sport;
+            realMatches.push(m);
+          });
+      } catch { /* ignore */ }
+    }));
+
+    // ── 3. Dédupliquer et filtrer les matchs déjà joués ──
+    const seen = new Set();
+    const unique = realMatches.filter(m => {
+      if (m.status === 'FT' || m.status === 'FINISHED') return false;
+      const key = `${m.team1}|${m.team2}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+
+    if (!unique.length) {
+      throw new Error('Aucun match réel trouvé pour les 3 prochains jours. Vérifie ta connexion ou reviens plus tard.');
+    }
+
+    // ── 4. Adapter la taille si pas assez de matchs ──
+    const actualSize = Math.min(size, unique.length);
+    if (actualSize < size) {
+      res.innerHTML = `<div style="text-align:center;padding:16px;color:var(--yellow);font-size:12px">⚠️ ${unique.length} matchs trouvés — combinés réduits à ${actualSize} sélections</div>`;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // ── 5. Construire la liste de matchs pour le prompt ──
+    const matchList = unique.map((m, i) => {
+      const lg = m.leagueName || m.league || '';
+      const dt = m.date + (m.time && m.time !== 'TBD' ? ' ' + m.time : '');
+      return `${i + 1}. ${m.team1} vs ${m.team2} | ${lg} | ${dt}`;
+    }).join('\n');
 
     res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">🧠 Génération des combinés IA...</div>';
 
-    const d2 = await callGemini([{
-      role: 'user',
-      content: `Matchs disponibles:\n${info.slice(0, 1500)}\n\nGénère 4 combinés de EXACTEMENT ${size} legs chacun basés sur ces matchs. 4 types OBLIGATOIRES:
+    // ── 6. Gemini génère les combos à partir UNIQUEMENT de ces matchs ──
+    const prompt = `Tu es un expert en paris sportifs. Voici la liste EXACTE des vrais matchs disponibles:
+
+${matchList}
+
+Génère 4 combinés de EXACTEMENT ${actualSize} legs chacun. 4 types OBLIGATOIRES:
 1. "blinde": cotes 1.20-1.65/leg, confiance >= 82% — SÉCURITÉ MAX
 2. "value": EV+ (confiance > 1/odds en %), cotes 1.65-2.80/leg — VALUE BET
 3. "equilibre": mix blinde + value, cotes 1.50-2.20/leg
 4. "outsider": cotes 2.50-6.00/leg, confiance 52-70% — GROS POTENTIEL
 
-Règles: chaque match utilisé UNE SEULE FOIS par combo. Matchs différents entre combos recommandé.
+RÈGLES ABSOLUES:
+- Utilise UNIQUEMENT les matchs numérotés ci-dessus, JAMAIS d'autres matchs inventés
+- Recopie les noms des équipes, la ligue et la date EXACTEMENT comme dans la liste
+- Chaque match peut être dans plusieurs combos mais UNE SEULE FOIS par combo
 
 JSON COMPACT (champs courts obligatoires):
-{"combos":[{"type":"blinde","legs":[{"t1":"Equipe1","t2":"Equipe2","lg":"Compétition","dt":"JJ/MM","bet":"description","odds":1.45,"conf":85}],"cote":X.XX,"proba":XX,"ev":X.X,"verdict":"phrase courte"}]}
+{"combos":[{"type":"blinde","legs":[{"t1":"Equipe1","t2":"Equipe2","lg":"Compétition","dt":"JJ/MM","bet":"description pari","odds":1.45,"conf":85}],"cote":X.XX,"proba":XX,"ev":X.X,"verdict":"phrase courte"}]}
 
 CALCULS: cote=produit des odds, proba=produit(conf/100)*100, ev=(proba/100)*(cote-1)-(1-proba/100).
-EXACTEMENT ${size} legs par combo, 4 combos total.`
-    }], { maxTokens, jsonMode: true });
+EXACTEMENT ${actualSize} legs par combo, 4 combos total.`;
+
+    const d2 = await callGemini([{ role: 'user', content: prompt }], { maxTokens, jsonMode: true });
 
     const parsed = extractJSON(extractText(d2));
     const combos = parsed?.combos || [];
