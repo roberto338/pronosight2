@@ -8,7 +8,7 @@ import { state, MATCH_CACHE, getCachedAnalysis, setCachedAnalysis,
          clearOldCaches, getHist, saveHist, getFavs, saveFavs,
          getBankrollData, saveBankrollData } from './modules/state.js';
 import { callClaude, callGemini, extractText, extractJSON, tsdbFetch, getLeagueEvents,
-         tsdbToMatch, fdFetch, fdToMatch, fetchRealOdds, fetchApiStatus, fetchMatchDetails, fetchLeagueStandings, fetchLiveStats, fetchH2H } from './modules/api.js';
+         tsdbToMatch, fdFetch, fdToMatch, fetchRealOdds, fetchApiStatus, fetchMatchDetails, fetchLeagueStandings, fetchLiveStats, fetchH2H, fetchRealStats } from './modules/api.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -398,12 +398,13 @@ async function analyze() {
   const isLive = state.selectedMatch?.live || false;
 
   try {
-    // Récupérer données football-data, classement, H2H et cotes réelles en parallèle
-    const [fdData, standings, h2hEvents, realOdds] = await Promise.all([
+    // Récupérer données football-data, classement, H2H, cotes réelles et stats API-Football en parallèle
+    const [fdData, standings, h2hEvents, realOdds, realStats] = await Promise.all([
       fetchMatchDetails(t1, t2, state.selectedLeague?.id),
       fetchLeagueStandings(state.selectedLeague?.id),
       fetchH2H(state.selectedMatch?.home_team_id, state.selectedMatch?.away_team_id),
-      fetchRealOdds(t1, t2, state.selectedLeague?.id)
+      fetchRealOdds(t1, t2, state.selectedLeague?.id),
+      fetchRealStats(t1, t2, state.selectedLeague?.id)
     ]);
 
     // Extraire les stats des deux équipes depuis le classement
@@ -428,6 +429,55 @@ async function analyze() {
       h2hCtx = `\nH2H: Utilise tes connaissances des confrontations directes récentes entre ${t1} et ${t2}.`;
     }
 
+    // Stats réelles API-Football (forme, blessures, H2H)
+    let statsCtx = '';
+    if (realStats) {
+      const fmtForm = (fixtures, teamId) => {
+        if (!fixtures?.length) return 'N/A';
+        return fixtures.slice(0, 5).map(f => {
+          const g = f.goals, teams = f.teams;
+          const isHome = teams.home.id === teamId;
+          let res;
+          if (teams.home.winner === true) res = isHome ? 'W' : 'L';
+          else if (teams.away.winner === true) res = isHome ? 'L' : 'W';
+          else res = 'D';
+          const score = `${g.home}-${g.away}`;
+          const opp = isHome ? teams.away.name : teams.home.name;
+          return `${res}(${score} vs ${opp})`;
+        }).join(', ');
+      };
+
+      const fmtH2H = (fixtures) => {
+        if (!fixtures?.length) return 'N/A';
+        return fixtures.slice(0, 5).map(f => {
+          const g = f.goals, teams = f.teams, date = f.fixture.date?.slice(0, 10) || '';
+          return `${date}: ${teams.home.name} ${g.home}-${g.away} ${teams.away.name}`;
+        }).join(' | ');
+      };
+
+      const fmtInj = (injuries) => {
+        if (!injuries?.length) return 'aucun signalé';
+        // Structure api-sports.io: i.player.type = type, i.player.reason = raison
+        const unique = [];
+        const seen = new Set();
+        for (const i of injuries) {
+          if (!seen.has(i.player?.name)) {
+            seen.add(i.player?.name);
+            unique.push(`${i.player?.name} (${i.player?.reason || i.player?.type || '?'})`);
+          }
+          if (unique.length >= 5) break;
+        }
+        return unique.join(', ') || 'aucun signalé';
+      };
+
+      statsCtx = `\n\n⚡ STATISTIQUES RÉELLES (API-Football — utilise ces données en priorité absolue):
+- Forme récente ${t1}: ${fmtForm(realStats.form1, realStats.team1Id)}
+- Forme récente ${t2}: ${fmtForm(realStats.form2, realStats.team2Id)}
+- H2H récents: ${fmtH2H(realStats.h2h)}
+- Blessés/suspendus ${t1}: ${fmtInj(realStats.injuries1)}
+- Blessés/suspendus ${t2}: ${fmtInj(realStats.injuries2)}`;
+    }
+
     // Score match aller (coupe / double confrontation)
     const leg1Val = (document.getElementById('leg1Score') || { value: '' }).value.trim();
     const leg1Ctx = leg1Val ? ` Score match aller: ${leg1Val}.` : '';
@@ -438,7 +488,7 @@ async function analyze() {
 MATCH: ${t1} vs ${t2}
 COMPÉTITION: ${league}
 DATE: ${matchDate}${leg1Ctx}
-SPORT: ${sport}${standingsCtx}${h2hCtx}
+SPORT: ${sport}${standingsCtx}${h2hCtx}${statsCtx}
 
 Retourne EXACTEMENT cet objet JSON avec toutes ces clés, en remplaçant chaque valeur par ta vraie analyse:
 {
@@ -499,7 +549,8 @@ RÈGLES ABSOLUES:
 - best_bet_confidence entre 50 et 95
 - traffic_light = "vert" si best_bet_confidence >= 70, "orange" si >= 55, "rouge" sinon
 - stars = 1 si confidence < 55, 2 si < 65, 3 si < 75, 4 si < 85, 5 si >= 85
-- Toutes les chaînes en français sauf team1_form/team2_form (W/D/L)`;
+- Toutes les chaînes en français sauf team1_form/team2_form (W/D/L)
+${statsCtx ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_form/team2_form) et les blessures à partir des STATISTIQUES RÉELLES fournies ci-dessus. Ces données sont factuelles et récentes.' : '- Base ton analyse sur tes connaissances à jour de ces équipes.'}`;
 
     const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000, jsonMode: true, cacheKey: `${t1}|${t2}|${league}` });
 
@@ -582,6 +633,7 @@ RÈGLES ABSOLUES:
     // On va stocker fdData dans d pour qu'il soit accessible dans renderResults
     d.fdData = fdData;
     d.realOdds = realOdds;
+    d.realStats = !!realStats;
 
     renderResults(d, evData, kellyData, '');
     
@@ -759,7 +811,7 @@ function renderResults(d, evData, kellyData, leg1Score) {
       <div class="form-team"><div class="form-team-name">${d.team1}</div><div class="form-dots">${form1}</div></div>
       <div class="form-team"><div class="form-team-name">${d.team2}</div><div class="form-dots">${form2}</div></div>
     </div></div>
-    <div class="analysis-block ${isBk ? 'bk' : ''}"><div class="analysis-header">📊 Analyse experte IA</div>${d.analysis}</div>
+    <div class="analysis-block ${isBk ? 'bk' : ''}"><div class="analysis-header">📊 Analyse experte IA${d.realStats ? ' <span class="live-stats-badge">📡 Stats réelles</span>' : ''}</div>${d.analysis}</div>
     <div class="proba-section"><div class="section-title">🔑 Facteurs clés</div><div class="factors-grid">${factors}</div></div>
     ${altBetsBlock}
     ${oddsTableBlock}

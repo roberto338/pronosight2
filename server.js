@@ -291,6 +291,27 @@ app.get('/api/tsdb/*', generalLimiter, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════
+// ROUTE: API-Football (RapidAPI) proxy
+// ══════════════════════════════════════════════
+app.get('/api/apifootball/*', generalLimiter, async (req, res) => {
+  const key = process.env.RAPIDAPI_KEY;
+  if (!key) return res.status(404).json({ error: 'RAPIDAPI_KEY non configurée' });
+  const path = req.params[0];
+  const qs = new URLSearchParams(req.query).toString();
+  const url = `https://v3.football.api-sports.io/${path}${qs ? '?' + qs : ''}`;
+  try {
+    const resp = await fetch(url, {
+      headers: { 'x-apisports-key': key }
+    });
+    const data = await resp.json();
+    res.json(data);
+  } catch (e) {
+    console.error('[APIF Proxy]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════
 // ROUTE: Config status
 // ══════════════════════════════════════════════
 app.get('/api/status', (req, res) => {
@@ -300,6 +321,7 @@ app.get('/api/status', (req, res) => {
     odds: !!process.env.ODDS_API_KEY,
     footballData: !!process.env.FOOTBALL_DATA_KEY,
     liveApi: !!process.env.LIVE_API_KEY,
+    apifootball: !!process.env.RAPIDAPI_KEY,
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash'
   });
 });
@@ -317,5 +339,6 @@ app.listen(PORT, () => {
   console.log(`    Groq (fallback):${process.env.GROQ_API_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Odds API:      ${process.env.ODDS_API_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Football-Data: ${process.env.FOOTBALL_DATA_KEY ? '✅' : '⚠️  optionnelle'}`);
-  console.log(`    Live API:      ${process.env.LIVE_API_KEY ? '✅' : '⚠️  optionnelle'}\n`);
+  console.log(`    Live API:      ${process.env.LIVE_API_KEY ? '✅' : '⚠️  optionnelle'}`);
+  console.log(`    API-Football:  ${process.env.RAPIDAPI_KEY ? '✅' : '⚠️  optionnelle (stats réelles)'}\n`);
 });

@@ -149,6 +149,27 @@ export const FD_COMP_MAP = {
   'coparey':2079,'copaitalia':2107
 };
 
+// API-Football (RapidAPI) — league IDs pour stats réelles (forme, blessures, H2H)
+export const APIF_LEAGUE_MAP = {
+  'ligue1':61,'ligue2':60,
+  'pl':39,'championship':40,'leagueone':41,'leaguetwo':42,'facup':45,'leaguecup':48,
+  'laliga':140,'liga2':141,'coparey':143,
+  'bundesliga':78,'bundesliga2':79,'dfbpokal':81,
+  'seriea':135,'serieb':136,'copaitalia':137,
+  'ucl':2,'uel':3,'uecl':848,
+  'eredivisie':88,'proleague':144,'primeiraliga':94,
+  'superlig':203,'scottish':179,'ekstraklasa':106,
+  'allsvenskan':113,'eliteserien':103,'veikkausliiga':244,'superligadk':119,
+  'hnl':210,'fortunaliga':332,'nb1':271,'superligars':286,
+  'coupefrance':66,
+  'mls':253,'ligamx':262,'brasileirao':71,'brasileiraob':72,
+  'primeradiv':128,'primerachile':265,'liga1peru':281,'ligabetplay':239,
+  'libertadores':13,'sudamericana':11,
+  'jleague':98,'kleague':292,'csl':169,'aleague':188,'saudipl':307,'uaepro':435,'isl':323,
+  'cafcl':20,'botola':200,'algerie1':197,'tunisie1':204,'npfl':263,'psl':288,
+  'cwc':15,'wc2026':1,'natleague':5
+};
+
 export const TODAY_LEAGUES = [
   {id:'ligue1',name:'Ligue 1',flag:'🇫🇷',tsdb:4334,sport:'soccer'},
   {id:'pl',name:'Premier League',flag:'🏴󠁧󠁢󠁥󠁮󠁧󠁿',tsdb:4328,sport:'soccer'},

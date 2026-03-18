@@ -3,7 +3,7 @@
 // VERSION PROPRE — Aucun doublon
 // ══════════════════════════════════════════════
 
-import { ODDS_SPORT_MAP, BOOKMAKERS_EU, TSDB_LEAGUE_MAP, FD_COMP_MAP } from './config.js';
+import { ODDS_SPORT_MAP, BOOKMAKERS_EU, TSDB_LEAGUE_MAP, FD_COMP_MAP, APIF_LEAGUE_MAP } from './config.js';
 import { state } from './state.js';
 
 // ══════════════════════════════════════════════
@@ -360,6 +360,95 @@ export async function fetchMatchDetails(team1, team2, leagueId) {
 
 // Placeholder — pas encore implémenté
 export async function fetchLiveStats() { return null; }
+
+// ══════════════════════════════════════════════
+// API-FOOTBALL (RapidAPI) via /api/apifootball
+// Forme réelle, blessures, H2H — 100 req/jour free
+// ══════════════════════════════════════════════
+async function apifFetch(path, params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const url = `/api/apifootball/${path}${qs ? '?' + qs : ''}`;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch { return null; }
+}
+
+// Cache localStorage 7 jours pour éviter de gaspiller des requêtes sur les IDs d'équipes
+async function fetchTeamId(teamName) {
+  if (!teamName) return null;
+  const cacheKey = `apif_tid_${teamName.toLowerCase().replace(/\s+/g, '_')}`;
+  try {
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { id, ts } = JSON.parse(cached);
+      if (Date.now() - ts < 7 * 24 * 60 * 60 * 1000) return id;
+    }
+  } catch { /* ignore */ }
+  try {
+    // Normaliser : supprimer tirets et caractères spéciaux qui cassent la recherche
+    const normalized = teamName.replace(/-/g, ' ').replace(/[^\w\s]/g, '').trim();
+    let data = await apifFetch('teams', { search: normalized });
+    // Fallback : premier mot seulement si aucun résultat
+    if (!data?.response?.length && normalized.includes(' ')) {
+      data = await apifFetch('teams', { search: normalized.split(' ')[0] });
+    }
+    const id = data?.response?.[0]?.team?.id || null;
+    if (id) {
+      try { localStorage.setItem(cacheKey, JSON.stringify({ id, ts: Date.now() })); } catch { /* ignore */ }
+    }
+    return id;
+  } catch { return null; }
+}
+
+// Trie les fixtures et retourne les N derniers matchs joués
+function lastNPlayed(fixtures, n = 5) {
+  return (fixtures || [])
+    .filter(f => f.fixture.status.short === 'FT' || f.fixture.status.short === 'AET' || f.fixture.status.short === 'PEN')
+    .sort((a, b) => new Date(b.fixture.date) - new Date(a.fixture.date))
+    .slice(0, n);
+}
+
+// Récupère forme, H2H et blessures depuis API-Football en parallèle
+// Plan gratuit : utilise season= à la place de last= (non supporté)
+export async function fetchRealStats(team1, team2, leagueId) {
+  if (!state.apiStatus?.apifootball) return null;
+  try {
+    const [id1, id2] = await Promise.all([fetchTeamId(team1), fetchTeamId(team2)]);
+    if (!id1 && !id2) return null;
+
+    const season = new Date().getMonth() < 6
+      ? new Date().getFullYear() - 1
+      : new Date().getFullYear();
+
+    const apifLeague = APIF_LEAGUE_MAP[leagueId];
+    const fix1Params = { team: id1, season };
+    const fix2Params = { team: id2, season };
+    if (apifLeague) { fix1Params.league = apifLeague; fix2Params.league = apifLeague; }
+
+    const [fix1, fix2, h2h, inj1, inj2] = await Promise.all([
+      id1 ? apifFetch('fixtures', fix1Params) : Promise.resolve(null),
+      id2 ? apifFetch('fixtures', fix2Params) : Promise.resolve(null),
+      (id1 && id2) ? apifFetch('fixtures/headtohead', { h2h: `${id1}-${id2}`, season }) : Promise.resolve(null),
+      id1 ? apifFetch('injuries', { team: id1, season }) : Promise.resolve(null),
+      id2 ? apifFetch('injuries', { team: id2, season }) : Promise.resolve(null),
+    ]);
+
+    return {
+      form1: lastNPlayed(fix1?.response, 5),
+      form2: lastNPlayed(fix2?.response, 5),
+      h2h: lastNPlayed(h2h?.response, 5),
+      injuries1: inj1?.response || [],
+      injuries2: inj2?.response || [],
+      team1Id: id1,
+      team2Id: id2
+    };
+  } catch (e) {
+    console.warn('[fetchRealStats]', e.message);
+    return null;
+  }
+}
 
 // ── Classement football-data.org ──
 export async function fetchLeagueStandings(leagueId) {
