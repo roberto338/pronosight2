@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: pronosight
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: FOOTBALL_DATA_KEY
+        sync: false
+      - key: RAPIDAPI_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
