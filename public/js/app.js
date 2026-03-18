@@ -14,6 +14,7 @@ import { callClaude, callGemini, extractText, extractJSON, tsdbFetch, getLeagueE
 // ══════════════════════════════════════════════
 let _deferredPrompt = null;
 let parlayCount = 0;
+let _histFilter = { result: 'all', search: '' };
 
 // ══════════════════════════════════════════════
 // INITIALISATION
@@ -977,22 +978,61 @@ function renderHistory() {
 
   const list = document.getElementById('histList');
   if (!h.length) { list.innerHTML = '<div class="hist-empty">📭 Aucune analyse</div>'; return; }
-  list.innerHTML = h.map(it => {
+
+  // Appliquer les filtres
+  const q = (_histFilter.search || '').toLowerCase();
+  const filtered = h.filter(it => {
+    if (_histFilter.result !== 'all' && it.result !== _histFilter.result) return false;
+    if (q && !(
+      (it.team1 || '').toLowerCase().includes(q) ||
+      (it.team2 || '').toLowerCase().includes(q) ||
+      (it.league || '').toLowerCase().includes(q)
+    )) return false;
+    return true;
+  });
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="hist-empty">🔍 Aucun résultat pour ce filtre</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(it => {
     const cls = it.result === 'win' ? 'hist-win' : it.result === 'lose' ? 'hist-lose' : '';
+    const pnlStr = it.pnl && it.pnl !== 0 ? `<span style="color:${it.pnl > 0 ? '#00dd55' : '#ff3333'};font-weight:700;font-size:11px">${it.pnl > 0 ? '+' : ''}${it.pnl}€</span>` : '';
     return `<div class="hist-card ${cls}">
-      <div style="flex:1"><div style="font-weight:700;font-size:14px">${it.team1} vs ${it.team2}</div>
-      <div style="font-size:10px;color:var(--muted)">${it.league}</div>
-      <div style="font-size:12px;color:var(--accent);margin-top:4px">🎯 ${it.best_bet} · ${it.confidence}%</div></div>
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:14px">${it.team1} vs ${it.team2}</div>
+        <div style="font-size:10px;color:var(--muted)">${it.league}</div>
+        <div style="font-size:12px;color:var(--accent);margin-top:4px">🎯 ${it.best_bet} · ${it.confidence}%</div>
+        ${pnlStr}
+      </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
         <div style="font-size:10px;color:var(--muted)">${it.date} ${it.time}</div>
         <select class="hist-result-select" onchange="setResult(${it.id},this.value)">
           <option value="pending"${it.result === 'pending' ? ' selected' : ''}>⏳ En attente</option>
           <option value="win"${it.result === 'win' ? ' selected' : ''}>✅ Gagné</option>
           <option value="lose"${it.result === 'lose' ? ' selected' : ''}>❌ Perdu</option>
+          <option value="draw"${it.result === 'draw' ? ' selected' : ''}>🤝 Nul</option>
           <option value="push"${it.result === 'push' ? ' selected' : ''}>↩️ Push</option>
-        </select></div></div>`;
+        </select>
+      </div>
+    </div>`;
   }).join('');
 }
+
+function setHistFilter(result, btn) {
+  _histFilter.result = result;
+  document.querySelectorAll('.hist-filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderHistory();
+}
+window.setHistFilter = setHistFilter;
+
+function setHistSearch(val) {
+  _histFilter.search = val;
+  renderHistory();
+}
+window.setHistSearch = setHistSearch;
 
 // ══════════════════════════════════════════════
 // DASHBOARD
@@ -1009,6 +1049,25 @@ function renderDashboard() {
   const el2 = document.getElementById('dashWinrate'); if (el2) el2.textContent = wr + '%';
   const el3 = document.getElementById('dashPnl');
   if (el3) { el3.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '€'; el3.style.color = pnl >= 0 ? '#00dd55' : '#ff3333'; }
+
+  // Streak sur le dashboard
+  const resolved = hist.filter(h => h.result === 'win' || h.result === 'lose');
+  let streak = 0, streakType = '';
+  for (const e of resolved) {
+    if (!streakType) streakType = e.result;
+    if (e.result === streakType) streak++; else break;
+  }
+  const el4 = document.getElementById('dashStreak');
+  const el4b = document.getElementById('dashStreakBar');
+  if (el4) {
+    if (!streak) { el4.textContent = '—'; el4.style.color = '#888'; }
+    else {
+      const isWin = streakType === 'win';
+      el4.textContent = (isWin ? '🔥 ' : '💀 ') + streak + (isWin ? 'W' : 'L');
+      el4.style.color = isWin ? '#00dd55' : '#ff3333';
+      if (el4b) { el4b.style.background = isWin ? '#00dd55' : '#ff3333'; el4b.style.width = Math.min(100, streak * 15) + '%'; }
+    }
+  }
 
   const rp = document.getElementById('dashRecentPicks');
   if (rp) {

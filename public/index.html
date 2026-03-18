@@ -62,6 +62,11 @@
         <div class="dash-stat-lbl">P&amp;L Total</div>
         <div class="dash-stat-bar" style="background:#00aaff;width:50%"></div>
       </div>
+      <div class="dash-stat">
+        <div class="dash-stat-val" id="dashStreak" style="color:#ffcc00">—</div>
+        <div class="dash-stat-lbl">Série</div>
+        <div class="dash-stat-bar" id="dashStreakBar" style="background:#ffcc00;width:0%"></div>
+      </div>
     </div>
   </div>
 
@@ -209,8 +214,16 @@
     <div class="hist-stat"><div class="hist-stat-val" id="hAvgConf" style="color:#00aaff">—</div><div class="hist-stat-lbl">CONF. MOY</div></div>
   </div>
   <div id="hLeagueStats" style="margin-bottom:12px"></div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--muted)">HISTORIQUE</div>
+  <div class="hist-filters">
+    <div class="hist-filter-btns">
+      <button class="hist-filter-btn active" id="hfAll"   onclick="setHistFilter('all',this)">Tous</button>
+      <button class="hist-filter-btn"        id="hfWin"   onclick="setHistFilter('win',this)">✅ Gagnés</button>
+      <button class="hist-filter-btn"        id="hfLose"  onclick="setHistFilter('lose',this)">❌ Perdus</button>
+      <button class="hist-filter-btn"        id="hfPend"  onclick="setHistFilter('pending',this)">⏳ En attente</button>
+    </div>
+    <input class="hist-search" id="histSearch" type="text" placeholder="🔍 Équipe ou ligue..." oninput="setHistSearch(this.value)">
+  </div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">
     <button class="hist-export-btn" onclick="exportCSV()">📥 Exporter CSV</button>
     <button class="hist-clear-btn" onclick="clearHistory()">🗑 Tout effacer</button>
   </div>
