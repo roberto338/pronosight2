@@ -1440,7 +1440,7 @@ async function scanAlerts() {
 // ══════════════════════════════════════════════
 function addParlayLeg() {
   const legs = document.getElementById('parlayLegs');
-  if (legs.children.length >= 6) { alert('Maximum 6 matchs'); return; }
+  if (legs.children.length >= 10) { alert('Maximum 10 matchs'); return; }
   parlayCount++;
   const n = parlayCount, num = legs.children.length + 1;
   const div = document.createElement('div');
@@ -1529,54 +1529,105 @@ async function buildCombos() {
   const lf = document.getElementById('comboLeagueFilter').value;
   const favs = getFavs();
   let ctx;
-  if (lf === 'football') ctx = 'Ligue 1, Premier League, La Liga, Bundesliga, Serie A, Champions League';
-  else if (lf === 'basket') ctx = 'NBA, Euroleague';
+  if (lf === 'football') ctx = 'Ligue 1, Premier League, La Liga, Bundesliga, Serie A, Champions League, Europa League';
+  else if (lf === 'basket') ctx = 'NBA, Euroleague, NCAAbasket';
   else if (favs.length) ctx = LEAGUES.filter(l => favs.includes(l.id)).map(l => l.name).join(', ');
-  else ctx = 'Ligue 1, Premier League, La Liga, Champions League';
+  else ctx = 'Ligue 1, Premier League, La Liga, Bundesliga, Champions League';
+
+  const maxTokens = size <= 4 ? 3000 : size <= 6 ? 4500 : size <= 8 ? 6000 : 7500;
 
   try {
+    res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">🔍 Recherche des matchs en cours...</div>';
+
     const d1 = await callGemini([{
       role: 'user',
-      content: `Recherche les VRAIS matchs programmés pour les 3 prochains jours dans: ${ctx}. Pour chaque match: equipe1, equipe2, competition, date.`
-    }], { useSearch: true, maxTokens: 1200 });
+      content: `Recherche les VRAIS matchs programmés dans les 3 prochains jours (date: ${new Date().toLocaleDateString('fr-FR')}) dans: ${ctx}. Liste au moins ${size * 4} matchs avec: equipe1, equipe2, compétition, date JJ/MM.`
+    }], { useSearch: true, maxTokens: 1500 });
     const info = extractText(d1);
+
+    res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">🧠 Génération des combinés IA...</div>';
 
     const d2 = await callGemini([{
       role: 'user',
-      content: `Matchs trouvés:\n${info.slice(0, 1000)}\n\nA partir de CES matchs, 3 combinés de ${size} legs chacun. JSON: {"combos":[{"type":"safe","label":"Sécurisé","legs":[{"team1":"x","team2":"x","league":"x","date":"JJ/MM","bet":"1","odds":1.45,"confidence":84,"proba":76,"reason":"phrase"}],"combined_odds":2.1,"combined_proba":42,"ev":5.2,"verdict":"phrase"}]} 3 types: safe, value, balanced. EXACTEMENT ${size} legs par combo.`
-    }], { maxTokens: 4000 });
+      content: `Matchs disponibles:\n${info.slice(0, 1500)}\n\nGénère 4 combinés de EXACTEMENT ${size} legs chacun basés sur ces matchs. 4 types OBLIGATOIRES:
+1. "blinde": cotes 1.20-1.65/leg, confiance >= 82% — SÉCURITÉ MAX
+2. "value": EV+ (confiance > 1/odds en %), cotes 1.65-2.80/leg — VALUE BET
+3. "equilibre": mix blinde + value, cotes 1.50-2.20/leg
+4. "outsider": cotes 2.50-6.00/leg, confiance 52-70% — GROS POTENTIEL
+
+Règles: chaque match utilisé UNE SEULE FOIS par combo. Matchs différents entre combos recommandé.
+
+JSON COMPACT (champs courts obligatoires):
+{"combos":[{"type":"blinde","legs":[{"t1":"Equipe1","t2":"Equipe2","lg":"Compétition","dt":"JJ/MM","bet":"description","odds":1.45,"conf":85}],"cote":X.XX,"proba":XX,"ev":X.X,"verdict":"phrase courte"}]}
+
+CALCULS: cote=produit des odds, proba=produit(conf/100)*100, ev=(proba/100)*(cote-1)-(1-proba/100).
+EXACTEMENT ${size} legs par combo, 4 combos total.`
+    }], { maxTokens, jsonMode: true });
 
     const parsed = extractJSON(extractText(d2));
     const combos = parsed?.combos || [];
-    if (!combos.length) throw new Error('Aucun combiné généré');
+    if (!combos.length) throw new Error('Aucun combiné généré — réessaie');
 
-    res.innerHTML = combos.map((combo, ci) => {
+    const typeMap = {
+      blinde:   { cls: 'csafe',     lbl: '🔒 BLINDÉ',    desc: 'Haute sécurité' },
+      value:    { cls: 'cvalue',    lbl: '💹 VALUE BET',  desc: 'Valeur positive' },
+      equilibre:{ cls: 'cbalanced', lbl: '⚖️ ÉQUILIBRÉ', desc: 'Risque maîtrisé' },
+      outsider: { cls: 'coutsider', lbl: '🚀 OUTSIDER',  desc: 'Gros potentiel' },
+      // compatibilité anciens types
+      safe:     { cls: 'csafe',     lbl: '🔒 BLINDÉ',    desc: 'Haute sécurité' },
+      balanced: { cls: 'cbalanced', lbl: '⚖️ ÉQUILIBRÉ', desc: 'Risque maîtrisé' },
+    };
+
+    res.innerHTML = combos.map(combo => {
       const legs = combo.legs || [];
-      const odds = combo.combined_odds || Math.round(legs.reduce((a, l) => a * (l.odds || 1), 1) * 100) / 100;
-      const proba = combo.combined_proba || Math.round(legs.reduce((a, l) => a * ((l.proba || 50) / 100), 1) * 10000) / 100;
-      const ev = combo.ev ?? Math.round((proba / 100 * (odds - 1) - (1 - proba / 100)) * 10000) / 100;
+      const cote  = combo.cote  || Math.round(legs.reduce((a, l) => a * (l.odds || 1), 1) * 100) / 100;
+      const proba = combo.proba || Math.round(legs.reduce((a, l) => a * ((l.conf || 60) / 100), 1) * 10000) / 100;
+      const ev    = combo.ev    ?? Math.round(((proba / 100) * (cote - 1) - (1 - proba / 100)) * 10000) / 100;
       const isPos = ev > 0;
-      const typeStyles = { safe: { cls: 'csafe', lbl: '🛡️ SÉCURISÉ' }, value: { cls: 'cvalue', lbl: '💹 VALEUR' }, balanced: { cls: 'cbalanced', lbl: '⚖️ ÉQUILIBRÉ' } };
-      const t = typeStyles[combo.type] || typeStyles.balanced;
+      const gain  = Math.round(stake * cote * 100) / 100;
+      const riskDot = proba >= 20 ? '🟢' : proba >= 5 ? '🟡' : '🔴';
+      const riskLbl = proba >= 20 ? 'Faisable' : proba >= 5 ? 'Risqué' : 'Long shot';
+      const t = typeMap[combo.type] || typeMap.equilibre;
+
+      const legsHtml = legs.map((leg, i) => {
+        const legEv = Math.round(((leg.conf / 100) * (leg.odds - 1) - (1 - leg.conf / 100)) * 100);
+        const confCol = leg.conf >= 80 ? '#00dd55' : leg.conf >= 65 ? '#ffcc00' : '#ff6633';
+        const evTag = legEv > 0
+          ? `<span class="leg-ev-tag ev-pos-tag">EV+${legEv}%</span>`
+          : `<span class="leg-ev-tag ev-neg-tag">EV${legEv}%</span>`;
+        return `<div class="combo-leg">
+          <div class="combo-leg-num">${i + 1}</div>
+          <div class="combo-leg-info">
+            <div class="combo-leg-match">${leg.t1} vs ${leg.t2}</div>
+            <div class="combo-leg-bet">🎯 ${leg.bet} <span style="color:var(--accent)">@ ${leg.odds}</span></div>
+            <div class="combo-leg-meta">${leg.lg} · ${leg.dt}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+            <div class="combo-leg-conf" style="color:${confCol}">${leg.conf}%</div>
+            ${evTag}
+          </div>
+        </div>`;
+      }).join('');
+
       return `<div class="combo-card ${t.cls}">
-        <div class="combo-badge">${t.lbl}</div>
-        <div class="combo-legs">${legs.map((leg, i) => `
-          <div class="combo-leg"><div class="combo-leg-num">${i + 1}</div><div class="combo-leg-info">
-            <div class="combo-leg-match">${leg.team1} vs ${leg.team2}</div>
-            <div class="combo-leg-bet">🎯 ${leg.bet} @ ${leg.odds}</div>
-            <div class="combo-leg-meta">${leg.league} · ${leg.date}</div>
-          </div><div class="combo-leg-conf" style="color:${leg.confidence >= 80 ? '#00dd55' : '#ffcc00'}">${leg.confidence}%</div></div>`).join('')}
+        <div class="combo-header-row">
+          <div class="combo-badge">${t.lbl}</div>
+          <div class="combo-risk-badge">${riskDot} ${riskLbl}</div>
         </div>
+        <div class="combo-desc">${t.desc} · ${size} sélections</div>
+        <div class="combo-legs">${legsHtml}</div>
+        <div class="combo-verdict">"${combo.verdict || ''}"</div>
         <div class="combo-totals">
-          <div class="combo-total"><div class="combo-total-val" style="color:var(--accent)">${odds}</div><div class="combo-total-lbl">COTE</div></div>
-          <div class="combo-total"><div class="combo-total-val">${proba}%</div><div class="combo-total-lbl">PROBA</div></div>
-          <div class="combo-total"><div class="combo-total-val" style="color:var(--accent3)">€${Math.round(stake * odds * 100) / 100}</div><div class="combo-total-lbl">GAIN</div></div>
+          <div class="combo-total"><div class="combo-total-val" style="color:var(--accent)">×${cote}</div><div class="combo-total-lbl">COTE</div></div>
+          <div class="combo-total"><div class="combo-total-val" style="color:${proba >= 20 ? '#00dd55' : proba >= 5 ? '#ffcc00' : '#ff6633'}">${proba}%</div><div class="combo-total-lbl">PROBA</div></div>
+          <div class="combo-total"><div class="combo-total-val" style="color:var(--accent3)">€${gain}</div><div class="combo-total-lbl">GAIN</div></div>
           <div class="combo-total"><div class="combo-total-val" style="color:${isPos ? 'var(--ev-pos)' : 'var(--ev-neg)'}">${isPos ? '+' : ''}${ev}%</div><div class="combo-total-lbl">EV</div></div>
         </div>
       </div>`;
     }).join('');
+
   } catch (e) {
-    res.innerHTML = `<div style="color:var(--ev-neg);padding:16px">${e.message}</div>`;
+    res.innerHTML = `<div style="color:var(--ev-neg);padding:16px;font-size:13px">❌ ${e.message}</div>`;
   } finally {
     btn.disabled = false; btn.innerHTML = '✨ GÉNÉRER';
   }

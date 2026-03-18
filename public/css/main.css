@@ -461,10 +461,17 @@ body.light-mode::before{background:none}
 .combo-settings label{font-size:10px;color:var(--muted);font-family:monospace;letter-spacing:1px;display:block;margin-bottom:3px;text-transform:uppercase}
 .combo-sel{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-xs);padding:7px 10px;color:var(--text);font-family:monospace;font-size:12px;outline:none;cursor:pointer}
 .combo-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:14px}
-.csafe{border-color:rgba(127,255,107,.5);background:rgba(127,255,107,.03)}
+.csafe{border-color:rgba(0,221,85,.4);background:rgba(0,221,85,.03)}
 .cvalue{border-color:rgba(167,139,250,.5);background:rgba(167,139,250,.03)}
 .cbalanced{border-color:rgba(255,209,102,.4);background:rgba(255,209,102,.02)}
-.combo-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;font-family:monospace;letter-spacing:.5px;margin-bottom:10px}
+.coutsider{border-color:rgba(255,102,51,.5);background:rgba(255,102,51,.03)}
+.combo-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.combo-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;font-family:monospace;letter-spacing:.5px}
+.combo-risk-badge{font-size:10px;font-family:monospace;color:var(--muted);letter-spacing:.5px}
+.combo-desc{font-size:10px;color:var(--muted);font-family:monospace;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px}
+.leg-ev-tag{font-size:9px;font-family:monospace;font-weight:700;padding:2px 5px;border-radius:4px;letter-spacing:.5px}
+.ev-pos-tag{background:rgba(0,221,85,.15);color:#00dd55}
+.ev-neg-tag{background:rgba(255,51,51,.1);color:#ff6666}
 .cbsafe{background:rgba(127,255,107,.15);color:var(--accent3);border:1px solid rgba(127,255,107,.3)}
 .cbvalue{background:rgba(167,139,250,.15);color:#c4b5fd;border:1px solid rgba(167,139,250,.3)}
 .cbbalanced{background:rgba(255,209,102,.12);color:var(--yellow);border:1px solid rgba(255,209,102,.3)}
