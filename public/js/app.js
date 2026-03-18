@@ -184,7 +184,7 @@ async function loadMatches() {
     try {
       const todayISO = new Date().toISOString().slice(0, 10);
       const in14days = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-      const data = await fdFetch(`competitions/${fdCompId}/matches?dateFrom=${todayISO}&dateTo=${in14days}&status=SCHEDULED,LIVE,IN_PLAY,PAUSED,TIMED`);
+      const data = await fdFetch(`competitions/${fdCompId}/matches?dateFrom=${todayISO}&dateTo=${in14days}`);
       if (data?.matches?.length) {
         const leagueMeta = { name: state.selectedLeague.name, flag: state.selectedLeague.flag, id: state.selectedLeague.id };
         const formatted = data.matches.slice(0, 20).map(m => fdToMatch(m, leagueMeta));
