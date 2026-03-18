@@ -178,7 +178,26 @@ async function loadMatches() {
     return; 
   }
 
-  // TheSportsDB — seule source automatique (fiable, gratuite, sans quota)
+  // ── SOURCE 1 : Football-data.org (primaire pour Top 5 + coupes) ──
+  const fdCompId = FD_COMP_MAP[state.selectedLeague.id];
+  if (fdCompId && state.apiStatus?.footballData) {
+    try {
+      const todayISO = new Date().toISOString().slice(0, 10);
+      const in14days = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+      const data = await fdFetch(`competitions/${fdCompId}/matches?dateFrom=${todayISO}&dateTo=${in14days}&status=SCHEDULED,LIVE,IN_PLAY,PAUSED,TIMED`);
+      if (data?.matches?.length) {
+        const leagueMeta = { name: state.selectedLeague.name, flag: state.selectedLeague.flag, id: state.selectedLeague.id };
+        const formatted = data.matches.slice(0, 20).map(m => fdToMatch(m, leagueMeta));
+        MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
+        renderMatches(formatted, false);
+        return;
+      }
+    } catch (e) {
+      console.log('football-data.org indisponible:', e.message);
+    }
+  }
+
+  // ── SOURCE 2 : TheSportsDB (fallback pour toutes les autres ligues) ──
   const tsdbId = TSDB_LEAGUE_MAP[state.selectedLeague.id];
   if (tsdbId) {
     try {
@@ -191,25 +210,6 @@ async function loadMatches() {
       }
     } catch (e) {
       console.log('TheSportsDB indisponible:', e.message);
-    }
-  }
-
-  // Fallback football-data.org (Top 5 + coupes supportées)
-  const fdCompId = FD_COMP_MAP[state.selectedLeague.id];
-  if (fdCompId && state.apiStatus?.footballData) {
-    try {
-      const todayISO = new Date().toISOString().slice(0, 10);
-      const nextWeekISO = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-      const data = await fdFetch(`competitions/${fdCompId}/matches?dateFrom=${todayISO}&dateTo=${nextWeekISO}`);
-      if (data?.matches?.length) {
-        const leagueMeta = { name: state.selectedLeague.name, flag: state.selectedLeague.flag, id: state.selectedLeague.id };
-        const formatted = data.matches.map(m => fdToMatch(m, leagueMeta));
-        MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
-        renderMatches(formatted, false);
-        return;
-      }
-    } catch (e) {
-      console.log('football-data.org indisponible:', e.message);
     }
   }
 
@@ -424,6 +424,8 @@ async function analyze() {
         `${e.dateEvent || ''}: ${e.strHomeTeam} ${e.intHomeScore}-${e.intAwayScore} ${e.strAwayTeam}`
       ).join('\n');
       h2hCtx = `\nHISTORIQUE H2H (${h2hEvents.length} derniers face-à-face):\n${h2hLines}`;
+    } else {
+      h2hCtx = `\nH2H: Utilise tes connaissances des confrontations directes récentes entre ${t1} et ${t2}.`;
     }
 
     // Score match aller (coupe / double confrontation)
@@ -705,6 +707,12 @@ function renderResults(d, evData, kellyData, leg1Score) {
         <tbody>${rows}</tbody>
       </table>
       <div class="odds-best-hint">🟢 Meilleure cote disponible</div>
+    </div>`;
+  } else if (!state.apiStatus?.odds) {
+    oddsTableBlock = `<div class="odds-no-key">
+      📡 <strong>Cotes réelles non disponibles</strong> —
+      <span onclick="showOddsKeyModal()" style="color:var(--accent);cursor:pointer;text-decoration:underline">Configure une clé The Odds API</span>
+      (gratuit · 500 req/mois · Bet365, Unibet, Betclic...)
     </div>`;
   }
 
