@@ -19,6 +19,10 @@ let _histMode = 'victor'; // 'victor' | 'personal'
 
 // Victor IA — cache des données chargées au boot
 const victorState = { today: null, stats: null, patterns: null, history: null, loading: false, loaded: false };
+const VICTOR_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+let victorLastFetch = 0;
+let victorAbortController = null;
+let _switchNavTimer = null; // debounce switchNav
 
 // ══════════════════════════════════════════════
 // INITIALISATION
@@ -60,11 +64,13 @@ async function initApp() {
   renderDashboard();
   // Charge les données Victor immédiatement, re-render dashboard quand prêt
   loadVictorData().then(() => renderDashboard());
-  // Auto-refresh Victor toutes les 5 minutes (silencieux)
-  setInterval(() => loadVictorData().then(() => renderDashboard()), 5 * 60 * 1000);
-  // Refresh au retour sur l'onglet (données toujours fraîches)
+  // Auto-refresh Victor toutes les 10 minutes (silencieux, arrière-plan)
+  setInterval(() => loadVictorData({ force: false }).then(() => renderDashboard()), 10 * 60 * 1000);
+  // Refresh au retour sur l'onglet uniquement si cache expiré
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) loadVictorData().then(() => renderDashboard());
+    if (!document.hidden && Date.now() - victorLastFetch > VICTOR_CACHE_TTL) {
+      loadVictorData({ force: false }).then(() => renderDashboard());
+    }
   });
   // Scan auto toutes les 3h si notifications activées
   autoScanAlerts();
@@ -106,6 +112,7 @@ function showStep(n) {
 }
 
 function switchNav(tab) {
+  // Mise à jour visuelle immédiate (pas de debounce sur le CSS)
   const pv = document.getElementById('pronoView');
   if (pv) pv.style.display = tab === 'prono' ? 'block' : 'none';
   ['history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor'].forEach(t => {
@@ -116,17 +123,24 @@ function switchNav(tab) {
     const b = document.getElementById('nav-' + t);
     if (b) b.classList.toggle('active', t === tab);
   });
-  if (tab === 'history') renderHistory();
-  if (tab === 'dash') renderDashboard();
-  if (tab === 'victor') renderVictorView();
-  if (tab === 'prono') renderPronoVictor();
+  // Live : démarre/arrête le refresh indépendamment du debounce
   if (tab === 'live') { fetchLive(false); startLiveAutoRefresh(); } else stopLiveAutoRefresh();
-  if (tab === 'today') fetchTodayMatches(false);
-  if (tab === 'alerts') renderAlertFavs();
-  if (tab === 'bankroll') renderBankroll();
-  if (tab === 'parlay' && document.getElementById('parlayLegs')?.children.length === 0) {
-    addParlayLeg(); addParlayLeg();
-  }
+
+  // Debounce 150ms sur le chargement de données (évite les fetches en rafale)
+  if (_switchNavTimer) clearTimeout(_switchNavTimer);
+  _switchNavTimer = setTimeout(() => {
+    _switchNavTimer = null;
+    if (tab === 'history') renderHistory();
+    if (tab === 'dash') renderDashboard();
+    if (tab === 'victor') renderVictorView();
+    if (tab === 'prono') renderPronoVictor();
+    if (tab === 'today') fetchTodayMatches(false);
+    if (tab === 'alerts') renderAlertFavs();
+    if (tab === 'bankroll') renderBankroll();
+    if (tab === 'parlay' && document.getElementById('parlayLegs')?.children.length === 0) {
+      addParlayLeg(); addParlayLeg();
+    }
+  }, 150);
 }
 
 function toggleTheme() {
@@ -1896,8 +1910,8 @@ async function forceVictorRefresh() {
 window.forceVictorRefresh = forceVictorRefresh;
 
 async function refreshPronoVictor() {
-  victorState.loaded = false;
-  await loadVictorData();
+  victorLastFetch = 0; // force le prochain fetch
+  await loadVictorData({ force: true });
   renderPronoVictor();
 }
 window.refreshPronoVictor = refreshPronoVictor;
@@ -1905,16 +1919,25 @@ window.refreshPronoVictor = refreshPronoVictor;
 // VICTOR IA — Intégration frontend
 // ══════════════════════════════════════════════
 
-async function loadVictorData() {
+async function loadVictorData({ force = false } = {}) {
+  // Cache TTL : skip si données récentes et pas de force
+  if (!force && victorState.loaded && Date.now() - victorLastFetch < VICTOR_CACHE_TTL) return;
+  // Déduplique les appels simultanés
   if (victorState.loading) return;
+
+  // Annule un fetch précédent encore en vol
+  if (victorAbortController) victorAbortController.abort();
+  victorAbortController = new AbortController();
+  const signal = victorAbortController.signal;
+
   victorState.loading = true;
   const prevTotal = victorState.today?.total || 0;
   try {
     const [todayRes, statsRes, patternsRes, historyRes] = await Promise.all([
-      fetch('/api/victor/today').then(r => r.json()),
-      fetch('/api/victor/stats').then(r => r.json()),
-      fetch('/api/victor/patterns').then(r => r.json()),
-      fetch('/api/victor/history?days=30').then(r => r.json())
+      fetch('/api/victor/today',        { signal }).then(r => r.json()),
+      fetch('/api/victor/stats',        { signal }).then(r => r.json()),
+      fetch('/api/victor/patterns',     { signal }).then(r => r.json()),
+      fetch('/api/victor/history?days=30', { signal }).then(r => r.json())
     ]);
     victorState.today       = todayRes;
     victorState.stats       = statsRes;
@@ -1922,11 +1945,11 @@ async function loadVictorData() {
     victorState.history     = historyRes;
     victorState.loaded      = true;
     victorState.lastUpdated = new Date();
-    // Notification subtile si nouveaux picks détectés
+    victorLastFetch         = Date.now();
     const newTotal = todayRes?.total || 0;
     if (prevTotal === 0 && newTotal > 0) showVictorUpdateNotif(newTotal);
   } catch(e) {
-    console.warn('[Victor] Données indisponibles:', e.message);
+    if (e.name !== 'AbortError') console.warn('[Victor] Données indisponibles:', e.message);
   } finally {
     victorState.loading = false;
   }
@@ -2045,8 +2068,8 @@ function renderVictorView() {
 }
 
 async function refreshVictorView() {
-  victorState.loaded = false;
-  await loadVictorData();
+  victorLastFetch = 0; // force le prochain fetch
+  await loadVictorData({ force: true });
   renderVictorView();
 }
 window.refreshVictorView = refreshVictorView;
