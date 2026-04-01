@@ -413,12 +413,93 @@ Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Ré
  * Pour chaque pronostic du jour sans résultat,
  * demande à Claude de chercher le score réel.
  */
+// ── Helpers checkResults ─────────────────────
+
+/**
+ * Récupère tous les matchs terminés du jour via API-Football.
+ * Retourne un tableau plat de fixtures avec score.
+ */
+async function fetchApiFootballResults(dateISO) {
+  const API_KEY = process.env.API_FOOTBALL_KEY;
+  if (!API_KEY) return [];
+  try {
+    const url = `https://v3.football.api-sports.io/fixtures?date=${dateISO}&status=FT`;
+    const resp = await fetch(url, {
+      headers: { 'x-apisports-key': API_KEY },
+    });
+    if (!resp.ok) {
+      console.warn(`   ⚠️  API-Football HTTP ${resp.status}`);
+      return [];
+    }
+    const data = await resp.json();
+    return data.response || [];
+  } catch (err) {
+    console.warn(`   ⚠️  API-Football indisponible: ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Normalise un nom d'équipe pour la comparaison : minuscules, sans accents, sans ponctuation.
+ */
+function normalizeTeam(name = '') {
+  return name
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, '')
+    .trim();
+}
+
+/**
+ * Tente de matcher un pronostic DB (string "TeamA vs TeamB") avec un fixture API-Football.
+ * Retourne le fixture correspondant ou null.
+ */
+function matchFixture(pronoMatch, fixtures) {
+  const parts = pronoMatch.split(/\s+vs\.?\s+/i);
+  if (parts.length < 2) return null;
+  const [a, b] = parts.map(normalizeTeam);
+
+  return fixtures.find(f => {
+    const home = normalizeTeam(f.teams?.home?.name || '');
+    const away = normalizeTeam(f.teams?.away?.name || '');
+    // Match direct ou inversé
+    return (home.includes(a) || a.includes(home)) && (away.includes(b) || b.includes(away))
+        || (home.includes(b) || b.includes(home)) && (away.includes(a) || a.includes(away));
+  }) || null;
+}
+
+/**
+ * Évalue si le pronostic principal est correct d'après le score réel.
+ * Logique simple sur les cas fréquents — Claude prend le relais pour les cas complexes.
+ */
+function evalPronostic(pronosticPrincipal, homeGoals, awayGoals) {
+  const p = (pronosticPrincipal || '').toLowerCase();
+  const diff = homeGoals - awayGoals;
+
+  if (/victoire.*(dom|home|équipe a|team a|\b1\b)/i.test(p) || /home win/i.test(p)) return diff > 0;
+  if (/victoire.*(ext|away|équipe b|team b|\b2\b)/i.test(p) || /away win/i.test(p)) return diff < 0;
+  if (/nul|draw|\b[xX]\b/.test(p)) return diff === 0;
+  if (/\+2\.5|over 2\.5|plus de 2\.5/i.test(p)) return (homeGoals + awayGoals) > 2.5;
+  if (/-2\.5|under 2\.5|moins de 2\.5/i.test(p)) return (homeGoals + awayGoals) < 2.5;
+  if (/\+1\.5|over 1\.5/i.test(p)) return (homeGoals + awayGoals) > 1.5;
+  if (/btts|les deux.*marquent|both.*score/i.test(p)) return homeGoals > 0 && awayGoals > 0;
+  return null; // cas non géré → fallback Claude
+}
+
+/**
+ * Évalue si le value_bet est correct (même logique simple).
+ */
+function evalValueBet(valueBet, homeGoals, awayGoals) {
+  if (!valueBet || valueBet === 'aucun') return null;
+  return evalPronostic(valueBet, homeGoals, awayGoals);
+}
+
 export async function checkResults() {
   console.log('\n🔎 Vérification des résultats du jour...\n');
 
   const dateISO = new Date().toISOString().slice(0, 10);
 
-  let { rows: pronostics } = await query(
+  const { rows: pronostics } = await query(
     `SELECT id, match, sport, pronostic_principal, value_bet
      FROM ps_pronostics
      WHERE date = $1 AND resultat_reel IS NULL`,
@@ -432,53 +513,87 @@ export async function checkResults() {
 
   console.log(`📋 ${pronostics.length} pronostic(s) à vérifier...`);
 
+  // ── Source primaire : API-Football ────────────
+  const fixtures = await fetchApiFootballResults(dateISO);
+  console.log(`   📡 API-Football: ${fixtures.length} match(s) terminé(s) récupéré(s)`);
+
   for (const p of pronostics) {
     try {
-      const userMsg = `Quel est le résultat final du match "${p.match}" joué aujourd'hui ?
-Réponds UNIQUEMENT avec ce JSON :
+      let scoreReel = null, resultatReel = null, pronosticCorrect = null, valueBetCorrect = null;
+      let source = 'claude';
+
+      // ── Tentative API-Football ─────────────────
+      const fixture = matchFixture(p.match, fixtures);
+
+      if (fixture) {
+        const status = fixture.fixture?.status?.short;
+        // Guard : match pas encore terminé
+        if (!['FT', 'AET', 'PEN'].includes(status)) {
+          console.log(`   ⏳ ${p.match} — Pas encore terminé (${status}), skip`);
+          continue;
+        }
+
+        const hg = fixture.goals?.home ?? 0;
+        const ag = fixture.goals?.away ?? 0;
+        scoreReel = `${hg}-${ag}`;
+        resultatReel = `${fixture.teams?.home?.name} ${hg}-${ag} ${fixture.teams?.away?.name}`;
+        pronosticCorrect = evalPronostic(p.pronostic_principal, hg, ag);
+        valueBetCorrect  = evalValueBet(p.value_bet, hg, ag);
+        source = 'api-football';
+      }
+
+      // ── Fallback Claude si match absent ou eval impossible ─
+      if (source === 'claude' || pronosticCorrect === null) {
+        console.log(`   🤖 Fallback Claude pour "${p.match}"...`);
+        const userMsg = `Quel est le résultat final du match "${p.match}" joué aujourd'hui (${dateISO}) ?
+Réponds UNIQUEMENT avec ce JSON (pas de texte autour) :
 {
   "score_reel": "X-X",
   "resultat_reel": "description courte",
-  "pronostic_correct": true/false,
-  "value_bet_correct": true/false,
+  "pronostic_correct": true,
+  "value_bet_correct": true,
   "commentaire": ""
 }
 Le pronostic principal était : "${p.pronostic_principal}"
-Le value bet était : "${p.value_bet || 'aucun'}"`;
+Le value bet était : "${p.value_bet || 'aucun'}"
+Si le match n'est pas encore terminé, réponds : { "skip": true }`;
 
-      const resp = await callClaude(
-        'Tu cherches les résultats sportifs réels du jour. Réponds uniquement en JSON.',
-        userMsg,
-        500
-      );
-
-      let result;
-      try {
-        result = extractJSON(resp.content);
-      } catch {
-        console.warn(`   ⚠️  JSON non parseable pour "${p.match}"`);
-        continue;
+        try {
+          const resp = await callClaude(
+            'Tu cherches les résultats sportifs réels du jour. Réponds uniquement en JSON.',
+            userMsg,
+            400
+          );
+          const result = extractJSON(resp.content);
+          if (result.skip) {
+            console.log(`   ⏳ ${p.match} — Pas encore terminé selon Claude, skip`);
+            continue;
+          }
+          scoreReel        = result.score_reel      || scoreReel;
+          resultatReel     = result.resultat_reel   || resultatReel;
+          pronosticCorrect = result.pronostic_correct ?? pronosticCorrect;
+          valueBetCorrect  = result.value_bet_correct ?? valueBetCorrect;
+          source = 'claude';
+        } catch (claudeErr) {
+          console.warn(`   ⚠️  Claude fallback échoué pour "${p.match}": ${claudeErr.message}`);
+          continue;
+        }
       }
 
+      // ── Sauvegarde ────────────────────────────
       await query(
         `UPDATE ps_pronostics
-         SET resultat_reel    = $1,
-             score_reel       = $2,
+         SET resultat_reel      = $1,
+             score_reel         = $2,
              pronostic_correct  = $3,
              value_bet_correct  = $4,
              updated_at         = NOW()
          WHERE id = $5`,
-        [
-          result.resultat_reel   || null,
-          result.score_reel      || null,
-          result.pronostic_correct ?? null,
-          result.value_bet_correct ?? null,
-          p.id,
-        ]
+        [resultatReel, scoreReel, pronosticCorrect ?? null, valueBetCorrect ?? null, p.id]
       );
 
-      const emoji = result.pronostic_correct ? '✅' : '❌';
-      console.log(`   ${emoji} ${p.match} — Score: ${result.score_reel} | Pronostic: ${result.pronostic_correct ? 'Correct' : 'Raté'}`);
+      const emoji = pronosticCorrect === true ? '✅' : pronosticCorrect === false ? '❌' : '❓';
+      console.log(`   ${emoji} [${source}] ${p.match} — ${scoreReel} | Pronostic: ${pronosticCorrect === true ? 'Correct' : pronosticCorrect === false ? 'Raté' : 'Inconnu'}`);
 
     } catch (err) {
       console.error(`   ❌ Erreur vérification "${p.match}":`, err.message);
