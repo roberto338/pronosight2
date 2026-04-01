@@ -450,6 +450,58 @@ function normalizeTeam(name = '') {
     .trim();
 }
 
+// Alias noms officiels ↔ noms courants pour les sélections nationales
+const TEAM_ALIASES = new Map([
+  ['usa',             ['united states', 'etats unis', 'us mens']],
+  ['united states',   ['usa', 'etats unis', 'us mens national']],
+  ['south korea',     ['korea republic', 'republic of korea']],
+  ['korea republic',  ['south korea', 'republic of korea']],
+  ['ivory coast',     ['cote d ivoire', 'cote divoire']],
+  ['cote d ivoire',   ['ivory coast', 'cote divoire']],
+  ['iran',            ['ir iran']],
+  ['ir iran',         ['iran']],
+  ['czech republic',  ['czechia', 'republique tcheque']],
+  ['czechia',         ['czech republic']],
+  ['north macedonia', ['macedonia']],
+  ['dr congo',        ['rd congo', 'drc', 'congo dr', 'democratic republic of congo']],
+  ['rd congo',        ['dr congo', 'drc', 'congo dr']],
+  ['cape verde',      ['cap vert']],
+  ['guinea bissau',   ['guinee bissau']],
+  ['trinidad',        ['trinidad and tobago', 'trinidad tobago']],
+  ['trinidad and tobago', ['trinidad', 'trinidad tobago']],
+]);
+
+/**
+ * Teste si deux noms d'équipes normalisés désignent la même équipe.
+ * 3 passes : égalité exacte → substring (≥4 chars) → alias → overlap tokens.
+ */
+function teamsMatch(a, b) {
+  if (a === b) return true;
+
+  // Substring : le plus court contenu dans le plus long, min 4 chars pour éviter faux positifs
+  const shorter = a.length <= b.length ? a : b;
+  const longer  = a.length >  b.length ? a : b;
+  if (shorter.length >= 4 && longer.includes(shorter)) return true;
+
+  // Alias dictionary (bidirectionnel)
+  const aliasA = TEAM_ALIASES.get(a);
+  if (aliasA?.includes(b)) return true;
+  const aliasB = TEAM_ALIASES.get(b);
+  if (aliasB?.includes(a)) return true;
+
+  // Token overlap : mots significatifs (≥4 lettres) en commun
+  // "south korea" ↔ "korea republic" → partagent "korea" → match
+  // "england"     ↔ "manchester"     → aucun token commun → no match
+  const tokA = a.split(' ').filter(t => t.length >= 4);
+  const tokB = b.split(' ').filter(t => t.length >= 4);
+  if (tokA.length > 0 && tokB.length > 0) {
+    const shared = tokA.filter(t => tokB.includes(t));
+    if (shared.length > 0 && shared.length / Math.min(tokA.length, tokB.length) >= 0.5) return true;
+  }
+
+  return false;
+}
+
 /**
  * Tente de matcher un pronostic DB (string "TeamA vs TeamB") avec un fixture API-Football.
  * Retourne le fixture correspondant ou null.
@@ -462,9 +514,8 @@ function matchFixture(pronoMatch, fixtures) {
   return fixtures.find(f => {
     const home = normalizeTeam(f.teams?.home?.name || '');
     const away = normalizeTeam(f.teams?.away?.name || '');
-    // Match direct ou inversé
-    return (home.includes(a) || a.includes(home)) && (away.includes(b) || b.includes(away))
-        || (home.includes(b) || b.includes(home)) && (away.includes(a) || a.includes(away));
+    return (teamsMatch(home, a) && teamsMatch(away, b))
+        || (teamsMatch(home, b) && teamsMatch(away, a));
   }) || null;
 }
 
