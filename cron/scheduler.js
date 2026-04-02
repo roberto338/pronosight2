@@ -113,13 +113,13 @@ const jobHebdo = cron.schedule('0 1 * * 0', async () => {
 export function startScheduler() {
   console.log('⏰ Démarrage du scheduler Victor...');
   jobMatin.start();
-  console.log(`Job Matin (07h00 Paris) démarré. Prochain run: ${jobMatin.nextDates(1).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`);
+  console.log(`Job Matin (07h00 Paris) démarré.`);
   jobSoir.start();
-  console.log(`Job Soir (13h00 Paris) démarré. Prochain run: ${jobSoir.nextDates(1).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`);
+  console.log(`Job Soir (13h00 Paris) démarré.`);
   jobResultats.start();
-  console.log(`Job Résultats (23h30 Paris) démarré. Prochain run: ${jobResultats.nextDates(1).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`);
+  console.log(`Job Résultats (23h30 Paris) démarré.`);
   jobHebdo.start();
-  console.log(`Job Hebdo (Dim 01h00 Paris) démarré. Prochain run: ${jobHebdo.nextDates(1).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`);
+  console.log(`Job Hebdo (Dim 01h00 Paris) démarré.`);
 
   console.log('\n⏰ Scheduler Victor démarré :');
   console.log('   🌅 07h00 — Analyse du matin       (quotidien)');
