@@ -9,7 +9,9 @@ import { VICTOR_PROMPT } from './prompt.js';
 import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const CLAUDE_MODEL      = 'claude-sonnet-4-20250514';
+const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
@@ -137,6 +139,39 @@ export async function getVictorBriefing() {
 // APPEL CLAUDE API
 // ══════════════════════════════════════════════
 
+// ── Appel Gemini (primaire) ───────────────────
+async function callGemini(systemPrompt, userMessage, maxTokens = 8000) {
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
+
+  const body = {
+    contents: [
+      { role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }
+    ],
+    tools: [{ googleSearch: {} }],
+    generationConfig: {
+      maxOutputTokens: Math.min(maxTokens, 8192),
+      temperature: 0.4,
+    },
+  };
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Gemini API HTTP ${resp.status}: ${errText}`);
+  }
+
+  const data = await resp.json();
+  if (data.error) throw new Error(`Gemini API: ${data.error.message}`);
+  return data;
+}
+
+// ── Appel Claude (fallback si ANTHROPIC_API_KEY présente) ────
 async function callClaude(systemPrompt, userMessage, maxTokens = 8000) {
   if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY manquante');
 
@@ -167,18 +202,60 @@ async function callClaude(systemPrompt, userMessage, maxTokens = 8000) {
   return resp.json();
 }
 
+// ── callAI : Gemini en primaire, Claude en fallback ──────────
+async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
+  // Gemini disponible → prioritaire
+  if (GEMINI_API_KEY) {
+    try {
+      const result = await callGemini(systemPrompt, userMessage, maxTokens);
+      console.log('   🤖 Moteur : Gemini (Google Search activé)');
+      return { source: 'gemini', data: result };
+    } catch (err) {
+      console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Claude`);
+    }
+  }
+  // Claude en fallback
+  if (ANTHROPIC_API_KEY) {
+    const result = await callClaude(systemPrompt, userMessage, maxTokens);
+    console.log('   🤖 Moteur : Claude (web_search activé)');
+    return { source: 'claude', data: result };
+  }
+  throw new Error('Aucune clé API disponible (GEMINI_API_KEY et ANTHROPIC_API_KEY manquantes)');
+}
+
 // ══════════════════════════════════════════════
 // EXTRACTION JSON ROBUSTE
 // ══════════════════════════════════════════════
 
-function extractJSON(content) {
-  // Concatène tous les blocs text de la réponse
-  const raw = content
-    .filter(b => b.type === 'text')
-    .map(b => b.text)
-    .join('');
+function extractJSON(aiResponse) {
+  // Normalise les deux formats : { source, data } de callAI ou réponse brute
+  const resp = aiResponse?.source ? aiResponse.data : aiResponse;
 
-  // Nettoie les blocs markdown éventuels
+  let raw = '';
+
+  // Format Gemini : candidates[0].content.parts[].text
+  if (resp?.candidates) {
+    raw = resp.candidates
+      .flatMap(c => c.content?.parts || [])
+      .filter(p => p.text)
+      .map(p => p.text)
+      .join('');
+  }
+  // Format Claude : content[].type=text
+  else if (Array.isArray(resp?.content)) {
+    raw = resp.content
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('');
+  }
+  // Fallback string brut
+  else if (typeof resp === 'string') {
+    raw = resp;
+  }
+
+  if (!raw) throw new Error('Réponse IA vide ou format inconnu');
+
+  // Nettoie les blocs markdown
   let clean = raw
     .replace(/```json\s*/gi, '')
     .replace(/```\s*/g, '')
@@ -188,7 +265,7 @@ function extractJSON(content) {
   const start = clean.indexOf('{');
   const end   = clean.lastIndexOf('}');
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error('Aucun JSON trouvé dans la réponse Claude');
+    throw new Error('Aucun JSON trouvé dans la réponse IA');
   }
 
   clean = clean.slice(start, end + 1);
@@ -196,7 +273,6 @@ function extractJSON(content) {
   try {
     return JSON.parse(clean);
   } catch (e) {
-    // Tentative de nettoyage des caractères de contrôle
     const sanitized = clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
     return JSON.parse(sanitized);
   }
@@ -357,9 +433,9 @@ Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Ré
   console.log('🤖 Appel Claude API (web_search activé)...');
   let claudeResp;
   try {
-    claudeResp = await callClaude(VICTOR_PROMPT, userMessage, 8000);
+    claudeResp = await callAI(VICTOR_PROMPT, userMessage, 8000);
   } catch (err) {
-    console.error('❌ Erreur Claude API:', err.message);
+    console.error('❌ Erreur IA API:', err.message);
     throw err;
   }
 
@@ -631,7 +707,7 @@ Le value bet était : "${p.value_bet || 'aucun'}"
 Si le match n'est pas encore terminé, réponds : { "skip": true }`;
 
         try {
-          const resp = await callClaude(
+          const resp = await callAI(
             'Tu cherches les résultats sportifs réels du jour. Réponds uniquement en JSON.',
             userMsg,
             400

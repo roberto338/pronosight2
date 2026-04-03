@@ -521,7 +521,7 @@ app.get('/api/victor/status', async (req, res) => {
     status:           dbStatus === 'connected' ? 'ok' : 'degraded',
     db:               dbStatus,
     db_time:          dbTime,
-    claude:           process.env.ANTHROPIC_API_KEY ? 'configured' : 'missing',
+    ia_moteur:        process.env.GEMINI_API_KEY ? 'gemini' : process.env.ANTHROPIC_API_KEY ? 'claude' : 'missing',
     telegram:         process.env.TELEGRAM_BOT_TOKEN ? 'configured' : 'missing',
     pronostics_today: pronosticsToday,
     patterns_actifs:  patternsActifs,
@@ -544,7 +544,8 @@ app.listen(PORT, () => {
   console.log('  APIs configurées:');
   console.log(`    Gemini:         ${process.env.GEMINI_API_KEY    ? '✅' : '❌ manquante'}`);
   console.log(`    Groq (fallback):${process.env.GROQ_API_KEY      ? '✅' : '⚠️  optionnelle'}`);
-  console.log(`    Claude (Victor):${process.env.ANTHROPIC_API_KEY ? '✅' : '❌ manquante'}`);
+  console.log(`    Claude (Victor):${process.env.ANTHROPIC_API_KEY ? '✅' : '⚠️  optionnelle (Gemini prioritaire)'}`);
+  console.log(`    Gemini (Victor):${process.env.GEMINI_API_KEY    ? '✅ ACTIF' : '❌ manquante'}`);
   console.log(`    Odds API:       ${process.env.ODDS_API_KEY      ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Football-Data:  ${process.env.FOOTBALL_DATA_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    API-Football:   ${process.env.RAPIDAPI_KEY      ? '✅' : '⚠️  optionnelle'}`);
