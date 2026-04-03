@@ -618,6 +618,8 @@ ${statsCtx ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_fo
         proba_away: 30,
         score_pred: "1-1",
         score_pred_pct: 30,
+        alt_score1: "2-1", alt_score1_pct: 20,
+        alt_score2: "0-1", alt_score2_pct: 15,
         best_bet: "Match serré",
         best_bet_market: "X",
         best_bet_confidence: 60,
@@ -655,10 +657,10 @@ ${statsCtx ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_fo
     setCachedAnalysis(t1, t2, league, d);
 
     // Calculer EV et Kelly
-    const bookOdds = parseFloat(document.getElementById('evOdds').value) || 0;
-    const evMarket = (document.getElementById('evMarket').value || '').trim();
-    const bankroll = parseFloat(document.getElementById('kellyBankroll').value) || 0;
-    const kellyFraction = parseFloat(document.getElementById('kellyFraction').value) || 0.25;
+    const bookOdds = parseFloat(document.getElementById('evOdds')?.value) || 0;
+    const evMarket = (document.getElementById('evMarket')?.value || '').trim();
+    const bankroll = parseFloat(document.getElementById('bankroll')?.value) || 0;
+    const kellyFraction = parseFloat(document.getElementById('kellyFraction')?.value) || 0.25;
     
     let evData = null, kellyData = null;
     
@@ -707,6 +709,8 @@ ${statsCtx ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_fo
       proba_away: 30,
       score_pred: "1-1",
       score_pred_pct: 30,
+      alt_score1: "2-1", alt_score1_pct: 20,
+      alt_score2: "0-1", alt_score2_pct: 15,
       best_bet: "Match à suivre",
       best_bet_market: "X",
       best_bet_confidence: 60,
