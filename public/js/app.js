@@ -1072,7 +1072,7 @@ function renderHistory() {
       const correct = p.pronostic_correct;
       const cls = correct === true ? 'hist-win' : correct === false ? 'hist-lose' : '';
       const badge = correct === true ? '✅' : correct === false ? '❌' : '⏳';
-      const confColor = p.confiance === 'Élevé' ? '#00dd55' : p.confiance === 'Moyen' ? '#ffcc00' : '#ff6644';
+      const confColor = _confColor(p.confiance);
       return `<div class="hist-card ${cls}">
         <div style="flex:1">
           <div style="font-weight:700;font-size:14px">${p.equipe_a||''} vs ${p.equipe_b||''}</div>
@@ -1262,8 +1262,8 @@ function renderDashboard() {
     if (victorPicksToday.length > 0) {
       rp.onclick = null;
       rp.innerHTML = victorPicksToday.slice(0, 5).map(p => {
-        const confColor = p.confiance === 'Élevé' ? '#00dd55' : p.confiance === 'Moyen' ? '#ffcc00' : '#ff6644';
-        const confArrow = p.confiance === 'Élevé' ? '↑↑' : p.confiance === 'Moyen' ? '↑' : '→';
+        const confColor = _confColor(p.confiance);
+        const confArrow = _confNum(p.confiance) >= 80 ? '↑↑' : _confNum(p.confiance) >= 50 ? '↑' : '→';
         return `<div class="dash-pick-row" onclick="switchNav('victor')" style="cursor:pointer">
           <div class="dash-pick-result" style="background:${confColor};color:#000;font-size:10px;font-weight:800;min-width:28px;text-align:center;padding:0 4px">${confArrow}</div>
           <div style="flex:1">
