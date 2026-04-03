@@ -440,7 +440,9 @@ async function analyze() {
   document.getElementById('loading').classList.add('visible');
   document.getElementById('results').innerHTML = '';
   document.getElementById('results').classList.remove('visible');
-  ['ls1','ls2','ls3','ls4'].forEach((id, i) => setTimeout(() => document.getElementById(id)?.classList.add('show'), i * 800));
+  // ls1 immédiat, ls2 après 1s (Google Search), ls3/ls4 déclenchés manuellement après
+  document.getElementById('ls1')?.classList.add('show');
+  setTimeout(() => document.getElementById('ls2')?.classList.add('show'), 1000);
 
   const sport = state.currentSport === 'basket' ? 'basketball' : 'football';
   const league = state.selectedLeague ? `${state.selectedLeague.name} (${state.selectedLeague.country})` : 'inconnue';
@@ -477,6 +479,46 @@ async function analyze() {
       h2hCtx = `\nHISTORIQUE H2H (${h2hEvents.length} derniers face-à-face):\n${h2hLines}`;
     } else {
       h2hCtx = `\nH2H: Utilise tes connaissances des confrontations directes récentes entre ${t1} et ${t2}.`;
+    }
+
+    // ── Forme réelle via Google Search (fallback si API-Football indisponible) ──
+    let liveFormCtx = '';
+    let liveForm1 = null, liveForm2 = null;
+    if (!realStats) {
+      try {
+        document.getElementById('ls2')?.classList.add('show');
+        const today = new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+        const searchPrompt = `Cherche sur le web les 5 derniers résultats en championnat de "${t1}" et "${t2}" en ${today}.
+Réponds UNIQUEMENT avec ce JSON, sans texte avant ni après :
+{
+  "team1_form": ["W ou D ou L","W ou D ou L","W ou D ou L","W ou D ou L","W ou D ou L"],
+  "team1_results": ["score vs adversaire","score vs adversaire","score vs adversaire","score vs adversaire","score vs adversaire"],
+  "team2_form": ["W ou D ou L","W ou D ou L","W ou D ou L","W ou D ou L","W ou D ou L"],
+  "team2_results": ["score vs adversaire","score vs adversaire","score vs adversaire","score vs adversaire","score vs adversaire"],
+  "team1_injuries": "liste des blessés/suspendus connus ou aucun signalé",
+  "team2_injuries": "liste des blessés/suspendus connus ou aucun signalé"
+}
+Ordre : du plus récent (index 0) au plus ancien (index 4). W=victoire, D=nul, L=défaite.`;
+
+        const formData = await callGemini(
+          [{ role: 'user', content: searchPrompt }],
+          { useSearch: true, maxTokens: 800, jsonMode: false }
+        );
+        const formText = extractText(formData);
+        const formJSON = extractJSON(formText);
+        if (formJSON && formJSON.team1_form?.length && formJSON.team2_form?.length) {
+          liveForm1 = formJSON.team1_form;
+          liveForm2 = formJSON.team2_form;
+          liveFormCtx = `\n\n⚡ FORME RÉELLE (Google Search — PRIORITÉ ABSOLUE):
+- Derniers résultats ${t1}: ${(formJSON.team1_results || liveForm1).join(' | ')}
+- Derniers résultats ${t2}: ${(formJSON.team2_results || liveForm2).join(' | ')}
+- Blessés/suspendus ${t1}: ${formJSON.team1_injuries || 'inconnu'}
+- Blessés/suspendus ${t2}: ${formJSON.team2_injuries || 'inconnu'}`;
+          console.log('✅ Forme réelle récupérée via Google Search');
+        }
+      } catch (formErr) {
+        console.warn('⚠️ Google Search forme échoué:', formErr.message);
+      }
     }
 
     // Stats réelles API-Football (forme, blessures, H2H)
@@ -538,7 +580,7 @@ async function analyze() {
 MATCH: ${t1} vs ${t2}
 COMPÉTITION: ${league}
 DATE: ${matchDate}${leg1Ctx}
-SPORT: ${sport}${standingsCtx}${h2hCtx}${statsCtx}
+SPORT: ${sport}${standingsCtx}${h2hCtx}${statsCtx}${liveFormCtx}
 
 Retourne EXACTEMENT cet objet JSON avec toutes ces clés, en remplaçant chaque valeur par ta vraie analyse:
 {
@@ -600,9 +642,11 @@ RÈGLES ABSOLUES:
 - traffic_light = "vert" si best_bet_confidence >= 70, "orange" si >= 55, "rouge" sinon
 - stars = 1 si confidence < 55, 2 si < 65, 3 si < 75, 4 si < 85, 5 si >= 85
 - Toutes les chaînes en français sauf team1_form/team2_form (W/D/L)
-${statsCtx ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_form/team2_form) et les blessures à partir des STATISTIQUES RÉELLES fournies ci-dessus. Ces données sont factuelles et récentes.' : '- Base ton analyse sur tes connaissances à jour de ces équipes.'}`;
+${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_form/team2_form) et les blessures à partir des DONNÉES RÉELLES fournies ci-dessus. Ces données sont factuelles et récentes.' : '- Base ton analyse sur tes connaissances à jour de ces équipes.'}`;
 
+    document.getElementById('ls3')?.classList.add('show');
     const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000, jsonMode: true, cacheKey: `${t1}|${t2}|${league}` });
+    document.getElementById('ls4')?.classList.add('show');
 
     
     const text = extractText(data);
@@ -652,6 +696,10 @@ ${statsCtx ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_fo
     d.is_live = isLive;
     d.stars = d.stars || Math.ceil((d.best_bet_confidence || 60) / 20);
     d.traffic_light = d.traffic_light || (d.best_bet_confidence >= 70 ? 'vert' : d.best_bet_confidence >= 50 ? 'orange' : 'rouge');
+
+    // Surcharge team_form avec les vraies données Google Search si disponibles
+    if (liveForm1?.length === 5) d.team1_form = liveForm1;
+    if (liveForm2?.length === 5) d.team2_form = liveForm2;
 
     // Sauvegarder dans le cache
     setCachedAnalysis(t1, t2, league, d);
