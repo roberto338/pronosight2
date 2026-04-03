@@ -261,6 +261,44 @@ export async function runVictor() {
     timeZone: 'Europe/Paris'
   });
   const dateISO = today.toISOString().slice(0, 10);
+  const dateEN  = today.toLocaleDateString('en-US', {
+    month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Europe/Paris'
+  });
+
+  // ── Détection fenêtre FIFA (trêve internationale) ──
+  // Fenêtres 2025/2026 : mars 20-25 / sept 1-9 / oct 6-14 / nov 10-18
+  const parisDate = new Date(today.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+  const m = parisDate.getMonth() + 1; // 1-12
+  const d = parisDate.getDate();
+  const isFifaWindow = (m === 3  && d >= 20 && d <= 31)  // Mars
+                    || (m === 6  && d >= 1  && d <= 10)  // Juin
+                    || (m === 9  && d >= 1  && d <= 9)   // Septembre
+                    || (m === 10 && d >= 6  && d <= 14)  // Octobre
+                    || (m === 11 && d >= 10 && d <= 18); // Novembre
+
+  const fifaContext = isFifaWindow ? `
+CONTEXTE FENÊTRE FIFA ACTIVE — PRIORITÉ ABSOLUE :
+Aujourd'hui ${dateStr} des matchs internationaux se jouent partout dans le monde.
+Recherche OBLIGATOIRE :
+1. "qualifications coupe du monde 2026 ${dateStr}"
+2. "World Cup 2026 qualifiers ${dateEN}"
+3. "international friendlies ${dateEN}"
+4. "matchs amicaux internationaux ce soir"
+5. "friendly football matches today ${dateEN}"
+6. "matchs foot ce soir ${dateStr}"
+Les qualifications ET amicaux internationaux sont prioritaires sur les championnats domestiques.
+` : `
+CONTEXTE CHAMPIONNATS DOMESTIQUES :
+Aujourd'hui ${dateStr} les championnats nationaux et coupes continentales sont en cours.
+Recherche OBLIGATOIRE :
+1. "football matches today ${dateEN}"
+2. "matchs foot ce soir ${dateStr}"
+3. "Ligue 1 Premier League Liga Bundesliga Serie A ${dateEN}"
+4. "Champions League Europa League Coupe de France ${dateEN}"
+5. "NBA basketball matches tonight"
+6. "tennis results today ${dateEN}"
+Couvre TOUS les sports disponibles : football clubs, basketball, tennis, MMA...
+`;
 
   // ── Message utilisateur ──────────────────────
   const userMessage = `Nous sommes le ${dateStr}.
@@ -268,31 +306,8 @@ export async function runVictor() {
 ${briefing}
 
 ${patternsTexte}
-
-CONTEXTE URGENT — FENÊTRE FIFA ACTIVE :
-Aujourd'hui ${dateStr} des dizaines de matchs internationaux se jouent partout dans le monde :
-- Qualifications Coupe du Monde 2026 UEFA
-- Qualifications Coupe du Monde 2026 CONMEBOL
-- Qualifications Coupe du Monde 2026 CONCACAF
-- Qualifications Coupe du Monde 2026 CAF
-- Matchs amicaux internationaux A
-
-Recherche avec ces requêtes web OBLIGATOIRES :
-1. "qualifications coupe du monde 2026 ${dateStr}"
-2. "World Cup 2026 qualifiers ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Europe/Paris' })}"
-3. "international friendlies ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Europe/Paris' })}"
-4. "matchs foot ce soir ${dateStr}"
-5. "football today ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Europe/Paris' })} all matches"
-
-Recherche aussi OBLIGATOIREMENT les matchs amicaux :
-6. "international friendlies tonight ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Europe/Paris' })}"
-7. "matchs amicaux internationaux ce soir"
-8. "friendly football matches today"
-9. "amical international ${dateStr}"
-
-Les matchs amicaux sont aussi importants que les qualifications. Tu dois trouver TOUS les matchs du jour sans exception — qualifications ET amicaux ET championnats nationaux ET coupes continentales.
-
-Tu DOIS identifier au minimum 6 matchs. Un tableau avec seulement les barrages UEFA n'est pas acceptable — cherche TOUTES les compétitions actives aujourd'hui.
+${fifaContext}
+Tu dois trouver un maximum de matchs avec des enjeux réels. Minimum 3 matchs, idéalement 5-8.
 
 Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Réponds UNIQUEMENT avec ce JSON :
 {
