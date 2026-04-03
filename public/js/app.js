@@ -1815,11 +1815,18 @@ function renderPronoVictor() {
   if (!container) return;
 
   if (!victorState.loaded) {
-    container.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
-      <div style="font-size:32px">🎙️</div>
-      <div style="margin-top:10px;font-weight:700;color:var(--text2)">Chargement des pronostics Victor...</div>
-    </div></div>`;
-    loadVictorData().then(() => renderPronoVictor());
+    if (victorState.loadError) {
+      container.innerHTML = `<div class="card" style="text-align:center;padding:30px;color:#ff6644">
+        ⚠️ Serveur inaccessible —
+        <button onclick="victorState.loadError=false;renderPronoVictor()" style="margin-left:8px;padding:4px 12px;border-radius:6px;background:var(--accent);border:none;color:#fff;cursor:pointer">↻ Réessayer</button>
+      </div>`;
+    } else {
+      container.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:32px">🎙️</div>
+        <div style="margin-top:10px;font-weight:700;color:var(--text2)">Chargement des pronostics Victor...</div>
+      </div></div>`;
+      loadVictorData().then(() => renderPronoVictor());
+    }
     return;
   }
   _renderPronoList();
@@ -1997,7 +2004,10 @@ async function loadVictorData({ force = false } = {}) {
     const newTotal = todayRes?.total || 0;
     if (prevTotal === 0 && newTotal > 0) showVictorUpdateNotif(newTotal);
   } catch(e) {
-    if (e.name !== 'AbortError') console.warn('[Victor] Données indisponibles:', e.message);
+    if (e.name !== 'AbortError') {
+      console.warn('[Victor] Données indisponibles:', e.message);
+      victorState.loadError = true;
+    }
   } finally {
     victorState.loading = false;
   }
@@ -2054,11 +2064,20 @@ function renderVictorView() {
   const el = document.getElementById('victorView');
   if (!el) return;
   if (!victorState.loaded) {
-    el.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
-      <div style="font-size:32px">🎙️</div>
-      <div style="margin-top:12px;font-weight:700;color:var(--text2)">Chargement de Victor...</div>
-    </div></div>`;
-    loadVictorData().then(() => renderVictorView());
+    if (victorState.loadError) {
+      el.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:32px">⚠️</div>
+        <div style="margin-top:12px;font-weight:700;color:#ff6644">Impossible de charger Victor</div>
+        <div style="font-size:12px;margin-top:6px">Vérifiez la connexion au serveur</div>
+        <button onclick="victorState.loadError=false;renderVictorView()" style="margin-top:12px;padding:6px 16px;border-radius:8px;background:var(--accent);border:none;color:#fff;cursor:pointer">↻ Réessayer</button>
+      </div></div>`;
+    } else {
+      el.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
+        <div style="font-size:32px">🎙️</div>
+        <div style="margin-top:12px;font-weight:700;color:var(--text2)">Chargement de Victor...</div>
+      </div></div>`;
+      loadVictorData().then(() => renderVictorView());
+    }
     return;
   }
   const picks    = victorState.today?.pronostics || [];

@@ -517,7 +517,8 @@ Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Ré
  * Retourne un tableau plat de fixtures avec score.
  */
 async function fetchApiFootballResults(dateISO) {
-  const API_KEY = process.env.API_FOOTBALL_KEY;
+  // Accepte les deux noms de variable (cohérence server.js vs victor)
+  const API_KEY = process.env.API_FOOTBALL_KEY || process.env.RAPIDAPI_KEY;
   if (!API_KEY) return [];
   try {
     const url = `https://v3.football.api-sports.io/fixtures?date=${dateISO}&status=FT`;
