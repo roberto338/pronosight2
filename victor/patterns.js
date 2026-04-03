@@ -13,14 +13,17 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 /**
  * Détecte les patterns applicables à un match.
- * @param {{ sport, equipe_a, equipe_b, competition, date }} matchContext
+ * @param {{ sport, equipe_a, equipe_b, competition, date, impact_enjeu_motivation }} matchContext
  * @returns {{ h2h, situationnels, signal_fort, texte_injection }}
  */
 export async function detectPatterns(matchContext) {
-  const { sport, equipe_a = '', equipe_b = '' } = matchContext;
+  const { sport, equipe_a = '', equipe_b = '', impact_enjeu_motivation = 3 } = matchContext; // Impact par défaut à 3
 
   let h2h = [];
   let situationnels = [];
+
+  // Ajustement dynamique du seuil de confiance basé sur l'enjeu (exemple simple)
+  const seuilConfiance = 55 + (impact_enjeu_motivation - 3) * 5; // +5% si enjeu très fort, -5% si faible
 
   // ── Requête 1 : Patterns H2H ─────────────────
   try {
@@ -30,7 +33,7 @@ export async function detectPatterns(matchContext) {
        WHERE actif = true
          AND sport = $1
          AND type = 'H2H'
-         AND taux_confirmation >= 55
+         AND taux_confirmation >= $4
          AND occurrences_total >= 5
          AND (
            (equipe_a ILIKE $2 AND equipe_b ILIKE $3)
@@ -38,7 +41,7 @@ export async function detectPatterns(matchContext) {
            OR (equipe_a IS NULL AND equipe_b IS NULL)
          )
        ORDER BY taux_confirmation DESC`,
-      [sport, `%${equipe_a}%`, `%${equipe_b}%`]
+      [sport, `%${equipe_a}%`, `%${equipe_b}%`, seuilConfiance]
     );
     h2h = rows;
   } catch (err) {
@@ -53,19 +56,19 @@ export async function detectPatterns(matchContext) {
        WHERE actif = true
          AND sport = $1
          AND type != 'H2H'
-         AND taux_confirmation >= 55
+         AND taux_confirmation >= $2
          AND occurrences_total >= 5
        ORDER BY taux_confirmation DESC`,
-      [sport]
+      [sport, seuilConfiance]
     );
     situationnels = rows;
   } catch (err) {
     console.warn('⚠️ [Patterns] Erreur requête situationnels:', err.message);
   }
 
-  // ── Signaux forts (taux >= 70%) ───────────────
+  // ── Signaux forts (taux >= 70% et ajusté par contexte) ───────────────
   const signal_fort = [...h2h, ...situationnels].filter(
-    p => parseFloat(p.taux_confirmation) >= 70
+    p => parseFloat(p.taux_confirmation) >= (70 + (impact_enjeu_motivation - 3) * 5) // Seuil fort plus haut si enjeu élevé
   );
 
   // ── Texte d'injection pour Victor ────────────
@@ -182,6 +185,7 @@ export async function updatePatternAfterResult(pronosticId) {
       const newTotal    = (pat.occurrences_total    || 0) + 1;
       const newConfirmes = (pat.occurrences_confirmees || 0) + confirme;
       const newTaux     = parseFloat(((newConfirmes / newTotal) * 100).toFixed(2));
+      const desactiverSeuil = await getDynamicDeactivationThreshold(sport); // Seuil dynamique
 
       await query(
         `UPDATE ps_victor_patterns
@@ -190,13 +194,13 @@ export async function updatePatternAfterResult(pronosticId) {
              taux_confirmation        = $3,
              derniere_confirmation    = CASE WHEN $4 = 1 THEN CURRENT_DATE
                                              ELSE derniere_confirmation END,
-             actif                    = CASE WHEN $3 < 45 THEN false ELSE true END
-         WHERE id = $5`,
-        [newTotal, newConfirmes, newTaux, confirme, pat.id]
+             actif                    = CASE WHEN $3 < $5 THEN false ELSE true END -- Utilise le seuil dynamique
+         WHERE id = $6`,
+        [newTotal, newConfirmes, newTaux, confirme, desactiverSeuil, pat.id]
       );
 
       const statut = confirme ? '✅ Confirmé' : '❌ Non confirmé';
-      const desactive = newTaux < 45 ? ' 🔴 DÉSACTIVÉ (taux < 45%)' : '';
+      const desactive = newTaux < desactiverSeuil ? ` 🔴 DÉSACTIVÉ (taux < ${desactiverSeuil}%)` : '';
       console.log(`   ${statut} — "${pat.nom}" → taux: ${newTaux}% (${newConfirmes}/${newTotal})${desactive}`);
 
     } catch (err) {
@@ -204,6 +208,27 @@ export async function updatePatternAfterResult(pronosticId) {
     }
   }
 }
+
+// ── Helper pour récupérer le seuil de désactivation dynamique ──
+async function getDynamicDeactivationThreshold(sport) {
+  try {
+    const { rows } = await query(
+      `SELECT
+         ((sports_prudence -> $1) ->> 'seuil_desactivation')::numeric AS seuil
+       FROM ps_victor_rules
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [sport]
+    );
+    if (rows.length > 0 && rows[0].seuil !== null) {
+      return rows[0].seuil; // Retourne le seuil spécifique au sport
+    }
+  } catch (err) {
+    console.warn(`⚠️ [Patterns] Erreur récupération seuil dynamique pour ${sport}:`, err.message);
+  }
+  return 45; // Seuil par défaut si non trouvé ou erreur
+}
+
 
 // ══════════════════════════════════════════════
 // DISCOVER NEW PATTERNS — Analyse hebdomadaire
