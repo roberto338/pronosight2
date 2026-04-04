@@ -270,11 +270,35 @@ function extractJSON(aiResponse) {
 
   clean = clean.slice(start, end + 1);
 
+  // Tentative 1 : parse direct
   try {
     return JSON.parse(clean);
-  } catch (e) {
-    const sanitized = clean.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  } catch (_) {}
+
+  // Tentative 2 : remplace les retours ligne littéraux DANS les chaînes JSON
+  // (Gemini peut mettre des \n réels dans analyse_tactique, contexte, etc.)
+  try {
+    const sanitized = clean.replace(
+      /"((?:[^"\\]|\\.)*)"/g,
+      (m) => m
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t')
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    );
     return JSON.parse(sanitized);
+  } catch (_) {}
+
+  // Tentative 3 : compacte tout sur une ligne + nettoyage global
+  try {
+    const oneLine = clean
+      .replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, ' ')
+      .replace(/\n/g, ' ')
+      .replace(/\r/g, ' ')
+      .replace(/\s+/g, ' ');
+    return JSON.parse(oneLine);
+  } catch (e) {
+    throw new Error(`JSON invalide après 3 tentatives: ${e.message}`);
   }
 }
 
