@@ -492,6 +492,25 @@ app.get('/api/ping', (req, res) => {
   res.json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()) });
 });
 
+// ── DEBUG : test Victor Gemini call ───────────
+app.get('/api/victor/debug', async (req, res) => {
+  const apiKey = req.query.k;
+  if (apiKey !== process.env.VICTOR_API_KEY?.slice(0, 16)) {
+    return res.status(401).json({ error: 'Non autorisé' });
+  }
+  try {
+    const { runVictor } = await import('./victor/core.js');
+    // Timeout 120s
+    const result = await Promise.race([
+      runVictor(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout 120s')), 120000))
+    ]);
+    res.json({ ok: true, events: result?.events?.length || 0, sample: result?.events?.slice(0,1) });
+  } catch (err) {
+    res.json({ ok: false, error: err.message, stack: err.stack?.slice(0, 500) });
+  }
+});
+
 // ── ROUTE 6 : GET /api/victor/status ──────────
 app.get('/api/victor/status', async (req, res) => {
   let dbStatus = 'disconnected';
