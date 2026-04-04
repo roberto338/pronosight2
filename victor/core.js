@@ -139,36 +139,56 @@ export async function getVictorBriefing() {
 // APPEL CLAUDE API
 // ══════════════════════════════════════════════
 
-// ── Appel Gemini (primaire) ───────────────────
-async function callGemini(systemPrompt, userMessage, maxTokens = 8000) {
+// ── Appel Gemini helper ───────────────────────
+async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false } = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
-
   const body = {
-    contents: [
-      { role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }
-    ],
-    tools: [{ googleSearch: {} }],
+    contents,
     generationConfig: {
       maxOutputTokens: Math.min(maxTokens, 8192),
       temperature: 0.4,
+      ...(jsonMode ? { responseMimeType: 'application/json' } : {})
     },
   };
-
+  if (search) body.tools = [{ googleSearch: {} }];
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!resp.ok) { const t = await resp.text(); throw new Error(`Gemini HTTP ${resp.status}: ${t}`); }
+  const data = await resp.json();
+  if (data.error) throw new Error(`Gemini: ${data.error.message}`);
+  return data;
+}
 
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Gemini API HTTP ${resp.status}: ${errText}`);
+// ── Appel Gemini : étape 1 = recherche web, étape 2 = JSON strict ──
+async function callGemini(systemPrompt, userMessage, maxTokens = 8000) {
+  // ÉTAPE 1 : Recherche des matchs du jour via Google Search (réponse texte libre)
+  console.log('   🔍 Étape 1 — Recherche matchs du jour...');
+  const searchMsg = `${userMessage.split('Lance l\'analyse complète')[0]}
+Réponds en texte libre avec la liste des matchs trouvés (équipes, heure, compétition, enjeu). Minimum 3 matchs.`;
+
+  let matchList = '';
+  try {
+    const step1 = await geminiRequest(
+      [{ role: 'user', parts: [{ text: searchMsg }] }],
+      { maxTokens: 2000, search: true }
+    );
+    matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
+    console.log(`   ✅ Matchs trouvés (${matchList.length} chars)`);
+  } catch (err) {
+    console.warn('   ⚠️  Étape 1 échouée, utilise connaissances Gemini:', err.message);
   }
 
-  const data = await resp.json();
-  if (data.error) throw new Error(`Gemini API: ${data.error.message}`);
-  return data;
+  // ÉTAPE 2 : Analyse JSON stricte (responseMimeType=json → pas de search, JSON pur)
+  console.log('   🧠 Étape 2 — Génération JSON analyse...');
+  const analysisPrompt = matchList
+    ? `${systemPrompt}\n\n---\n\n${userMessage}\n\nMATCHS TROUVÉS CE JOUR (utilise exactement ces matchs):\n${matchList}`
+    : `${systemPrompt}\n\n---\n\n${userMessage}`;
+
+  const step2 = await geminiRequest(
+    [{ role: 'user', parts: [{ text: analysisPrompt }] }],
+    { maxTokens, jsonMode: true }
+  );
+  return step2;
 }
 
 // ── Appel Claude (fallback si ANTHROPIC_API_KEY présente) ────
