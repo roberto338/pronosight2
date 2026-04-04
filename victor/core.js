@@ -443,10 +443,10 @@ Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Ré
   console.log('🔍 Extraction du JSON...');
   let victorData;
   try {
-    victorData = extractJSON(claudeResp.content);
+    victorData = extractJSON(claudeResp); // claudeResp = { source, data } — extractJSON gère le wrapper
   } catch (err) {
     console.error('❌ Impossible de parser la réponse JSON:', err.message);
-    console.error('   Réponse brute:', JSON.stringify(claudeResp.content).slice(0, 500));
+    console.error('   Réponse brute:', JSON.stringify(claudeResp?.data).slice(0, 500));
     throw err;
   }
 
@@ -713,7 +713,7 @@ Si le match n'est pas encore terminé, réponds : { "skip": true }`;
             userMsg,
             400
           );
-          const result = extractJSON(resp.content);
+          const result = extractJSON(resp); // resp = { source, data } — extractJSON gère le wrapper
           if (result.skip) {
             console.log(`   ⏳ ${p.match} — Pas encore terminé selon Claude, skip`);
             continue;
