@@ -545,7 +545,7 @@ app.listen(PORT, () => {
   console.log(`    Gemini:         ${process.env.GEMINI_API_KEY    ? '✅' : '❌ manquante'}`);
   console.log(`    Groq (fallback):${process.env.GROQ_API_KEY      ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Gemini (Victor):${process.env.GEMINI_API_KEY    ? '✅ ACTIF' : '❌ manquante'}`);
-  console.log(`    Groq/Gemma (fallback):${process.env.GROQ_API_KEY ? '✅' : '⚠️  optionnelle'}`);
+  console.log(`    Gemma (fallback):${process.env.GEMINI_API_KEY   ? `✅ (${process.env.GEMMA_MODEL || 'gemma-3-27b-it'})` : '❌ (nécessite GEMINI_API_KEY)'}`);
   console.log(`    Odds API:       ${process.env.ODDS_API_KEY      ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Football-Data:  ${process.env.FOOTBALL_DATA_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    API-Football:   ${process.env.RAPIDAPI_KEY      ? '✅' : '⚠️  optionnelle'}`);

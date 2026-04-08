@@ -10,8 +10,7 @@ import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const GROQ_API_KEY      = process.env.GROQ_API_KEY;
-const GROQ_VICTOR_MODEL = process.env.GROQ_VICTOR_MODEL || 'gemma2-9b-it';
+const GEMMA_MODEL       = process.env.GEMMA_MODEL  || 'gemma-3-27b-it';
 
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
@@ -140,7 +139,7 @@ export async function getVictorBriefing() {
 // ══════════════════════════════════════════════
 
 // ── Appel Gemini helper ───────────────────────
-async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false } = {}) {
+async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false, model = null } = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
   const body = {
     contents,
@@ -151,7 +150,8 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
     },
   };
   if (search) body.tools = [{ googleSearch: {} }];
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const modelName = model || GEMINI_MODEL;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Gemini HTTP ${resp.status}: ${t}`); }
   const data = await resp.json();
@@ -191,58 +191,32 @@ Réponds en texte libre avec la liste des matchs trouvés (équipes, heure, comp
   return step2;
 }
 
-// ── Appel Groq/Gemma (fallback si GEMINI_API_KEY absente ou en erreur) ──
-async function callGroqVictor(systemPrompt, userMessage, maxTokens = 8000) {
-  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY manquante');
-
-  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_VICTOR_MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userMessage },
-      ],
-      max_tokens: Math.min(maxTokens, 8192),
-      temperature: 0.4,
-      response_format: { type: 'json_object' },
-    }),
-  });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(`Groq HTTP ${resp.status}: ${err.error?.message || ''}`);
-  }
-
-  const data = await resp.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  // Normalise au format { content: [{type, text}] } pour extractJSON
-  return { content: [{ type: 'text', text }] };
+// ── Appel Gemma via Google AI (fallback si Gemini échoue) ────
+async function callGemmaVictor(systemPrompt, userMessage, maxTokens = 8000) {
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
+  // Gemma ne supporte pas Google Search — JSON mode direct
+  const result = await geminiRequest(
+    [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }],
+    { maxTokens, jsonMode: true, model: GEMMA_MODEL }
+  );
+  return result;
 }
 
-// ── callAI : Gemini en primaire, Groq/Gemma en fallback ──────
+// ── callAI : Gemini en primaire, Gemma en fallback ───────────
 async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
-  // Gemini disponible → prioritaire
-  if (GEMINI_API_KEY) {
-    try {
-      const result = await callGemini(systemPrompt, userMessage, maxTokens);
-      console.log('   🤖 Moteur : Gemini (Google Search activé)');
-      return { source: 'gemini', data: result };
-    } catch (err) {
-      console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Groq/Gemma`);
-    }
+  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
+  // Gemini avec Google Search → prioritaire
+  try {
+    const result = await callGemini(systemPrompt, userMessage, maxTokens);
+    console.log('   🤖 Moteur : Gemini (Google Search activé)');
+    return { source: 'gemini', data: result };
+  } catch (err) {
+    console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Gemma ${GEMMA_MODEL}`);
   }
-  // Groq/Gemma en fallback
-  if (GROQ_API_KEY) {
-    const result = await callGroqVictor(systemPrompt, userMessage, maxTokens);
-    console.log(`   🤖 Moteur : Groq (${GROQ_VICTOR_MODEL})`);
-    return { source: 'groq', data: result };
-  }
-  throw new Error('Aucune clé API disponible (GEMINI_API_KEY et GROQ_API_KEY manquantes)');
+  // Gemma via Google AI en fallback
+  const result = await callGemmaVictor(systemPrompt, userMessage, maxTokens);
+  console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
+  return { source: 'gemma', data: result };
 }
 
 // ══════════════════════════════════════════════
@@ -737,9 +711,9 @@ export async function checkResults() {
         source = 'api-football';
       }
 
-      // ── Fallback Groq/Gemma si match absent ou eval impossible ─
+      // ── Fallback Gemma si match absent ou eval impossible ─────
       if (source === 'claude' || pronosticCorrect === null) {
-        console.log(`   🤖 Fallback Groq/${GROQ_VICTOR_MODEL} pour "${p.match}"...`);
+        console.log(`   🤖 Fallback Gemma (${GEMMA_MODEL}) pour "${p.match}"...`);
         const userMsg = `Quel est le résultat final du match "${p.match}" joué aujourd'hui (${dateISO}) ?
 Réponds UNIQUEMENT avec ce JSON (pas de texte autour) :
 {
@@ -768,9 +742,9 @@ Si le match n'est pas encore terminé, réponds : { "skip": true }`;
           resultatReel     = result.resultat_reel   || resultatReel;
           pronosticCorrect = result.pronostic_correct ?? pronosticCorrect;
           valueBetCorrect  = result.value_bet_correct ?? valueBetCorrect;
-          source = 'groq';
-        } catch (groqErr) {
-          console.warn(`   ⚠️  Groq fallback échoué pour "${p.match}": ${groqErr.message}`);
+          source = 'gemma';
+        } catch (gemmaErr) {
+          console.warn(`   ⚠️  Gemma fallback échoué pour "${p.match}": ${gemmaErr.message}`);
           continue;
         }
       }
@@ -891,8 +865,8 @@ export async function updateVictorStats() {
 export async function weeklyVictorReview() {
   console.log('\n📊 Weekly Victor Review — démarrage...\n');
 
-  if (!GROQ_API_KEY && !GEMINI_API_KEY) {
-    console.warn('⚠️  GROQ_API_KEY et GEMINI_API_KEY manquantes — review impossible');
+  if (!GEMINI_API_KEY) {
+    console.warn('⚠️  GEMINI_API_KEY manquante — review impossible');
     return;
   }
 
@@ -944,8 +918,8 @@ export async function weeklyVictorReview() {
     erreurs = [];
   }
 
-  // ── Appel IA (Groq/Gemma) ─────────────────────
-  console.log(`🤖 Analyse des performances par Groq/${GROQ_VICTOR_MODEL}...`);
+  // ── Appel Gemma (Google AI) ───────────────────
+  console.log(`🤖 Analyse des performances par Gemma (${GEMMA_MODEL})...`);
 
   const prompt = `Tu es l'analyste de Victor, un pronostiqueur sportif IA.
 Analyse ces performances de la semaine ${semaine} et génère des directives opérationnelles.
@@ -980,14 +954,14 @@ Réponds UNIQUEMENT avec ce JSON :
 
   let reviewData;
   try {
-    const resp = await callGroqVictor(
+    const resp = await callGemmaVictor(
       'Tu analyses des données sportives. Réponds uniquement en JSON valide, sans texte hors JSON.',
       prompt,
       2000
     );
     reviewData = extractJSON(resp);
   } catch (err) {
-    console.error(`❌ [Review] Erreur Groq/${GROQ_VICTOR_MODEL}:`, err.message);
+    console.error(`❌ [Review] Erreur Gemma (${GEMMA_MODEL}):`, err.message);
     return;
   }
 
