@@ -10,7 +10,7 @@ import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const GEMMA_MODEL       = process.env.GEMMA_MODEL  || 'gemma-3-27b-it';
+const GEMMA_MODEL       = process.env.GEMMA_MODEL  || 'gemma-4-31b-it';
 
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
