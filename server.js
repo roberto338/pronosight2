@@ -544,8 +544,8 @@ app.listen(PORT, () => {
   console.log('  APIs configurées:');
   console.log(`    Gemini:         ${process.env.GEMINI_API_KEY    ? '✅' : '❌ manquante'}`);
   console.log(`    Groq (fallback):${process.env.GROQ_API_KEY      ? '✅' : '⚠️  optionnelle'}`);
-  console.log(`    Claude (Victor):${process.env.ANTHROPIC_API_KEY ? '✅' : '⚠️  optionnelle (Gemini prioritaire)'}`);
   console.log(`    Gemini (Victor):${process.env.GEMINI_API_KEY    ? '✅ ACTIF' : '❌ manquante'}`);
+  console.log(`    Groq/Gemma (fallback):${process.env.GROQ_API_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Odds API:       ${process.env.ODDS_API_KEY      ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    Football-Data:  ${process.env.FOOTBALL_DATA_KEY ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    API-Football:   ${process.env.RAPIDAPI_KEY      ? '✅' : '⚠️  optionnelle'}`);

@@ -8,10 +8,10 @@ import { query } from '../db/database.js';
 import { VICTOR_PROMPT } from './prompt.js';
 import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const CLAUDE_MODEL      = 'claude-sonnet-4-20250514';
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GROQ_API_KEY      = process.env.GROQ_API_KEY;
+const GROQ_VICTOR_MODEL = process.env.GROQ_VICTOR_MODEL || 'gemma2-9b-it';
 
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
@@ -191,38 +191,40 @@ Réponds en texte libre avec la liste des matchs trouvés (équipes, heure, comp
   return step2;
 }
 
-// ── Appel Claude (fallback si ANTHROPIC_API_KEY présente) ────
-async function callClaude(systemPrompt, userMessage, maxTokens = 8000) {
-  if (!ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY manquante');
+// ── Appel Groq/Gemma (fallback si GEMINI_API_KEY absente ou en erreur) ──
+async function callGroqVictor(systemPrompt, userMessage, maxTokens = 8000) {
+  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY manquante');
 
-  const body = {
-    model: CLAUDE_MODEL,
-    max_tokens: maxTokens,
-    system: systemPrompt,
-    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-    messages: [{ role: 'user', content: userMessage }],
-  };
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'web-search-2025-03-05',
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      model: GROQ_VICTOR_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userMessage },
+      ],
+      max_tokens: Math.min(maxTokens, 8192),
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+    }),
   });
 
   if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Claude API HTTP ${resp.status}: ${errText}`);
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(`Groq HTTP ${resp.status}: ${err.error?.message || ''}`);
   }
 
-  return resp.json();
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  // Normalise au format { content: [{type, text}] } pour extractJSON
+  return { content: [{ type: 'text', text }] };
 }
 
-// ── callAI : Gemini en primaire, Claude en fallback ──────────
+// ── callAI : Gemini en primaire, Groq/Gemma en fallback ──────
 async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
   // Gemini disponible → prioritaire
   if (GEMINI_API_KEY) {
@@ -231,16 +233,16 @@ async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
       console.log('   🤖 Moteur : Gemini (Google Search activé)');
       return { source: 'gemini', data: result };
     } catch (err) {
-      console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Claude`);
+      console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Groq/Gemma`);
     }
   }
-  // Claude en fallback
-  if (ANTHROPIC_API_KEY) {
-    const result = await callClaude(systemPrompt, userMessage, maxTokens);
-    console.log('   🤖 Moteur : Claude (web_search activé)');
-    return { source: 'claude', data: result };
+  // Groq/Gemma en fallback
+  if (GROQ_API_KEY) {
+    const result = await callGroqVictor(systemPrompt, userMessage, maxTokens);
+    console.log(`   🤖 Moteur : Groq (${GROQ_VICTOR_MODEL})`);
+    return { source: 'groq', data: result };
   }
-  throw new Error('Aucune clé API disponible (GEMINI_API_KEY et ANTHROPIC_API_KEY manquantes)');
+  throw new Error('Aucune clé API disponible (GEMINI_API_KEY et GROQ_API_KEY manquantes)');
 }
 
 // ══════════════════════════════════════════════
@@ -735,9 +737,9 @@ export async function checkResults() {
         source = 'api-football';
       }
 
-      // ── Fallback Claude si match absent ou eval impossible ─
+      // ── Fallback Groq/Gemma si match absent ou eval impossible ─
       if (source === 'claude' || pronosticCorrect === null) {
-        console.log(`   🤖 Fallback Claude pour "${p.match}"...`);
+        console.log(`   🤖 Fallback Groq/${GROQ_VICTOR_MODEL} pour "${p.match}"...`);
         const userMsg = `Quel est le résultat final du match "${p.match}" joué aujourd'hui (${dateISO}) ?
 Réponds UNIQUEMENT avec ce JSON (pas de texte autour) :
 {
@@ -766,9 +768,9 @@ Si le match n'est pas encore terminé, réponds : { "skip": true }`;
           resultatReel     = result.resultat_reel   || resultatReel;
           pronosticCorrect = result.pronostic_correct ?? pronosticCorrect;
           valueBetCorrect  = result.value_bet_correct ?? valueBetCorrect;
-          source = 'claude';
-        } catch (claudeErr) {
-          console.warn(`   ⚠️  Claude fallback échoué pour "${p.match}": ${claudeErr.message}`);
+          source = 'groq';
+        } catch (groqErr) {
+          console.warn(`   ⚠️  Groq fallback échoué pour "${p.match}": ${groqErr.message}`);
           continue;
         }
       }
@@ -889,8 +891,8 @@ export async function updateVictorStats() {
 export async function weeklyVictorReview() {
   console.log('\n📊 Weekly Victor Review — démarrage...\n');
 
-  if (!ANTHROPIC_API_KEY) {
-    console.warn('⚠️  ANTHROPIC_API_KEY manquante — review impossible');
+  if (!GROQ_API_KEY && !GEMINI_API_KEY) {
+    console.warn('⚠️  GROQ_API_KEY et GEMINI_API_KEY manquantes — review impossible');
     return;
   }
 
@@ -942,8 +944,8 @@ export async function weeklyVictorReview() {
     erreurs = [];
   }
 
-  // ── Appel Claude ──────────────────────────────
-  console.log('🤖 Analyse des performances par Claude...');
+  // ── Appel IA (Groq/Gemma) ─────────────────────
+  console.log(`🤖 Analyse des performances par Groq/${GROQ_VICTOR_MODEL}...`);
 
   const prompt = `Tu es l'analyste de Victor, un pronostiqueur sportif IA.
 Analyse ces performances de la semaine ${semaine} et génère des directives opérationnelles.
@@ -978,27 +980,14 @@ Réponds UNIQUEMENT avec ce JSON :
 
   let reviewData;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: 2000,
-        system: 'Tu analyses des données sportives. Réponds uniquement en JSON valide, sans texte hors JSON.',
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-
-    const data = await resp.json();
-    reviewData = extractJSON(data.content);
+    const resp = await callGroqVictor(
+      'Tu analyses des données sportives. Réponds uniquement en JSON valide, sans texte hors JSON.',
+      prompt,
+      2000
+    );
+    reviewData = extractJSON(resp);
   } catch (err) {
-    console.error('❌ [Review] Erreur Claude:', err.message);
+    console.error(`❌ [Review] Erreur Groq/${GROQ_VICTOR_MODEL}:`, err.message);
     return;
   }
 
