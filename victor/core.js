@@ -191,32 +191,94 @@ Réponds en texte libre avec la liste des matchs trouvés (équipes, heure, comp
   return step2;
 }
 
-// ── Appel Gemma via Google AI (fallback si Gemini échoue) ────
+// ── Appel Gemma : 3 étapes — matchs réels + stats + analyse JSON ──
 async function callGemmaVictor(systemPrompt, userMessage, maxTokens = 8000) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
-  // Gemma ne supporte pas Google Search — JSON mode direct
-  const result = await geminiRequest(
-    [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }],
+
+  const today = new Date().toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+  // ÉTAPE 1 : Gemini + Google Search → vrais matchs du jour
+  console.log('   🔍 Étape 1 — Recherche matchs réels du jour...');
+  let matchList = '';
+  try {
+    const step1 = await geminiRequest(
+      [{ role: 'user', parts: [{ text: `Recherche sur internet les matchs sportifs qui ont lieu AUJOURD'HUI ${today}.
+Inclus : football (Ligue 1, Premier League, Liga, Champions League, Europa League), basketball (NBA, EuroLeague), tennis (tournois en cours), rugby, autres sports majeurs.
+Pour chaque match donne : équipes exactes, heure, compétition. Minimum 6 matchs réels. Texte libre.` }] }],
+      { maxTokens: 2500, search: true }
+    );
+    matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
+    console.log(`   ✅ Matchs trouvés : ${matchList.length} chars`);
+  } catch (err) {
+    console.warn('   ⚠️  Étape 1 échouée:', err.message);
+  }
+
+  if (!matchList) throw new Error('Impossible de trouver des matchs réels via Google Search');
+
+  // ÉTAPE 2 : Gemini + Google Search → stats réelles pour chaque match
+  console.log('   📊 Étape 2 — Récupération stats réelles (forme, H2H, blessés)...');
+  let statsData = '';
+  try {
+    const step2 = await geminiRequest(
+      [{ role: 'user', parts: [{ text: `Pour les matchs suivants qui ont lieu aujourd'hui ${today}, recherche sur internet les statistiques réelles :
+${matchList}
+
+Pour chaque match, trouve :
+- Forme récente de chaque équipe (5 derniers matchs : V/N/D avec scores)
+- Bilan head-to-head (dernières confrontations directes)
+- Absences importantes / blessés / suspendus
+- Position au classement et contexte de l'enjeu
+- Statistiques de buts (moyenne buts marqués/encaissés)
+
+Réponds en texte libre avec toutes les stats trouvées.` }] }],
+      { maxTokens: 4000, search: true }
+    );
+    statsData = step2.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
+    console.log(`   ✅ Stats récupérées : ${statsData.length} chars`);
+  } catch (err) {
+    console.warn('   ⚠️  Étape 2 (stats) échouée:', err.message);
+  }
+
+  // ÉTAPE 3 : Gemma 4 31B → analyse JSON avec toutes les données réelles
+  console.log(`   🧠 Étape 3 — Analyse Gemma (${GEMMA_MODEL}) avec stats réelles...`);
+  const analysisPrompt = `${systemPrompt}
+
+---
+
+${userMessage}
+
+══ DONNÉES RÉELLES TROUVÉES VIA GOOGLE (utilise UNIQUEMENT ces matchs et stats) ══
+
+📅 MATCHS DU JOUR (${today}) :
+${matchList}
+
+📊 STATISTIQUES RÉELLES :
+${statsData || '(stats non disponibles pour certains matchs)'}
+
+⚠️ RÈGLE ABSOLUE : N'analyse QUE les matchs listés ci-dessus. N'invente aucun match, aucun score, aucune stat.`;
+
+  const step3 = await geminiRequest(
+    [{ role: 'user', parts: [{ text: analysisPrompt }] }],
     { maxTokens, jsonMode: true, model: GEMMA_MODEL }
   );
-  return result;
+  return step3;
 }
 
-// ── callAI : Gemma en primaire, Gemini en fallback ───────────
+// ── callAI : Gemini en primaire, Gemma en fallback ───────────
 async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
-  // Gemma 4 → prioritaire
+  // Gemini avec Google Search natif → prioritaire
   try {
-    const result = await callGemmaVictor(systemPrompt, userMessage, maxTokens);
-    console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
-    return { source: 'gemma', data: result };
+    const result = await callGemini(systemPrompt, userMessage, maxTokens);
+    console.log('   🤖 Moteur : Gemini (Google Search activé)');
+    return { source: 'gemini', data: result };
   } catch (err) {
-    console.warn(`   ⚠️  Gemma échoué (${err.message}) — bascule Gemini`);
+    console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Gemma ${GEMMA_MODEL}`);
   }
-  // Gemini avec Google Search en fallback
-  const result = await callGemini(systemPrompt, userMessage, maxTokens);
-  console.log('   🤖 Moteur : Gemini (Google Search activé)');
-  return { source: 'gemini', data: result };
+  // Gemma 4 31B en fallback (3 étapes : search + stats + analyse)
+  const result = await callGemmaVictor(systemPrompt, userMessage, maxTokens);
+  console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
+  return { source: 'gemma', data: result };
 }
 
 // ══════════════════════════════════════════════
