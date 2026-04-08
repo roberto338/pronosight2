@@ -202,21 +202,21 @@ async function callGemmaVictor(systemPrompt, userMessage, maxTokens = 8000) {
   return result;
 }
 
-// ── callAI : Gemini en primaire, Gemma en fallback ───────────
+// ── callAI : Gemma en primaire, Gemini en fallback ───────────
 async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
-  // Gemini avec Google Search → prioritaire
+  // Gemma 4 → prioritaire
   try {
-    const result = await callGemini(systemPrompt, userMessage, maxTokens);
-    console.log('   🤖 Moteur : Gemini (Google Search activé)');
-    return { source: 'gemini', data: result };
+    const result = await callGemmaVictor(systemPrompt, userMessage, maxTokens);
+    console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
+    return { source: 'gemma', data: result };
   } catch (err) {
-    console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Gemma ${GEMMA_MODEL}`);
+    console.warn(`   ⚠️  Gemma échoué (${err.message}) — bascule Gemini`);
   }
-  // Gemma via Google AI en fallback
-  const result = await callGemmaVictor(systemPrompt, userMessage, maxTokens);
-  console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
-  return { source: 'gemma', data: result };
+  // Gemini avec Google Search en fallback
+  const result = await callGemini(systemPrompt, userMessage, maxTokens);
+  console.log('   🤖 Moteur : Gemini (Google Search activé)');
+  return { source: 'gemini', data: result };
 }
 
 // ══════════════════════════════════════════════
