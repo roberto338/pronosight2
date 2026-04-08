@@ -7,6 +7,7 @@ dotenv.config({ override: true });
 import { startScheduler } from './cron/scheduler.js';
 import { query as dbQuery } from './db/database.js';
 import { runVictor } from './victor/core.js';
+import { broadcastDaily } from './bot/telegram.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -477,7 +478,16 @@ app.post('/api/victor/refresh', async (req, res) => {
   console.log('🔄 [Victor/refresh] Refresh manuel demandé');
 
   // Lance en arrière-plan sans bloquer la réponse
-  runVictor().catch(err =>
+  runVictor().then(async (result) => {
+    if (result?.events?.length > 0) {
+      try {
+        await broadcastDaily(result);
+        console.log('📱 [Victor/refresh] Broadcast Telegram envoyé');
+      } catch (teleErr) {
+        console.error('❌ [Victor/refresh] Erreur Telegram:', teleErr.message);
+      }
+    }
+  }).catch(err =>
     console.error('❌ [Victor/refresh] Erreur background:', err.message)
   );
 
