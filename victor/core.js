@@ -9,8 +9,9 @@ import { VICTOR_PROMPT } from './prompt.js';
 import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL      = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const GEMMA_MODEL       = process.env.GEMMA_MODEL  || 'gemma-4-31b-it';
+const GEMINI_MODEL        = process.env.GEMINI_MODEL        || 'gemini-flash-latest';
+const GEMINI_SEARCH_MODEL = process.env.GEMINI_SEARCH_MODEL || 'gemini-flash-latest';
+const GEMMA_MODEL       = process.env.GEMMA_MODEL        || 'gemma-4-31b-it';
 
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
@@ -150,7 +151,9 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
     },
   };
   if (search) body.tools = [{ googleSearch: {} }];
-  const modelName = model || GEMINI_MODEL;
+  // Pour les recherches web, utiliser gemini-flash-latest (supporte search + retourne du texte)
+  // Pour les analyses JSON, utiliser GEMINI_MODEL (gemini-2.5-flash)
+  const modelName = model || (search ? GEMINI_SEARCH_MODEL : GEMINI_MODEL);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Gemini HTTP ${resp.status}: ${t}`); }
@@ -159,36 +162,71 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
   return data;
 }
 
-// ── Appel Gemini : étape 1 = recherche web, étape 2 = JSON strict ──
+// ── Appel Gemini : étape 1 = recherche web, étape 2 = stats, étape 3 = JSON ──
 async function callGemini(systemPrompt, userMessage, maxTokens = 8000) {
-  // ÉTAPE 1 : Recherche des matchs du jour via Google Search (réponse texte libre)
-  console.log('   🔍 Étape 1 — Recherche matchs du jour...');
-  const searchMsg = `${userMessage.split('Lance l\'analyse complète')[0]}
-Réponds en texte libre avec la liste des matchs trouvés (équipes, heure, compétition, enjeu). Minimum 3 matchs.`;
+  const today = new Date().toLocaleDateString('fr-FR', {
+    timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric'
+  });
+  const todayEN = new Date().toLocaleDateString('en-US', {
+    timeZone: 'Europe/Paris', month: 'long', day: 'numeric', year: 'numeric'
+  });
 
+  // ÉTAPE 1 : Recherche des vrais matchs du jour (requête courte et ciblée)
+  console.log('   🔍 Étape 1 — Recherche matchs réels du jour...');
   let matchList = '';
   try {
     const step1 = await geminiRequest(
-      [{ role: 'user', parts: [{ text: searchMsg }] }],
-      { maxTokens: 2000, search: true }
+      [{ role: 'user', parts: [{ text:
+        `Quels matchs sportifs ont lieu aujourd'hui ${today} ? Cherche sur internet et liste tous les matchs réels : football (Ligue 1, Premier League, Liga, Serie A, Champions League, Europa League), basketball NBA, tennis, rugby. Pour chaque match : équipes exactes, heure, compétition. Texte libre.`
+      }] }],
+      { maxTokens: 2500, search: true }
     );
     matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-    console.log(`   ✅ Matchs trouvés (${matchList.length} chars)`);
+    console.log(`   ✅ Matchs trouvés : ${matchList.length} chars`);
   } catch (err) {
-    console.warn('   ⚠️  Étape 1 échouée, utilise connaissances Gemini:', err.message);
+    console.warn('   ⚠️  Étape 1 échouée:', err.message);
   }
 
-  // ÉTAPE 2 : Analyse JSON stricte (responseMimeType=json → pas de search, JSON pur)
-  console.log('   🧠 Étape 2 — Génération JSON analyse...');
-  const analysisPrompt = matchList
-    ? `${systemPrompt}\n\n---\n\n${userMessage}\n\nMATCHS TROUVÉS CE JOUR (utilise exactement ces matchs):\n${matchList}`
-    : `${systemPrompt}\n\n---\n\n${userMessage}`;
+  if (!matchList) throw new Error('Recherche Google Step 1 vide — aucun match trouvé');
 
-  const step2 = await geminiRequest(
+  // ÉTAPE 2 : Stats réelles pour les matchs trouvés
+  console.log('   📊 Étape 2 — Récupération stats (forme, H2H, blessés)...');
+  let statsData = '';
+  try {
+    const step2 = await geminiRequest(
+      [{ role: 'user', parts: [{ text:
+        `Pour les matchs suivants du ${today}, trouve sur internet les statistiques réelles :
+${matchList}
+
+Pour chaque match indique :
+- Forme récente des 2 équipes (5 derniers matchs : V/N/D et scores)
+- Bilan head-to-head récent
+- Blessés / suspendus importants
+- Position au classement et enjeu du match
+- Moyenne de buts marqués/encaissés cette saison
+Réponds en texte libre détaillé.`
+      }] }],
+      { maxTokens: 4000, search: true }
+    );
+    statsData = step2.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
+    console.log(`   ✅ Stats récupérées : ${statsData.length} chars`);
+  } catch (err) {
+    console.warn('   ⚠️  Étape 2 (stats) partielle:', err.message);
+  }
+
+  // ÉTAPE 3 : Analyse JSON stricte avec les données réelles
+  console.log('   🧠 Étape 3 — Génération JSON analyse...');
+  const analysisPrompt =
+    `${systemPrompt}\n\n---\n\n${userMessage}\n\n` +
+    `══ MATCHS RÉELS DU ${today} (source Google — utilise UNIQUEMENT ces matchs) ══\n${matchList}\n\n` +
+    (statsData ? `══ STATISTIQUES RÉELLES ══\n${statsData}\n\n` : '') +
+    `⚠️ N'invente aucun match. N'analyse que les matchs listés ci-dessus.`;
+
+  const step3 = await geminiRequest(
     [{ role: 'user', parts: [{ text: analysisPrompt }] }],
     { maxTokens, jsonMode: true }
   );
-  return step2;
+  return step3;
 }
 
 // ── Appel Gemma : 3 étapes — matchs réels + stats + analyse JSON ──
@@ -264,21 +302,79 @@ ${statsData || '(stats non disponibles pour certains matchs)'}
   return step3;
 }
 
-// ── callAI : Gemini en primaire, Gemma en fallback ───────────
+// ── callAI : Recherche commune → Gemini JSON ou Gemma JSON ───
 async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
-  // Gemini avec Google Search natif → prioritaire
-  try {
-    const result = await callGemini(systemPrompt, userMessage, maxTokens);
-    console.log('   🤖 Moteur : Gemini (Google Search activé)');
-    return { source: 'gemini', data: result };
-  } catch (err) {
-    console.warn(`   ⚠️  Gemini échoué (${err.message}) — bascule Gemma ${GEMMA_MODEL}`);
+
+  const today = new Date().toLocaleDateString('fr-FR', {
+    timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric'
+  });
+
+  // ── Étape 1 : Recherche vrais matchs (commune) ──
+  console.log('   🔍 Étape 1 — Recherche matchs réels du jour...');
+  let matchList = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const step1 = await geminiRequest(
+        [{ role: 'user', parts: [{ text:
+          `Quels matchs sportifs ont lieu aujourd'hui ${today} ? Cherche sur internet et liste tous les matchs réels : football (Ligue 1, Premier League, Liga, Serie A, Champions League, Europa League), basketball NBA, tennis, rugby. Pour chaque match : équipes exactes, heure, compétition. Texte libre.`
+        }] }],
+        { maxTokens: 2500, search: true }
+      );
+      matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
+      if (matchList) break;
+    } catch (err) {
+      if (attempt === 3) throw new Error(`Recherche matchs échouée après 3 tentatives: ${err.message}`);
+      console.warn(`   ⚠️  Tentative ${attempt} échouée, retry...`);
+      await new Promise(r => setTimeout(r, 3000 * attempt));
+    }
   }
-  // Gemma 4 31B en fallback (3 étapes : search + stats + analyse)
-  const result = await callGemmaVictor(systemPrompt, userMessage, maxTokens);
+  console.log(`   ✅ Matchs trouvés : ${matchList.length} chars`);
+
+  // ── Étape 2 : Stats réelles (commune) ──
+  console.log('   📊 Étape 2 — Récupération stats (forme, H2H, blessés)...');
+  let statsData = '';
+  try {
+    const step2 = await geminiRequest(
+      [{ role: 'user', parts: [{ text:
+        `Pour les matchs suivants du ${today}, trouve sur internet les statistiques réelles :\n${matchList}\n\nPour chaque match : forme récente des 2 équipes (5 derniers matchs V/N/D), bilan H2H, blessés/suspendus, classement, moyenne de buts. Texte libre détaillé.`
+      }] }],
+      { maxTokens: 4000, search: true }
+    );
+    statsData = step2.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
+    console.log(`   ✅ Stats récupérées : ${statsData.length} chars`);
+  } catch (err) {
+    console.warn('   ⚠️  Stats partielles:', err.message);
+  }
+
+  // ── Contexte commun à injecter dans l'analyse ──
+  const dataContext =
+    `══ MATCHS RÉELS DU ${today} (source Google — utilise UNIQUEMENT ces matchs) ══\n${matchList}\n\n` +
+    (statsData ? `══ STATISTIQUES RÉELLES ══\n${statsData}\n\n` : '') +
+    `⚠️ N'invente aucun match. N'analyse que les matchs listés ci-dessus.`;
+
+  // ── Étape 3 : Gemini JSON (primaire) ──
+  console.log('   🧠 Étape 3 — Analyse JSON (Gemini)...');
+  try {
+    const step3 = await geminiRequest(
+      [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}\n\n${dataContext}` }] }],
+      { maxTokens, jsonMode: true }
+    );
+    console.log('   🤖 Moteur : Gemini JSON');
+    return { source: 'gemini', data: step3 };
+  } catch (err) {
+    console.warn(`   ⚠️  Gemini JSON échoué (${err.message}) — bascule Gemma`);
+  }
+
+  // ── Étape 3 fallback : Gemma JSON avec données déjà collectées ──
+  // Gemma ne supporte pas responseMimeType → jsonMode: false, extractJSON parse le texte brut
+  console.log(`   🧠 Étape 3 fallback — Analyse JSON (${GEMMA_MODEL})...`);
+  const step3gemma = await geminiRequest(
+    [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}\n\n${dataContext}\n\nRéponds UNIQUEMENT avec le JSON brut, sans markdown, sans texte avant ou après.` }] }],
+    { maxTokens, jsonMode: false, model: GEMMA_MODEL }
+  );
   console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
-  return { source: 'gemma', data: result };
+  return { source: 'gemma', data: step3gemma };
 }
 
 // ══════════════════════════════════════════════
