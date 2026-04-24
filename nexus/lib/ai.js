@@ -54,12 +54,9 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY non configurée');
 
-  // Modèles à essayer dans l'ordre si 503
-  const FALLBACK_MODELS = [
-    options.model || process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-2.0-flash-lite',
-  ];
+  const model = options.model || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  // Retry 3x sur le même modèle — les 503 sont temporaires
+  const FALLBACK_MODELS = [model, model, model];
 
   const useSearch = options.useSearch || false;
   const maxTokens = options.maxTokens || 4096;
@@ -95,7 +92,7 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
         const err = await resp.json().catch(() => ({}));
         lastError = new Error(`Gemini HTTP ${resp.status} [${model}]: ${err.error?.message || 'overloaded'}`);
         console.warn(`[Nexus/AI] ${lastError.message} — essai modèle suivant...`);
-        await new Promise(r => setTimeout(r, 2000)); // 2s avant fallback
+        await new Promise(r => setTimeout(r, 5000)); // 5s avant retry
         continue;
       }
 
