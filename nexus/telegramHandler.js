@@ -164,6 +164,19 @@ export function startTelegramHandler() {
       await handleCommand(msg.chat.id, 'write', prompt);
     });
 
+    // ── /exec ────────────────────────────────────
+    nexusBot.onText(/^\/exec\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const task = (match[1] || '').trim();
+      if (!task) {
+        await sendNexusMessage(msg.chat.id,
+          '💻 Décris la tâche à exécuter.\n_Ex: /exec calcule les stats de victoire à domicile de la Ligue 1 cette saison_'
+        );
+        return;
+      }
+      await handleCommand(msg.chat.id, 'exec', task);
+    });
+
     // ── /plan ────────────────────────────────────
     nexusBot.onText(/^\/plan\s*([\s\S]+)?/, async (msg, match) => {
       if (!isAuthorized(msg.chat.id)) return;
