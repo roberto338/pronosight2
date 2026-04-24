@@ -4,10 +4,13 @@
 
 import dotenv from 'dotenv';
 dotenv.config({ override: true });
-import { startScheduler } from './cron/scheduler.js';
-import { query as dbQuery } from './db/database.js';
-import { runVictor } from './victor/core.js';
-import { broadcastDaily } from './bot/telegram.js';
+import { startScheduler }          from './cron/scheduler.js';
+import { query as dbQuery }         from './db/database.js';
+import { runVictor }                from './victor/core.js';
+import { broadcastDaily }           from './bot/telegram.js';
+import { startWorker }              from './queues/workerManager.js';
+import { victorQueue, addLiveJob }  from './queues/victorQueue.js';
+import { setupBullBoard }           from './admin/bullBoard.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -475,26 +478,29 @@ app.post('/api/victor/refresh', async (req, res) => {
     return res.status(401).json({ error: 'Non autorisé — x-api-key invalide' });
   }
 
-  console.log('🔄 [Victor/refresh] Refresh manuel demandé');
+  console.log('🔄 [Victor/refresh] Refresh manuel demandé → BullMQ');
 
-  // Lance en arrière-plan sans bloquer la réponse
-  runVictor().then(async (result) => {
-    if (result?.events?.length > 0) {
-      try {
-        await broadcastDaily(result);
-        console.log('📱 [Victor/refresh] Broadcast Telegram envoyé');
-      } catch (teleErr) {
-        console.error('❌ [Victor/refresh] Erreur Telegram:', teleErr.message);
+  try {
+    const job = await addLiveJob({ triggeredBy: 'manual-refresh', source: 'api' });
+    res.json({
+      status:  'queued',
+      jobId:   job.id,
+      message: `Job live #${job.id} ajouté à la queue. Résultats dans /api/victor/today dans 30-90 secondes.`,
+    });
+  } catch (queueErr) {
+    // Fallback synchrone si Redis indisponible
+    console.warn('⚠️  Queue indisponible, fallback synchrone:', queueErr.message);
+    runVictor().then(async (result) => {
+      if (result?.events?.length > 0) {
+        await broadcastDaily(result).catch(e => console.error('Telegram:', e.message));
       }
-    }
-  }).catch(err =>
-    console.error('❌ [Victor/refresh] Erreur background:', err.message)
-  );
+    }).catch(err => console.error('❌ [Victor/refresh] Erreur fallback:', err.message));
 
-  res.json({
-    status: 'started',
-    message: 'Victor lance l\'analyse... Résultats dans /api/victor/today dans 30-60 secondes.',
-  });
+    res.json({
+      status:  'started',
+      message: 'Victor lance l\'analyse (mode direct — Redis indisponible).',
+    });
+  }
 });
 
 // ── ROUTE keepalive — évite le sleep Render free tier ──
@@ -562,7 +568,21 @@ app.listen(PORT, () => {
   console.log(`    PostgreSQL:     ${process.env.DATABASE_URL      ? '✅' : '❌ manquante'}`);
   console.log(`    Telegram:       ${process.env.TELEGRAM_BOT_TOKEN ? '✅' : '⚠️  optionnelle'}\n`);
 
-  // Démarrage du scheduler Victor
+  // ── Démarrage Worker BullMQ ───────────────────
+  try {
+    startWorker();
+  } catch (workerErr) {
+    console.warn('⚠️  Worker BullMQ non démarré (Redis indisponible ?):', workerErr.message);
+  }
+
+  // ── Bull Board dashboard ──────────────────────
+  try {
+    setupBullBoard(app);
+  } catch (boardErr) {
+    console.warn('⚠️  Bull Board non monté:', boardErr.message);
+  }
+
+  // ── Démarrage du scheduler Victor ────────────
   startScheduler();
-  console.log('🎙️  PronoSight v4.1 — Victor opérationnel\n');
+  console.log('🎙️  PronoSight v4.1 — Victor opérationnel (BullMQ activé)\n');
 });

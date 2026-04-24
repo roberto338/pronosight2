@@ -12,14 +12,18 @@
     "dev": "node --watch --env-file=.env server.js"
   },
   "dependencies": {
-    "express": "^4.21.0",
+    "@bull-board/api": "^7.0.0",
+    "@bull-board/express": "^7.0.0",
+    "bullmq": "^5.76.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "helmet": "^8.0.0",
+    "express": "^4.21.0",
     "express-rate-limit": "^7.4.0",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.10.1",
+    "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
-    "pg": "^8.13.0",
-    "node-cron": "^3.0.3"
+    "pg": "^8.13.0"
   }
 }
