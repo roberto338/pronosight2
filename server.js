@@ -11,7 +11,7 @@ import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
 import { victorQueue, addLiveJob }  from './queues/victorQueue.js';
 import { setupBullBoard }           from './admin/bullBoard.js';
-import { nexusRouter, startNexusWorker, startNexusCron } from './nexus/index.js';
+import { nexusRouter, startNexusWorker, startNexusCron, startTelegramHandler } from './nexus/index.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -648,6 +648,7 @@ app.listen(PORT, () => {
   try {
     startNexusWorker();
     startNexusCron();
+    startTelegramHandler();
   } catch (nexusErr) {
     console.warn('⚠️  Nexus non démarré:', nexusErr.message);
   }

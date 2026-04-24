@@ -12,6 +12,7 @@ import { runCode     } from './agents/codeAgent.js';
 import { runMonitor  } from './agents/monitorAgent.js';
 import { runNotify   } from './agents/notifyAgent.js';
 import { runCustom   } from './agents/customAgent.js';
+import { runRadar    } from './agents/radarAgent.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -20,7 +21,23 @@ const AGENT_MAP = {
   monitor:  runMonitor,
   notify:   runNotify,
   custom:   runCustom,
+  radar:    runRadar,
 };
+
+/**
+ * Envoie le résultat sur Telegram si chatId présent dans meta
+ */
+async function replyToTelegram(chatId, output, agentType, taskId) {
+  if (!chatId) return;
+  try {
+    // Import dynamique pour éviter circular dependency
+    const { sendNexusMessage } = await import('./telegramHandler.js');
+    const header = `✅ *Nexus #${taskId}* — agent: ${agentType}\n${'─'.repeat(24)}\n`;
+    await sendNexusMessage(chatId, header + output);
+  } catch (err) {
+    console.error('[NexusWorker] Erreur réponse Telegram:', err.message);
+  }
+}
 
 /**
  * Start the Nexus BullMQ worker.
@@ -45,6 +62,9 @@ export function startNexusWorker() {
       if (!handler) {
         const errMsg = `Agent inconnu: ${agentType}`;
         await updateTaskStatus(taskId, 'failed', errMsg);
+        if (meta?.chatId) {
+          await replyToTelegram(meta.chatId, `❌ ${errMsg}`, agentType, taskId);
+        }
         throw new Error(errMsg);
       }
 
@@ -53,17 +73,28 @@ export function startNexusWorker() {
         await saveOutput({ taskId, output: result.output, meta: result.meta || {} });
         await updateTaskStatus(taskId, 'done');
         console.log(`[NexusWorker] ✅ Tâche #${taskId} terminée`);
+
+        // Réponse automatique Telegram si demandé
+        if (meta?.chatId) {
+          await replyToTelegram(meta.chatId, result.output, agentType, taskId);
+        }
+
         return { taskId, agentType, outputLength: result.output?.length || 0 };
       } catch (err) {
         console.error(`[NexusWorker] ❌ Tâche #${taskId} échouée:`, err.message);
         await updateTaskStatus(taskId, 'failed', err.message);
+
+        // Notifie Telegram de l'erreur
+        if (meta?.chatId) {
+          await replyToTelegram(meta.chatId, `❌ Erreur agent ${agentType}: ${err.message}`, agentType, taskId);
+        }
         throw err;
       }
     },
     {
       connection:  redisConnection,
       concurrency: 2,
-      limiter:     { max: 10, duration: 60000 }, // max 10 jobs/min
+      limiter:     { max: 10, duration: 60000 },
     }
   );
 
