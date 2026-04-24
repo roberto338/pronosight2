@@ -552,6 +552,20 @@ app.get('/api/victor/status', async (req, res) => {
     } catch { /* counts fallback to 0 */ }
   }
 
+  // ── État Redis / BullMQ ──────────────────────
+  const redisUrlSet   = !!process.env.REDIS_URL;
+  const redisIsTLS    = process.env.REDIS_URL?.startsWith('rediss://') || false;
+  const redisPrefix   = process.env.REDIS_URL?.slice(0, 25) || '(vide)';
+  let   redisPingOk   = false;
+  let   redisPingErr  = null;
+  try {
+    if (victorQueue) {
+      // Ping via la connexion existante
+      const { redisConnection: rc } = await import('./queues/victorQueue.js');
+      if (rc) { await rc.ping(); redisPingOk = true; }
+    }
+  } catch (e) { redisPingErr = e.message; }
+
   res.json({
     status:           dbStatus === 'connected' ? 'ok' : 'degraded',
     db:               dbStatus,
@@ -562,6 +576,14 @@ app.get('/api/victor/status', async (req, res) => {
     patterns_actifs:  patternsActifs,
     version:          '4.1.0',
     uptime:           Math.round(process.uptime()),
+    bullmq: {
+      redis_url_set: redisUrlSet,
+      redis_prefix:  redisPrefix,
+      redis_tls:     redisIsTLS,
+      queue_active:  !!victorQueue,
+      ping_ok:       redisPingOk,
+      ping_error:    redisPingErr,
+    },
   });
 });
 
@@ -603,5 +625,11 @@ app.listen(PORT, () => {
 
   // ── Démarrage du scheduler Victor ────────────
   startScheduler();
+  // ── Résumé état BullMQ / Redis ───────────────
+  const redisUrl = process.env.REDIS_URL || '';
+  const redisTLS = redisUrl.startsWith('rediss://');
+  console.log(`    Redis URL:      ${redisUrl ? `✅ définie (${redisUrl.slice(0, 25)}...)` : '❌ manquante (BullMQ désactivé)'}`);
+  console.log(`    Redis TLS:      ${redisTLS ? '✅ rediss:// (Upstash)' : redisUrl ? '⚠️  redis:// (non-TLS)' : 'N/A'}`);
+  console.log(`    BullMQ Queue:   ${victorQueue ? '✅ queue active' : '❌ désactivée (pas de Redis)'}`);
   console.log('🎙️  PronoSight v4.1 — Victor opérationnel (BullMQ activé)\n');
 });
