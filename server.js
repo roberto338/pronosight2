@@ -508,6 +508,25 @@ app.get('/api/ping', (req, res) => {
   res.json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()) });
 });
 
+// ── ROUTE diagnostic Redis (temporaire) ────────
+app.get('/api/redis-status', async (req, res) => {
+  const hasUrl   = !!process.env.REDIS_URL;
+  const urlStart = process.env.REDIS_URL?.slice(0, 20) || '(vide)';
+  const isTLS    = process.env.REDIS_URL?.startsWith('rediss://') || false;
+  let pingOk     = false;
+  let pingErr    = null;
+  try {
+    const { redisConnection } = await import('./queues/victorQueue.js');
+    if (redisConnection) {
+      await redisConnection.ping();
+      pingOk = true;
+    }
+  } catch (e) {
+    pingErr = e.message;
+  }
+  res.json({ hasUrl, urlStart, isTLS, pingOk, pingErr, queue: !!victorQueue });
+});
+
 // ── ROUTE 6 : GET /api/victor/status ──────────
 app.get('/api/victor/status', async (req, res) => {
   let dbStatus = 'disconnected';
