@@ -11,6 +11,7 @@ import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
 import { victorQueue, addLiveJob }  from './queues/victorQueue.js';
 import { setupBullBoard }           from './admin/bullBoard.js';
+import { nexusRouter, startNexusWorker, startNexusCron } from './nexus/index.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -601,6 +602,9 @@ app.get('/api/victor/status', async (req, res) => {
   });
 });
 
+// ── Nexus multi-agent system ──────────────────
+app.use('/nexus', nexusRouter);
+
 // ── Static files (après toutes les routes API) ──
 app.use(express.static(join(__dirname, 'public')));
 
@@ -639,6 +643,14 @@ app.listen(PORT, () => {
 
   // ── Démarrage du scheduler Victor ────────────
   startScheduler();
+
+  // ── Nexus multi-agent system ──────────────────
+  try {
+    startNexusWorker();
+    startNexusCron();
+  } catch (nexusErr) {
+    console.warn('⚠️  Nexus non démarré:', nexusErr.message);
+  }
   // ── Résumé état BullMQ / Redis ───────────────
   const redisUrl = process.env.REDIS_URL || '';
   const redisTLS = redisUrl.startsWith('rediss://');
