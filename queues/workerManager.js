@@ -73,6 +73,10 @@ async function processor(job) {
 let workerInstance = null;
 
 export function startWorker() {
+  if (!redisConnection) {
+    console.warn('⚠️  Worker BullMQ non démarré — REDIS_URL manquante');
+    return null;
+  }
   if (workerInstance) {
     console.log('⚙️  Worker déjà démarré');
     return workerInstance;
