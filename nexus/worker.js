@@ -13,6 +13,7 @@ import { runMonitor  } from './agents/monitorAgent.js';
 import { runNotify   } from './agents/notifyAgent.js';
 import { runCustom   } from './agents/customAgent.js';
 import { runRadar    } from './agents/radarAgent.js';
+import { runPlanner  } from './agents/plannerAgent.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -22,6 +23,7 @@ const AGENT_MAP = {
   notify:   runNotify,
   custom:   runCustom,
   radar:    runRadar,
+  planner:  runPlanner,
 };
 
 /**

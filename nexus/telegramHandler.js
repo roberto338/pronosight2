@@ -99,13 +99,15 @@ export function startTelegramHandler() {
       if (!isAuthorized(msg.chat.id)) return;
       await sendNexusMessage(msg.chat.id,
         `🤖 *NEXUS — Commandes disponibles*\n\n` +
+        `🧠 */plan [objectif]* — Plan multi-étapes autonome\n` +
+        `_Ex: /plan analyse les matchs du weekend et envoie-moi les meilleurs paris_\n\n` +
         `⚽ */radar [match]* — Analyse paris sportifs\n` +
         `_Ex: /radar PSG vs Lyon_\n\n` +
+        `🔴 */live [match]* — Analyse en direct\n` +
+        `💎 */value [compétition]* — Chasse les value bets\n\n` +
         `🔍 */research [question]* — Recherche web temps réel\n` +
-        `_Ex: /research meilleurs paris Ligue 1 ce weekend_\n\n` +
-        `✍️ */write [sujet]* — Rédiger un contenu\n` +
-        `_Ex: /write résumé performances Victor cette semaine_\n\n` +
-        `📊 */status* — État de Nexus\n\n` +
+        `✍️ */write [sujet]* — Rédiger un contenu\n\n` +
+        `📊 */status* — État de Nexus\n` +
         `💬 *Message libre* → Agent custom\n\n` +
         `_Nexus tourne 24h/24 sur Render ✅_`
       );
@@ -160,6 +162,19 @@ export function startTelegramHandler() {
         return;
       }
       await handleCommand(msg.chat.id, 'write', prompt);
+    });
+
+    // ── /plan ────────────────────────────────────
+    nexusBot.onText(/^\/plan\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const goal = (match[1] || '').trim();
+      if (!goal) {
+        await sendNexusMessage(msg.chat.id,
+          '🧠 Donne-moi un objectif à planifier.\n_Ex: /plan crée un rapport sur les matchs de cette semaine et envoie-le moi_'
+        );
+        return;
+      }
+      await handleCommand(msg.chat.id, 'planner', goal);
     });
 
     // ── /status ──────────────────────────────────
