@@ -529,26 +529,37 @@ app.get('/api/redis-status', async (req, res) => {
 
 // ── ROUTE 6 : GET /api/victor/status ──────────
 app.get('/api/victor/status', async (req, res) => {
+  // Helper : timeout sur n'importe quelle promesse
+  const withTimeout = (p, ms, fallback) =>
+    Promise.race([p, new Promise(resolve => setTimeout(() => resolve(fallback), ms))]);
+
   let dbStatus = 'disconnected';
   let dbTime   = null;
   let pronosticsToday = 0;
   let patternsActifs  = 0;
 
+  // DB avec timeout 5 s
   try {
-    const { rows } = await dbQuery('SELECT NOW() as db_time');
-    dbStatus = 'connected';
-    dbTime   = rows[0].db_time;
-  } catch { /* db error handled below */ }
+    const result = await withTimeout(dbQuery('SELECT NOW() as db_time'), 5000, null);
+    if (result) {
+      dbStatus = 'connected';
+      dbTime   = result.rows[0].db_time;
+    } else {
+      dbStatus = 'timeout';
+    }
+  } catch { dbStatus = 'error'; }
 
   if (dbStatus === 'connected') {
     try {
       const today = new Date().toISOString().split('T')[0];
-      const [p, pa] = await Promise.all([
+      const counts = await withTimeout(Promise.all([
         dbQuery('SELECT COUNT(*) FROM ps_pronostics WHERE date = $1', [today]),
         dbQuery('SELECT COUNT(*) FROM ps_victor_patterns WHERE actif = true'),
-      ]);
-      pronosticsToday = parseInt(p.rows[0].count) || 0;
-      patternsActifs  = parseInt(pa.rows[0].count) || 0;
+      ]), 5000, null);
+      if (counts) {
+        pronosticsToday = parseInt(counts[0].rows[0].count) || 0;
+        patternsActifs  = parseInt(counts[1].rows[0].count) || 0;
+      }
     } catch { /* counts fallback to 0 */ }
   }
 
@@ -560,9 +571,12 @@ app.get('/api/victor/status', async (req, res) => {
   let   redisPingErr  = null;
   try {
     if (victorQueue) {
-      // Ping via la connexion existante
       const { redisConnection: rc } = await import('./queues/victorQueue.js');
-      if (rc) { await rc.ping(); redisPingOk = true; }
+      if (rc) {
+        const pong = await withTimeout(rc.ping(), 3000, 'TIMEOUT');
+        redisPingOk  = pong === 'PONG';
+        redisPingErr = pong === 'TIMEOUT' ? 'ping timeout 3s' : null;
+      }
     }
   } catch (e) { redisPingErr = e.message; }
 
