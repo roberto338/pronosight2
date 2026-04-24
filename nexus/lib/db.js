@@ -33,11 +33,11 @@ export async function insertTask({ agentType, input, meta = {}, scheduledFor = n
 export async function updateTaskStatus(id, status, errorMsg = null) {
   await query(
     `UPDATE nexus_tasks
-     SET status       = $2,
+     SET status       = $2::varchar,
          error        = $3,
          updated_at   = NOW(),
-         started_at   = CASE WHEN $2 = 'running'              THEN NOW() ELSE started_at   END,
-         completed_at = CASE WHEN $2 IN ('done', 'failed')    THEN NOW() ELSE completed_at END
+         started_at   = CASE WHEN $2::varchar = 'running'           THEN NOW() ELSE started_at   END,
+         completed_at = CASE WHEN $2::varchar IN ('done', 'failed') THEN NOW() ELSE completed_at END
      WHERE id = $1`,
     [id, status, errorMsg]
   );
