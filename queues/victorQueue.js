@@ -5,19 +5,26 @@
 import { Queue, QueueEvents } from 'bullmq';
 import IORedis from 'ioredis';
 
-// ── Connexion Redis ────────────────────────────
-export const redisConnection = new IORedis(
-  process.env.REDIS_URL || 'redis://localhost:6379',
-  {
+// ── Options de connexion Redis (TLS Upstash inclus) ──
+function redisOptions() {
+  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const isTLS = url.startsWith('rediss://');
+  return {
     maxRetriesPerRequest: null, // Requis par BullMQ
     enableReadyCheck:     false,
     lazyConnect:          true,
-  }
-);
+    ...(isTLS ? { tls: { rejectUnauthorized: false } } : {}),
+  };
+}
 
-redisConnection.on('connect',       () => console.log('🔴 Redis connecté'));
+// ── Connexion Redis ────────────────────────────
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+
+export const redisConnection = new IORedis(REDIS_URL, redisOptions());
+
+redisConnection.on('connect', () => console.log('🔴 Redis Upstash connecté'));
 redisConnection.on('error',  (err) => console.warn('⚠️  Redis erreur:', err.message));
-redisConnection.on('close',         () => console.warn('⚠️  Redis déconnecté'));
+redisConnection.on('close',  ()    => console.warn('⚠️  Redis déconnecté'));
 
 // ── Queue principale Victor ────────────────────
 export const victorQueue = new Queue('victor-analysis', {
@@ -32,10 +39,7 @@ export const victorQueue = new Queue('victor-analysis', {
 
 // ── Queue Events (monitoring) ──────────────────
 export const victorQueueEvents = new QueueEvents('victor-analysis', {
-  connection: new IORedis(
-    process.env.REDIS_URL || 'redis://localhost:6379',
-    { maxRetriesPerRequest: null, enableReadyCheck: false, lazyConnect: true }
-  ),
+  connection: new IORedis(REDIS_URL, redisOptions()),
 });
 
 // ── Helpers d'ajout de jobs ───────────────────
