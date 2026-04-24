@@ -54,7 +54,13 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY non configurée');
 
-  const model     = options.model     || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  // Modèles à essayer dans l'ordre si 503
+  const FALLBACK_MODELS = [
+    options.model || process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-2.0-flash-lite',
+  ];
+
   const useSearch = options.useSearch || false;
   const maxTokens = options.maxTokens || 4096;
 
@@ -75,22 +81,48 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
 
   if (useSearch) requestBody.tools = [{ googleSearch: {} }];
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-  });
+  let lastError = null;
+  for (const model of FALLBACK_MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
 
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(`Gemini HTTP ${resp.status}: ${err.error?.message || resp.statusText}`);
+      if (resp.status === 503 || resp.status === 429) {
+        const err = await resp.json().catch(() => ({}));
+        lastError = new Error(`Gemini HTTP ${resp.status} [${model}]: ${err.error?.message || 'overloaded'}`);
+        console.warn(`[Nexus/AI] ${lastError.message} — essai modèle suivant...`);
+        await new Promise(r => setTimeout(r, 2000)); // 2s avant fallback
+        continue;
+      }
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(`Gemini HTTP ${resp.status} [${model}]: ${err.error?.message || resp.statusText}`);
+      }
+
+      const data = await resp.json();
+      if (data.error) throw new Error(`Gemini error [${model}]: ${data.error.message}`);
+
+      const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+      if (model !== (options.model || process.env.GEMINI_MODEL || 'gemini-2.0-flash')) {
+        console.log(`[Nexus/AI] Réponse obtenue via fallback: ${model}`);
+      }
+      return text;
+
+    } catch (err) {
+      if (err.message.includes('503') || err.message.includes('429') || err.message.includes('overload')) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const data = await resp.json();
-  if (data.error) throw new Error(`Gemini error: ${data.error.message}`);
-
-  return data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+  throw lastError || new Error('Tous les modèles Gemini indisponibles');
 }
 
 /**
