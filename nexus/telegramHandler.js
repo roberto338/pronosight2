@@ -7,6 +7,7 @@
 
 import TelegramBot from 'node-telegram-bot-api';
 import { dispatchTask } from './orchestrator.js';
+import { saveMessage, clearHistory, getHistory } from './lib/memory.js';
 
 const TOKEN    = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_ID; // ID Telegram de l'admin (toi)
@@ -60,6 +61,9 @@ function isAuthorized(chatId) {
 // ── Dispatch + réponse automatique ─────────────
 async function handleCommand(chatId, agentType, input, meta = {}) {
   try {
+    // Sauvegarde le message utilisateur en mémoire
+    await saveMessage(chatId, 'user', input, agentType);
+
     await sendNexusMessage(chatId, `⏳ *Nexus* traite ta demande...\n_Agent: ${agentType}_`);
 
     const { taskId } = await dispatchTask({
@@ -264,6 +268,29 @@ export function startTelegramHandler() {
       } catch (err) {
         await sendNexusMessage(msg.chat.id, `❌ Erreur status: ${err.message}`);
       }
+    });
+
+    // ── /clear ───────────────────────────────────
+    nexusBot.onText(/^\/clear/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const count = await clearHistory(msg.chat.id);
+      await sendNexusMessage(msg.chat.id, `🗑 Mémoire effacée (${count} messages supprimés)`);
+    });
+
+    // ── /memory ──────────────────────────────────
+    nexusBot.onText(/^\/memory/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const history = await getHistory(msg.chat.id, 6);
+      if (history.length === 0) {
+        await sendNexusMessage(msg.chat.id, '🧠 Aucun historique pour ce chat.');
+        return;
+      }
+      let txt = `🧠 *Mémoire — ${history.length} derniers messages*\n${'─'.repeat(22)}\n`;
+      history.forEach(m => {
+        const who = m.role === 'user' ? '👤' : '🤖';
+        txt += `${who} ${m.content.slice(0, 120)}${m.content.length > 120 ? '...' : ''}\n\n`;
+      });
+      await sendNexusMessage(msg.chat.id, txt);
     });
 
     // ── Message libre → agent custom ─────────────

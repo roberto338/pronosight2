@@ -6,6 +6,7 @@
 import { Worker } from 'bullmq';
 import { redisConnection } from '../queues/victorQueue.js';
 import { updateTaskStatus, saveOutput } from './lib/db.js';
+import { saveMessage } from './lib/memory.js';
 import { runResearch } from './agents/researchAgent.js';
 import { runWrite    } from './agents/writeAgent.js';
 import { runCode     } from './agents/codeAgent.js';
@@ -84,8 +85,9 @@ export function startNexusWorker() {
         await updateTaskStatus(taskId, 'done');
         console.log(`[NexusWorker] ✅ Tâche #${taskId} terminée`);
 
-        // Réponse automatique Telegram si demandé
+        // Sauvegarde la réponse en mémoire
         if (meta?.chatId) {
+          await saveMessage(meta.chatId, 'assistant', result.output, agentType);
           await replyToTelegram(meta.chatId, result.output, agentType, taskId);
         }
 
