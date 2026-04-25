@@ -6,6 +6,7 @@
 import { Queue } from 'bullmq';
 import { redisConnection } from '../queues/victorQueue.js';
 import { insertTask } from './lib/db.js';
+import { buildMemoryContext } from './lib/longTermMemory.js';
 
 // ── BullMQ Queue ───────────────────────────────
 export const nexusQueue = redisConnection
@@ -26,16 +27,19 @@ if (!nexusQueue) {
 
 /**
  * Dispatch a task to the nexus-tasks queue.
- * Saves the task in DB first, then enqueues the job.
+ * 1. Saves task in DB
+ * 2. Fetches relevant long-term memories
+ * 3. Enqueues job with enriched meta (memoryContext)
  *
  * @param {Object} opts
- * @param {string} opts.agentType  'research' | 'write' | 'code' | 'monitor' | 'notify' | 'custom'
- * @param {string} opts.input      Task description / prompt
- * @param {Object} opts.meta       Extra metadata (userId, source, etc.)
- * @param {number} opts.priority   Job priority (lower = higher priority, default 0)
+ * @param {string} opts.agentType  Agent to run
+ * @param {string} opts.input      Task prompt / description
+ * @param {Object} opts.meta       Extra metadata (chatId, source, etc.)
+ * @param {number} opts.priority   Job priority (lower = higher, default 0)
  * @returns {Promise<{taskId: number, jobId: string|null}>}
  */
 export async function dispatchTask({ agentType, input, meta = {}, priority = 0 }) {
+  // Save task to DB first (without memoryContext — keep DB meta lean)
   const taskId = await insertTask({ agentType, input, meta });
 
   if (!nexusQueue) {
@@ -43,9 +47,21 @@ export async function dispatchTask({ agentType, input, meta = {}, priority = 0 }
     return { taskId, jobId: null };
   }
 
+  // Enrich job with long-term memory context (non-blocking on error)
+  let enrichedMeta = meta;
+  try {
+    const memoryContext = await buildMemoryContext(agentType, input);
+    if (memoryContext) {
+      enrichedMeta = { ...meta, memoryContext };
+      console.log(`[Nexus] 🧠 Mémoire injectée pour tâche #${taskId} (${agentType})`);
+    }
+  } catch (err) {
+    console.warn('[Nexus] Memory fetch failed (non-blocking):', err.message);
+  }
+
   const job = await nexusQueue.add(
     agentType,
-    { taskId, agentType, input, meta },
+    { taskId, agentType, input, meta: enrichedMeta },
     { priority }
   );
 

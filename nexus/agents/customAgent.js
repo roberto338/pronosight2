@@ -19,12 +19,18 @@ Si un historique de conversation est fourni, utilise-le pour assurer la continui
  * @returns {Promise<{output: string, meta: Object}>}
  */
 export async function runCustom({ input, meta = {} }) {
-  const prompt       = meta.prompt       || input;
-  const systemPrompt = meta.systemPrompt || DEFAULT_SYSTEM;
-  const provider     = meta.provider;
+  const prompt   = meta.prompt       || input;
+  const provider = meta.provider;
+
+  // Build system prompt: base + long-term memory
+  let systemPrompt = meta.systemPrompt || DEFAULT_SYSTEM;
+  if (meta.memoryContext) {
+    systemPrompt = systemPrompt + meta.memoryContext;
+  }
+
   console.log(`[CustomAgent] Task: ${prompt.slice(0, 80)}`);
 
-  // Injecte l'historique de conversation si chatId disponible
+  // Inject conversational history (short-term) into user message
   let contextualPrompt = prompt;
   if (meta.chatId) {
     const historyContext = await formatHistoryContext(meta.chatId);

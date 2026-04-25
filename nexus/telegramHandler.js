@@ -8,6 +8,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { dispatchTask } from './orchestrator.js';
 import { saveMessage, clearHistory, getHistory } from './lib/memory.js';
+import { remember, forget, listMemories } from './lib/longTermMemory.js';
 
 const TOKEN    = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_ID; // ID Telegram de l'admin (toi)
@@ -123,8 +124,11 @@ export function startTelegramHandler() {
         `💰 */finance [action]* — Gestion de bankroll\n\n` +
         `${'─'.repeat(24)}\n` +
         `📊 */status* — État du système\n` +
-        `🧠 */memory* — Voir l'historique de conversation\n` +
-        `🗑 */clear* — Effacer la mémoire\n\n` +
+        `🧠 */memory* — Historique de conversation\n` +
+        `🔮 */memories* — Mémoire long terme (ce que Nexus a appris)\n` +
+        `💾 */remember [cat] clé valeur* — Mémoriser manuellement\n` +
+        `🗑 */forget <clé>* — Oublier une mémoire\n` +
+        `🧹 */clear* — Effacer l'historique de conversation\n\n` +
         `_Nexus tourne 24h/24 sur Render ✅_`
       );
     });
@@ -303,6 +307,77 @@ export function startTelegramHandler() {
         txt += `${who} ${m.content.slice(0, 120)}${m.content.length > 120 ? '...' : ''}\n\n`;
       });
       await sendNexusMessage(msg.chat.id, txt);
+    });
+
+    // ── /memories — long-term knowledge ──────────
+    nexusBot.onText(/^\/memories/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const memories = await listMemories();
+      if (memories.length === 0) {
+        await sendNexusMessage(msg.chat.id, '🧠 Aucune mémoire long terme enregistrée.\n_Nexus apprend au fil des tâches._');
+        return;
+      }
+      const grouped = {};
+      for (const m of memories) {
+        if (!grouped[m.category]) grouped[m.category] = [];
+        grouped[m.category].push(m);
+      }
+      const ICONS = { project:'📁', preference:'⚙️', pattern:'🔄', person:'👤', fact:'📌', feedback:'💬' };
+      let txt = `🧠 *Nexus Memory — ${memories.length} entrées*\n${'─'.repeat(24)}\n\n`;
+      for (const [cat, items] of Object.entries(grouped)) {
+        txt += `${ICONS[cat] || '▸'} *${cat.toUpperCase()}* (${items.length})\n`;
+        for (const m of items.slice(0, 4)) {
+          const val = m.value.length > 80 ? m.value.slice(0, 77) + '...' : m.value;
+          txt += `  • \`${m.key}\`: ${val}\n`;
+        }
+        if (items.length > 4) txt += `  _...et ${items.length - 4} autre(s)_\n`;
+        txt += '\n';
+      }
+      txt += `_Commandes: /remember, /forget_`;
+      await sendNexusMessage(msg.chat.id, txt);
+    });
+
+    // ── /remember <[catégorie]> <clé> <valeur> ──
+    nexusBot.onText(/^\/remember\s+([\s\S]+)/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const args  = match[1].trim();
+      const parts = args.split(' ');
+      const VALID = ['project', 'preference', 'pattern', 'person', 'fact', 'feedback'];
+
+      let category, key, value;
+      if (VALID.includes(parts[0]) && parts.length >= 3) {
+        [category, key, ...rest] = parts;
+        value = rest.join(' ');
+      } else if (parts.length >= 2) {
+        category = 'fact';
+        [key, ...rest] = parts;
+        value = rest.join(' ');
+      } else {
+        await sendNexusMessage(msg.chat.id,
+          '🧠 Usage: `/remember [catégorie] clé valeur`\n\n' +
+          '_Catégories: project, preference, pattern, person, fact, feedback_\n\n' +
+          '_Ex: /remember project pronosight Stack Node.js + PostgreSQL Neon_\n' +
+          '_Ex: /remember prefer\\_markdown true_'
+        );
+        return;
+      }
+      const ok = await remember(category, key, value);
+      if (ok) {
+        await sendNexusMessage(msg.chat.id, `🧠 Mémorisé ✅\n_[${category}] \`${key}\`: ${value}_`);
+      } else {
+        await sendNexusMessage(msg.chat.id, `❌ Catégorie invalide. Utilise: ${VALID.join(', ')}`);
+      }
+    });
+
+    // ── /forget <clé> ────────────────────────────
+    nexusBot.onText(/^\/forget\s+(.+)/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const key   = match[1].trim();
+      const found = await forget(key);
+      await sendNexusMessage(msg.chat.id, found
+        ? `🗑 Mémoire \`${key}\` oubliée.`
+        : `❓ Aucune mémoire trouvée pour la clé \`${key}\``
+      );
     });
 
     // ── Message libre → agent custom ─────────────

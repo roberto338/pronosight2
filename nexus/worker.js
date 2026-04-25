@@ -19,6 +19,7 @@ import { runExec     } from './agents/execAgent.js';
 import { runApi      } from './agents/apiAgent.js';
 import { runBrowser  } from './agents/browserAgent.js';
 import { runFinance  } from './agents/financeAgent.js';
+import { extractAndSave } from './lib/longTermMemory.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -84,6 +85,10 @@ export function startNexusWorker() {
         await saveOutput({ taskId, output: result.output, meta: result.meta || {} });
         await updateTaskStatus(taskId, 'done');
         console.log(`[NexusWorker] ✅ Tâche #${taskId} terminée`);
+
+        // Non-blocking long-term memory extraction
+        console.log(`🧠 [NexusWorker] Memory extraction started for task #${taskId}`);
+        setImmediate(() => extractAndSave(taskId, agentType, input, result.output || ''));
 
         // Sauvegarde la réponse en mémoire
         if (meta?.chatId) {

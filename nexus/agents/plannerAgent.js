@@ -88,13 +88,18 @@ export async function runPlanner({ input, meta = {} }) {
   const chatId = meta.chatId || null;
   console.log(`[PlannerAgent] Objectif: ${goal.slice(0, 100)}`);
 
+  // Build planner system prompt enriched with long-term memory
+  const plannerSystem = meta.memoryContext
+    ? PLANNER_SYSTEM + meta.memoryContext
+    : PLANNER_SYSTEM;
+
   // ── Étape 0 : Notifie la création du plan ──
   await progress(chatId, `🧠 *Nexus analyse ton objectif...*\n_Création du plan d'action en cours_`);
 
   // ── Étape 1 : Génère le plan via IA ──────────
   let plan;
   try {
-    const raw = await callAI(PLANNER_SYSTEM, `Objectif: ${goal}`, {
+    const raw = await callAI(plannerSystem, `Objectif: ${goal}`, {
       maxTokens:   1024,
       temperature: 0.2,
     });

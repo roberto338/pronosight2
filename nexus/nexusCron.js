@@ -5,6 +5,8 @@
 import cron from 'node-cron';
 import { dispatchTask } from './orchestrator.js';
 import { query } from '../db/database.js';
+import { consolidate } from './lib/longTermMemory.js';
+import { cleanOldMemory } from './lib/memory.js';
 
 export function startNexusCron() {
   // ── Nettoyage tâches anciennes (chaque nuit à 3h15) ──
@@ -30,6 +32,33 @@ export function startNexusCron() {
       });
     } catch (err) {
       console.error('[NexusCron] Monitor dispatch error:', err.message);
+    }
+  });
+
+  // ── Weekly long-term memory consolidation (Sunday 06:00) ──
+  cron.schedule('0 6 * * 0', async () => {
+    console.log('[NexusCron] Consolidation mémoire long terme...');
+    try {
+      const ltmResult  = await consolidate();
+      const convCleaned = await cleanOldMemory(30); // 30 days for conversational memory
+      console.log(`[NexusCron] ✅ LTM: ${ltmResult.total} supprimées | Conv: ${convCleaned} messages purgés`);
+
+      // Notify admin on Telegram
+      try {
+        const { sendNexusMessage } = await import('./telegramHandler.js');
+        const adminId = process.env.TELEGRAM_ADMIN_ID;
+        if (adminId) {
+          await sendNexusMessage(adminId,
+            `🧠 *Nexus Memory — Consolidation hebdo*\n\n` +
+            `🗑 Mémoires oubliées: ${ltmResult.forgotten}\n` +
+            `🕸 Mémoires obsolètes: ${ltmResult.stale}\n` +
+            `💬 Messages anciens purgés: ${convCleaned}\n\n` +
+            `_Prochaine consolidation dans 7 jours_`
+          );
+        }
+      } catch { /* ignore Telegram errors in cron */ }
+    } catch (err) {
+      console.error('[NexusCron] ❌ Erreur consolidation:', err.message);
     }
   });
 
