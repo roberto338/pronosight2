@@ -216,6 +216,26 @@ export function startTelegramHandler() {
       await handleCommand(msg.chat.id, 'planner', goal);
     });
 
+    // ── /bankroll ────────────────────────────────
+    nexusBot.onText(/^\/bankroll/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      await handleCommand(msg.chat.id, 'finance', 'status bankroll', { action: 'status' });
+    });
+
+    // ── /finance ─────────────────────────────────
+    nexusBot.onText(/^\/finance\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const input = (match[1] || 'status').trim();
+      await handleCommand(msg.chat.id, 'finance', input);
+    });
+
+    // ── /report ──────────────────────────────────
+    nexusBot.onText(/^\/report\s*(\w+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const period = match[1] || 'all';
+      await handleCommand(msg.chat.id, 'finance', `rapport ${period}`, { action: 'report', params: { period } });
+    });
+
     // ── /status ──────────────────────────────────
     nexusBot.onText(/^\/status/, async (msg) => {
       if (!isAuthorized(msg.chat.id)) return;

@@ -17,6 +17,7 @@ import { runPlanner  } from './agents/plannerAgent.js';
 import { runExec     } from './agents/execAgent.js';
 import { runApi      } from './agents/apiAgent.js';
 import { runBrowser  } from './agents/browserAgent.js';
+import { runFinance  } from './agents/financeAgent.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -30,6 +31,7 @@ const AGENT_MAP = {
   exec:     runExec,
   api:      runApi,
   browser:  runBrowser,
+  finance:  runFinance,
 };
 
 /**
