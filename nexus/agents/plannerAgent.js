@@ -32,7 +32,9 @@ const AGENT_EXECUTORS = {
 const PLANNER_SYSTEM = `Tu es un planificateur d'agents IA expert.
 Tu reçois un objectif en langage naturel et tu crées un plan d'exécution précis.
 
-Retourne UNIQUEMENT un JSON valide, sans markdown, sans explication, avec ce format exact:
+IMPORTANT: Retourne UNIQUEMENT du JSON pur et valide. Aucun texte avant ou après. Aucun markdown. Aucun commentaire. Juste le JSON brut.
+
+Format exact:
 {
   "goal": "résumé de l'objectif",
   "steps": [
@@ -97,9 +99,14 @@ export async function runPlanner({ input, meta = {} }) {
       temperature: 0.2,
     });
     // Extrait le JSON même s'il y a du texte autour
+    // Extrait le JSON même si du texte parasite est présent
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('Réponse non-JSON');
-    plan = JSON.parse(match[0]);
+    // Nettoie les trailing commas invalides avant parse
+    const cleaned = match[0]
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*]/g, ']');
+    plan = JSON.parse(cleaned);
     if (!plan.steps?.length) throw new Error('Plan sans étapes');
   } catch (err) {
     throw new Error(`Impossible de créer un plan: ${err.message}`);
