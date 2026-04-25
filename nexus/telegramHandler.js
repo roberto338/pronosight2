@@ -102,17 +102,29 @@ export function startTelegramHandler() {
     nexusBot.onText(/^\/(help|aide)/, async (msg) => {
       if (!isAuthorized(msg.chat.id)) return;
       await sendNexusMessage(msg.chat.id,
-        `🤖 *NEXUS — Commandes disponibles*\n\n` +
-        `🧠 */plan [objectif]* — Plan multi-étapes autonome\n` +
-        `_Ex: /plan analyse les matchs du weekend et envoie-moi les meilleurs paris_\n\n` +
+        `🤖 *NEXUS — Agent IA autonome*\n\n` +
+        `💬 *Message libre* — Parle directement à Nexus\n` +
+        `_Nexus se souvient du contexte de la conversation_\n\n` +
+        `${'─'.repeat(24)}\n` +
+        `🧠 */plan [objectif]* — Décompose et exécute un objectif complexe\n` +
+        `_Ex: /plan fais une veille sur mes concurrents et résume-moi ça_\n\n` +
+        `🔍 */research [question]* — Recherche web en temps réel\n` +
+        `_Ex: /research dernières news sur l'IA générative_\n\n` +
+        `✍️ */write [sujet]* — Rédige un contenu structuré\n` +
+        `_Ex: /write email pro pour proposer un partenariat_\n\n` +
+        `💻 */exec [tâche]* — Écrit et exécute du code Node.js\n` +
+        `_Ex: /exec calcule les intérêts composés sur 10 ans à 7%_\n\n` +
+        `🌐 */browser [sujet ou URL]* — Extrait des infos d'un site\n` +
+        `🔌 */api [description]* — Appelle une API externe\n\n` +
+        `${'─'.repeat(24)}\n` +
         `⚽ */radar [match]* — Analyse paris sportifs\n` +
-        `_Ex: /radar PSG vs Lyon_\n\n` +
-        `🔴 */live [match]* — Analyse en direct\n` +
-        `💎 */value [compétition]* — Chasse les value bets\n\n` +
-        `🔍 */research [question]* — Recherche web temps réel\n` +
-        `✍️ */write [sujet]* — Rédiger un contenu\n\n` +
-        `📊 */status* — État de Nexus\n` +
-        `💬 *Message libre* → Agent custom\n\n` +
+        `🔴 */live [match]* — Analyse match en direct\n` +
+        `💎 */value [compétition]* — Chasse les value bets\n` +
+        `💰 */finance [action]* — Gestion de bankroll\n\n` +
+        `${'─'.repeat(24)}\n` +
+        `📊 */status* — État du système\n` +
+        `🧠 */memory* — Voir l'historique de conversation\n` +
+        `🗑 */clear* — Effacer la mémoire\n\n` +
         `_Nexus tourne 24h/24 sur Render ✅_`
       );
     });

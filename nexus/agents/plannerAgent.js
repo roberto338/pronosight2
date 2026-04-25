@@ -50,15 +50,15 @@ Format exact:
 }
 
 Agents disponibles:
-- research : recherche web temps réel (Google Search)
-- write    : rédaction de contenu structuré
-- code     : génération ou review de code
-- monitor  : surveillance URL ou base de données
-- notify   : envoi d'une notification Telegram
-- custom   : tâche IA libre, analyse, conseil
-- radar    : analyse paris sportifs football uniquement
-- exec     : écrit et exécute du code Node.js, calculs, automatisations
-- api      : appelle une API externe (Odds API, Football Data, etc.)
+- research : recherche web temps réel (Google Search) — actualités, faits, veille
+- write    : rédaction de contenu structuré — articles, rapports, emails, résumés
+- code     : génération ou review de code dans n'importe quel langage
+- monitor  : surveillance URL, endpoint ou base de données
+- notify   : envoi d'une notification Telegram à l'utilisateur
+- custom   : tâche IA libre — analyse, conseil, réflexion, réponse générale
+- radar    : analyse sportive — paris, statistiques, matchs football
+- exec     : écrit et exécute du code Node.js — calculs, transformations, automatisations
+- api      : appelle une API externe (REST/JSON) et interprète la réponse
 - browser  : navigue sur un site web et extrait des données
 
 Règles:
@@ -115,7 +115,7 @@ export async function runPlanner({ input, meta = {} }) {
   // ── Notifie le plan ──────────────────────────
   let planMsg = `📋 *Plan — ${plan.steps.length} étapes*\n${'─'.repeat(22)}\n`;
   plan.steps.forEach(s => {
-    const icon = { research:'🔍', write:'✍️', code:'💻', monitor:'📡', notify:'📣', custom:'🤖', radar:'⚽' }[s.agent] || '▸';
+    const icon = { research:'🔍', write:'✍️', code:'💻', monitor:'📡', notify:'📣', custom:'🤖', radar:'⚽', exec:'⚙️', api:'🔌', browser:'🌐' }[s.agent] || '▸';
     planMsg += `${s.step}. ${icon} *${s.description}*\n`;
   });
   planMsg += `\n⏱ Durée estimée: ${plan.estimated_duration || '2-5 min'}`;
