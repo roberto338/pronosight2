@@ -12,6 +12,9 @@ import { runMonitor  } from './monitorAgent.js';
 import { runNotify   } from './notifyAgent.js';
 import { runCustom   } from './customAgent.js';
 import { runRadar    } from './radarAgent.js';
+import { runExec     } from './execAgent.js';
+import { runApi      } from './apiAgent.js';
+import { runBrowser  } from './browserAgent.js';
 
 const AGENT_EXECUTORS = {
   research: runResearch,
@@ -21,6 +24,9 @@ const AGENT_EXECUTORS = {
   notify:   runNotify,
   custom:   runCustom,
   radar:    runRadar,
+  exec:     runExec,
+  api:      runApi,
+  browser:  runBrowser,
 };
 
 const PLANNER_SYSTEM = `Tu es un planificateur d'agents IA expert.
@@ -49,6 +55,9 @@ Agents disponibles:
 - notify   : envoi d'une notification Telegram
 - custom   : tâche IA libre, analyse, conseil
 - radar    : analyse paris sportifs football uniquement
+- exec     : écrit et exécute du code Node.js, calculs, automatisations
+- api      : appelle une API externe (Odds API, Football Data, etc.)
+- browser  : navigue sur un site web et extrait des données
 
 Règles:
 - Maximum 5 étapes

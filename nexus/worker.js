@@ -15,6 +15,8 @@ import { runCustom   } from './agents/customAgent.js';
 import { runRadar    } from './agents/radarAgent.js';
 import { runPlanner  } from './agents/plannerAgent.js';
 import { runExec     } from './agents/execAgent.js';
+import { runApi      } from './agents/apiAgent.js';
+import { runBrowser  } from './agents/browserAgent.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -26,6 +28,8 @@ const AGENT_MAP = {
   radar:    runRadar,
   planner:  runPlanner,
   exec:     runExec,
+  api:      runApi,
+  browser:  runBrowser,
 };
 
 /**

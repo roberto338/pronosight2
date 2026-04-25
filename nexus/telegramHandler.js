@@ -164,6 +164,32 @@ export function startTelegramHandler() {
       await handleCommand(msg.chat.id, 'write', prompt);
     });
 
+    // ── /api ─────────────────────────────────────
+    nexusBot.onText(/^\/api\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const task = (match[1] || '').trim();
+      if (!task) {
+        await sendNexusMessage(msg.chat.id,
+          '🌐 Décris l\'appel API à faire.\n_Ex: /api récupère les cotes du PSG ce weekend depuis Odds API_'
+        );
+        return;
+      }
+      await handleCommand(msg.chat.id, 'api', task);
+    });
+
+    // ── /browser ──────────────────────────────────
+    nexusBot.onText(/^\/browser\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const task = (match[1] || '').trim();
+      if (!task) {
+        await sendNexusMessage(msg.chat.id,
+          '🌐 Que veux-tu récupérer sur le web ?\n_Ex: /browser prix des abonnements Winamax aujourd\'hui_'
+        );
+        return;
+      }
+      await handleCommand(msg.chat.id, 'browser', task);
+    });
+
     // ── /exec ────────────────────────────────────
     nexusBot.onText(/^\/exec\s*([\s\S]+)?/, async (msg, match) => {
       if (!isAuthorized(msg.chat.id)) return;

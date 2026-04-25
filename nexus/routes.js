@@ -70,7 +70,7 @@ router.post('/dispatch', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'agentType et input sont requis' });
   }
 
-  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec'];
+  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser'];
   if (!VALID.includes(agentType)) {
     return res.status(400).json({ error: `agentType invalide. Valides: ${VALID.join(', ')}` });
   }
