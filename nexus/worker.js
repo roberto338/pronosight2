@@ -4,7 +4,7 @@
 // ══════════════════════════════════════════════
 
 import { Worker } from 'bullmq';
-import { redisConnection } from '../queues/victorQueue.js';
+import { createConnection } from '../queues/victorQueue.js';
 import { updateTaskStatus, saveOutput } from './lib/db.js';
 import { saveMessage } from './lib/memory.js';
 import { runResearch } from './agents/researchAgent.js';
@@ -61,7 +61,10 @@ async function replyToTelegram(chatId, output, agentType, taskId) {
  * @returns {Worker|null}
  */
 export function startNexusWorker() {
-  if (!redisConnection) {
+  // Workers use blocking Redis commands (BLMOVE) — they MUST have a
+  // dedicated connection, never the shared Queue connection.
+  const workerConn = createConnection('worker-nexus');
+  if (!workerConn) {
     console.warn('⚠️  [NexusWorker] Redis indisponible — worker non démarré');
     return null;
   }
@@ -115,7 +118,7 @@ export function startNexusWorker() {
       }
     },
     {
-      connection:  redisConnection,
+      connection:  workerConn,
       concurrency: 4,
       limiter:     { max: 20, duration: 60000 },
     }

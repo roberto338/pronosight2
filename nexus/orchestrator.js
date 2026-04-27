@@ -1,6 +1,11 @@
 // ══════════════════════════════════════════════
 // nexus/orchestrator.js — Task dispatcher
 // Creates the nexus-tasks BullMQ queue
+//
+// Connection strategy:
+//   nexusQueue uses the shared redisConnection (Queue = non-blocking).
+//   Workers import createConnection() and build their own dedicated
+//   blocking socket — they must NOT share the Queue connection.
 // ══════════════════════════════════════════════
 
 import { Queue } from 'bullmq';
@@ -8,7 +13,11 @@ import { redisConnection } from '../queues/victorQueue.js';
 import { insertTask } from './lib/db.js';
 import { buildMemoryContext } from './lib/longTermMemory.js';
 
-// ── BullMQ Queue ───────────────────────────────
+// ── Re-export createConnection so nexus internals ──
+// ── have a single import point for Redis helpers ───
+export { createConnection } from '../queues/victorQueue.js';
+
+// ── BullMQ Queue (shares the non-blocking Queue connection) ───
 export const nexusQueue = redisConnection
   ? new Queue('nexus-tasks', {
       connection: redisConnection,

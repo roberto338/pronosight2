@@ -1,30 +1,48 @@
 // ══════════════════════════════════════════════
 // queues/victorQueue.js — BullMQ Queue + Redis
+//
+// Connection model (BullMQ requirement):
+//   redisConnection  → shared across all Queue instances (non-blocking)
+//   createConnection → factory for Workers & QueueEvents (blocking / pub-sub,
+//                      each call returns a dedicated IORedis instance)
 // ══════════════════════════════════════════════
 
 import { Queue, QueueEvents } from 'bullmq';
 import IORedis from 'ioredis';
 
-// ── Config Redis ───────────────────────────────
+// ── Config ─────────────────────────────────────
 const REDIS_URL = process.env.REDIS_URL || '';
 const IS_TLS    = REDIS_URL.startsWith('rediss://');
 
-function makeConn() {
+/** Base IORedis options shared by every connection */
+const BASE_OPTS = {
+  maxRetriesPerRequest: null,   // required by BullMQ
+  enableReadyCheck:     false,
+  lazyConnect:          false,
+  ...(IS_TLS ? { tls: { rejectUnauthorized: false } } : {}),
+};
+
+/**
+ * Create a new dedicated IORedis connection.
+ * Call this for Workers and QueueEvents — they need their own sockets
+ * because they issue blocking commands (BLMOVE, SUBSCRIBE) that would
+ * stall a shared connection.
+ *
+ * @param {string} [label]  Optional name shown in logs
+ * @returns {IORedis | null}
+ */
+export function createConnection(label = 'redis') {
   if (!REDIS_URL) return null;
-  const conn = new IORedis(REDIS_URL, {
-    maxRetriesPerRequest: null, // Requis par BullMQ
-    enableReadyCheck:     false,
-    ...(IS_TLS ? { tls: { rejectUnauthorized: false } } : {}),
-  });
-  conn.on('connect', () => console.log(`🔴 Redis connecté (${IS_TLS ? 'TLS Upstash' : 'plain'})`));
-  conn.on('ready',   () => console.log('✅ Redis prêt — BullMQ opérationnel'));
-  conn.on('error',  (err) => console.warn('⚠️  Redis erreur:', err.message));
-  conn.on('close',  ()    => console.warn('⚠️  Redis déconnecté'));
+  const conn = new IORedis(REDIS_URL, BASE_OPTS);
+  conn.on('connect', () => console.log(`🔴 [${label}] Redis connecté (${IS_TLS ? 'TLS' : 'plain'})`));
+  conn.on('ready',   () => console.log(`✅ [${label}] Redis prêt`));
+  conn.on('error',  (err) => console.warn(`⚠️  [${label}] Redis erreur:`, err.message));
+  conn.on('close',  ()    => console.warn(`⚠️  [${label}] Redis déconnecté`));
   return conn;
 }
 
-// ── Connexion principale ───────────────────────
-export const redisConnection = makeConn();
+// ── Shared Queue connection (non-blocking, reused by all Queue instances) ──
+export const redisConnection = createConnection('queue-shared');
 
 if (!redisConnection) {
   console.warn('⚠️  REDIS_URL non définie — BullMQ désactivé, fallback synchrone actif');
@@ -33,7 +51,7 @@ if (!redisConnection) {
 // ── Queue principale Victor ────────────────────
 export const victorQueue = redisConnection
   ? new Queue('victor-analysis', {
-      connection: redisConnection,
+      connection: redisConnection,       // shared — Queue only does non-blocking SET/ZADD
       defaultJobOptions: {
         attempts:         3,
         backoff:          { type: 'exponential', delay: 5000 },
@@ -43,9 +61,9 @@ export const victorQueue = redisConnection
     })
   : null;
 
-// ── Queue Events (monitoring) ──────────────────
+// ── Queue Events — dedicated connection (uses SUBSCRIBE) ───────────────────
 export const victorQueueEvents = redisConnection
-  ? new QueueEvents('victor-analysis', { connection: makeConn() })
+  ? new QueueEvents('victor-analysis', { connection: createConnection('qevents-victor') })
   : null;
 
 // ── Helpers d'ajout de jobs ────────────────────

@@ -91,20 +91,20 @@ export function startNexusCron() {
     } catch { /* ignore */ }
   }
 
-  // ── Every 5 min — process pending monitor tasks ──
-  cron.schedule('*/5 * * * *', async () => {
+  // ── Every 30 min — DB health check ─────────────
+  cron.schedule('*/30 * * * *', async () => {
     try {
       await dispatchTask({
         agentType: 'monitor',
-        input:     'quick-health-check',
+        input:     'health-check',
         meta:      { type: 'db', source: 'cron', chatId: null },
         priority:  10,
       });
     } catch { /* silent */ }
   });
 
-  // ── Every hour — proactivity engine ─────────────
-  cron.schedule('0 * * * *', async () => {
+  // ── Every 3 hours — proactivity engine ──────────
+  cron.schedule('0 */3 * * *', async () => {
     try {
       await runProactivityEngine();
     } catch (err) {
