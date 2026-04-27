@@ -2,14 +2,21 @@
 // nexus/routes.js — Express routes /nexus/*
 // ══════════════════════════════════════════════
 
-import { Router } from 'express';
-import { dispatchTask, nexusQueue } from './orchestrator.js';
-import { listTasks, getTask, getOutputs } from './lib/db.js';
-import { renderDashboard } from './dashboard.js';
-import { query } from '../db/database.js';
+import { Router }       from 'express';
+import { readFileSync }  from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { dispatchTask, nexusQueue }         from './orchestrator.js';
+import { listTasks, getTask, getOutputs }   from './lib/db.js';
+import { renderDashboard }                  from './dashboard.js';
+import { query }                            from '../db/database.js';
+import { parseNaturalCommand, jarvisTaskToDispatch } from './jarvis.js';
+import { saveMessage }                      from './lib/memory.js';
 import {
   remember, forget, listMemories, consolidate, getMemoryStats,
 } from './lib/longTermMemory.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const router = Router();
 
@@ -279,6 +286,112 @@ router.delete('/memory/:key', requireApiKey, async (req, res) => {
     if (!found) return res.status(404).json({ error: 'Mémoire non trouvée' });
     res.json({ status: 'forgotten', key: req.params.key });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════
+// NEXUS CHAT — Web UI
+// ══════════════════════════════════════════════
+
+// Basic auth middleware (username: roberto, password: NEXUS_CHAT_PASSWORD)
+function requireChatAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Nexus Chat"');
+    return res.status(401).send('Authentication required');
+  }
+  const decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8');
+  const colonIdx = decoded.indexOf(':');
+  const user = decoded.slice(0, colonIdx);
+  const pass = decoded.slice(colonIdx + 1);
+  const expected = process.env.NEXUS_CHAT_PASSWORD || 'nexus';
+  if (user !== 'roberto' || pass !== expected) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Nexus Chat"');
+    return res.status(401).send('Identifiants invalides');
+  }
+  next();
+}
+
+// In-memory set to avoid duplicate memory saves on re-poll
+const _servedTasks = new Set();
+
+// ── GET /nexus/chat ─────────────────────────────
+router.get('/chat', requireChatAuth, (req, res) => {
+  try {
+    const html = readFileSync(join(__dirname, 'chat.html'), 'utf8');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    res.status(500).send(`<pre>chat.html introuvable: ${err.message}</pre>`);
+  }
+});
+
+// ── POST /nexus/chat/send ───────────────────────
+router.post('/chat/send', requireChatAuth, async (req, res) => {
+  const { message } = req.body;
+  if (!message?.trim()) return res.status(400).json({ error: 'message requis' });
+
+  const chatId = 'nexus-web-chat';
+
+  try {
+    // Save user message to conversational memory
+    await saveMessage(chatId, 'user', message.trim(), 'web');
+
+    // Parse with Jarvis → structured task
+    const task     = await parseNaturalCommand(message.trim(), chatId);
+    const dispatch = jarvisTaskToDispatch(task);
+
+    // Dispatch (no chatId in meta → worker won't try to Telegram-reply)
+    const { taskId } = await dispatchTask({
+      agentType: dispatch.agentType,
+      input:     dispatch.input,
+      meta:      { ...dispatch.meta, source: 'web-chat' },
+      priority:  task.priority,
+    });
+
+    res.json({
+      taskId,
+      explanation: task.explanation,
+      agentType:   dispatch.agentType,
+    });
+  } catch (err) {
+    console.error('[Chat/send]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /nexus/chat/poll/:taskId ────────────────
+router.get('/chat/poll/:taskId', requireChatAuth, async (req, res) => {
+  const taskId = parseInt(req.params.taskId);
+  if (!taskId || isNaN(taskId)) return res.status(400).json({ error: 'taskId invalide' });
+
+  try {
+    const task = await getTask(taskId);
+    if (!task) return res.status(404).json({ error: 'Tâche introuvable' });
+
+    if (task.status === 'done') {
+      const outputs = await getOutputs(taskId);
+      const output  = outputs[0]?.output || '(pas de résultat)';
+
+      // Save assistant reply to memory once only
+      if (!_servedTasks.has(taskId)) {
+        _servedTasks.add(taskId);
+        await saveMessage('nexus-web-chat', 'assistant', output, task.agent_type);
+        if (_servedTasks.size > 500) _servedTasks.clear(); // prevent leak
+      }
+
+      return res.json({ status: 'done', output, agentType: task.agent_type });
+    }
+
+    if (task.status === 'failed') {
+      return res.json({ status: 'failed', error: task.error || 'Erreur inconnue' });
+    }
+
+    // pending or running
+    res.json({ status: task.status });
+  } catch (err) {
+    console.error('[Chat/poll]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

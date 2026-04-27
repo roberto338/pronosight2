@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nexus</title>
+  <style>
+    /* ── Reset & variables ─────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0f0f0f;
+      --surface:     #1a1a1a;
+      --surface2:    #242424;
+      --accent:      #7c3aed;
+      --accent-h:    #6d28d9;
+      --text:        #f5f5f5;
+      --text2:       #888;
+      --border:      #2a2a2a;
+      --user-bg:     #3b1f6e;
+      --nexus-bg:    #1a1a1a;
+      --error:       #ef4444;
+      --success:     #10b981;
+      --topbar-h:    56px;
+      --input-h:     72px;
+      --quick-h:     44px;
+      --radius:      12px;
+      --font:        system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15px; }
+
+    /* ── Layout ─────────────────────────────────── */
+    #app { display: flex; flex-direction: column; height: 100vh; max-width: 860px; margin: 0 auto; }
+
+    /* ── Top bar ─────────────────────────────────── */
+    #topbar {
+      flex-shrink: 0;
+      height: var(--topbar-h);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    #topbar .logo {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -.3px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #topbar .logo .n-icon {
+      width: 28px; height: 28px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 800; color: #fff; flex-shrink: 0;
+    }
+    #topbar .status {
+      font-size: 12px;
+      color: var(--success);
+      display: flex; align-items: center; gap: 5px;
+    }
+    #topbar .status::before {
+      content: '';
+      width: 7px; height: 7px;
+      background: var(--success);
+      border-radius: 50%;
+      display: block;
+    }
+    #topbar .spacer { flex: 1; }
+    #clearBtn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text2);
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: var(--font);
+      transition: border-color .15s, color .15s;
+    }
+    #clearBtn:hover { border-color: var(--error); color: var(--error); }
+
+    /* ── Messages area ────────────────────────────── */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      scroll-behavior: smooth;
+    }
+    #messages::-webkit-scrollbar { width: 4px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Message rows ─────────────────────────────── */
+    .msg-row {
+      display: flex;
+      gap: 10px;
+      max-width: 100%;
+      animation: fadeUp .2s ease;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg-row.user  { flex-direction: row-reverse; margin-left: 80px; }
+    .msg-row.nexus { margin-right: 80px; }
+    .msg-row.system { justify-content: center; margin: 8px 0; }
+
+    /* Avatar */
+    .avatar {
+      width: 30px; height: 30px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 800; color: #fff;
+      flex-shrink: 0;
+      align-self: flex-end;
+    }
+
+    /* Bubble */
+    .bubble {
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      line-height: 1.55;
+      font-size: 14.5px;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    .msg-row.user  .bubble { background: var(--user-bg); color: var(--text); border-bottom-right-radius: 3px; }
+    .msg-row.nexus .bubble { background: var(--nexus-bg); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 3px; }
+    .msg-row.system .bubble { background: transparent; color: var(--text2); font-size: 12px; text-align: center; border: none; padding: 4px 8px; }
+
+    /* Timestamp */
+    .ts {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 4px;
+      display: block;
+      opacity: .7;
+    }
+    .msg-row.user  .ts { text-align: right; }
+    .msg-row.nexus .ts { text-align: left;  padding-left: 40px; }
+
+    .bubble-wrap { display: flex; flex-direction: column; max-width: 100%; min-width: 0; }
+
+    /* ── Markdown in bubbles ─────────────────────── */
+    .bubble strong { font-weight: 700; }
+    .bubble em     { font-style: italic; color: #c4b5fd; }
+    .bubble code {
+      background: #0d0d0d;
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+      font-size: 12.5px;
+      color: #a78bfa;
+    }
+    .bubble pre {
+      background: #0d0d0d;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow-x: auto;
+      margin: 6px 0;
+    }
+    .bubble pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      color: #e2e8f0;
+      font-size: 12.5px;
+      line-height: 1.6;
+    }
+    .bubble ul, .bubble ol {
+      padding-left: 18px;
+      margin: 4px 0;
+    }
+    .bubble li { margin: 2px 0; line-height: 1.5; }
+    .bubble hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 8px 0;
+    }
+    .bubble p  { margin: 4px 0; }
+    .bubble h3 { font-size: 14px; font-weight: 700; margin: 8px 0 4px; color: #c4b5fd; }
+    .bubble h2 { font-size: 15px; font-weight: 700; margin: 10px 0 4px; color: #c4b5fd; }
+
+    .agent-tag {
+      display: inline-block;
+      font-size: 10px;
+      background: var(--surface2);
+      color: var(--text2);
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    /* ── Typing indicator ─────────────────────────── */
+    .typing-dots { display: flex; align-items: center; gap: 4px; padding: 4px 2px; height: 20px; }
+    .typing-dots span {
+      width: 6px; height: 6px;
+      background: var(--text2);
+      border-radius: 50%;
+      animation: bounce .9s infinite;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: .15s; }
+    .typing-dots span:nth-child(3) { animation-delay: .3s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: .4; }
+      40%           { transform: translateY(-5px); opacity: 1; }
+    }
+
+    /* ── Quick actions ────────────────────────────── */
+    #quick {
+      flex-shrink: 0;
+      padding: 8px 16px 0;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .pill {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 12.5px;
+      font-family: var(--font);
+      transition: background .15s, border-color .15s;
+      white-space: nowrap;
+    }
+    .pill:hover { background: var(--surface); border-color: var(--accent); }
+
+    /* ── Input bar ────────────────────────────────── */
+    #inputbar {
+      flex-shrink: 0;
+      padding: 10px 16px 14px;
+      background: var(--bg);
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    #input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14.5px;
+      padding: 10px 14px;
+      resize: none;
+      outline: none;
+      max-height: 160px;
+      line-height: 1.5;
+      transition: border-color .15s;
+      overflow-y: auto;
+    }
+    #input::placeholder { color: var(--text2); }
+    #input:focus { border-color: var(--accent); }
+    #sendBtn {
+      width: 40px; height: 40px;
+      background: var(--accent);
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 18px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background .15s, transform .1s;
+    }
+    #sendBtn:hover   { background: var(--accent-h); }
+    #sendBtn:active  { transform: scale(.93); }
+    #sendBtn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+    /* ── Error bubble ─────────────────────────────── */
+    .bubble.error { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
+
+    /* ── Mobile ───────────────────────────────────── */
+    @media (max-width: 600px) {
+      .msg-row.user  { margin-left: 40px; }
+      .msg-row.nexus { margin-right: 40px; }
+      .bubble        { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Top bar -->
+  <div id="topbar">
+    <div class="logo">
+      <div class="n-icon">N</div>
+      Nexus
+    </div>
+    <div class="status">En ligne</div>
+    <div class="spacer"></div>
+    <button id="clearBtn" title="Effacer la conversation (Ctrl+L)">Effacer</button>
+  </div>
+
+  <!-- Messages -->
+  <div id="messages"></div>
+
+  <!-- Quick actions -->
+  <div id="quick">
+    <button class="pill" data-fill="Quels sont mes projets actifs ?">📊 Mes projets</button>
+    <button class="pill" data-fill="Recherche ">🔍 Recherche…</button>
+    <button class="pill" data-fill="Lance un business autour de ">💼 Business…</button>
+    <button class="pill" data-fill="Rédige un ">📝 Rédige…</button>
+  </div>
+
+  <!-- Input bar -->
+  <div id="inputbar">
+    <textarea id="input" rows="1" placeholder="Message Nexus… (Entrée pour envoyer)"></textarea>
+    <button id="sendBtn" title="Envoyer">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"></line>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+      </svg>
+    </button>
+  </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// Nexus Chat — vanilla JS
+// ══════════════════════════════════════════════
+
+const STORAGE_KEY  = 'nexus-chat-v1';
+const MAX_STORED   = 50;
+const POLL_MS      = 2000;
+const TIMEOUT_MS   = 120_000;
+const WEB_CHAT_ID  = 'nexus-web-chat';
+
+const $messages = document.getElementById('messages');
+const $input    = document.getElementById('input');
+const $sendBtn  = document.getElementById('sendBtn');
+const $clearBtn = document.getElementById('clearBtn');
+
+let isProcessing = false;
+
+// ── Simple markdown renderer ─────────────────────────
+// Handles Telegram-style (*bold*, _italic_, `code`)
+// and common markdown (###, -, ```)
+function renderMarkdown(text) {
+  if (!text) return '';
+
+  // Escape HTML first
+  const esc = s => s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Protect code blocks first
+  const codeBlocks = [];
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push(`<pre><code>${esc(code.trim())}</code></pre>`);
+    return `\x00CODEBLOCK${idx}\x00`;
+  });
+
+  // Inline code
+  const inlineCodes = [];
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    const idx = inlineCodes.length;
+    inlineCodes.push(`<code>${esc(code)}</code>`);
+    return `\x00INLINE${idx}\x00`;
+  });
+
+  // Escape remaining HTML
+  text = esc(text);
+
+  // Headings (## or ###)
+  text = text.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+  text = text.replace(/^##\s+(.+)$/gm,  '<h2>$1</h2>');
+
+  // Horizontal rule (─── or ---)
+  text = text.replace(/^[─\-]{3,}$/gm, '<hr>');
+
+  // Bold: *text* or **text**
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/\*([^*\n]+)\*/g,     '<strong>$1</strong>');
+
+  // Italic: _text_
+  text = text.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+
+  // Lists: lines starting with "- " or "• "
+  const lines = text.split('\n');
+  const out = [];
+  let inList = false;
+  for (const line of lines) {
+    const listMatch = line.match(/^[-•]\s+(.+)/);
+    if (listMatch) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push(`<li>${listMatch[1]}</li>`);
+    } else {
+      if (inList) { out.push('</ul>'); inList = false; }
+      out.push(line);
+    }
+  }
+  if (inList) out.push('</ul>');
+  text = out.join('\n');
+
+  // Paragraphs: blank lines → paragraph breaks
+  text = text
+    .split(/\n{2,}/)
+    .map(block => {
+      block = block.trim();
+      if (!block) return '';
+      if (block.startsWith('<h') || block.startsWith('<ul') || block.startsWith('<hr') || block.startsWith('<pre')) return block;
+      return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+    })
+    .join('');
+
+  // Restore code blocks
+  text = text.replace(/\x00CODEBLOCK(\d+)\x00/g, (_, i) => codeBlocks[i]);
+  text = text.replace(/\x00INLINE(\d+)\x00/g,    (_, i) => inlineCodes[i]);
+
+  return text;
+}
+
+// ── LocalStorage ─────────────────────────────────────
+function loadStored() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveStored(msgs) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(msgs.slice(-MAX_STORED))); }
+  catch {}
+}
+function clearStored() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+// ── Time formatting ────────────────────────────────
+function fmtTime(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ── Render a single message to DOM ──────────────────
+function renderMsg(msg) {
+  // msg: { role: 'user'|'nexus'|'system', content, ts, agentType? }
+  const row = document.createElement('div');
+  row.className = `msg-row ${msg.role}`;
+
+  if (msg.role === 'system') {
+    const wrap = document.createElement('div');
+    wrap.className = 'bubble-wrap';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = msg.content;
+    wrap.appendChild(bubble);
+    row.appendChild(wrap);
+    $messages.appendChild(row);
+    return row;
+  }
+
+  if (msg.role === 'nexus') {
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = 'N';
+    row.appendChild(avatar);
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap';
+
+  if (msg.role === 'nexus' && msg.agentType && msg.agentType !== 'web') {
+    const tag = document.createElement('span');
+    tag.className = 'agent-tag';
+    tag.textContent = msg.agentType;
+    wrap.appendChild(tag);
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  if (msg.error) bubble.classList.add('error');
+
+  if (msg.role === 'nexus') {
+    bubble.innerHTML = renderMarkdown(msg.content);
+  } else {
+    bubble.textContent = msg.content;
+  }
+
+  const ts = document.createElement('span');
+  ts.className = 'ts';
+  ts.textContent = fmtTime(msg.ts);
+
+  wrap.appendChild(bubble);
+  wrap.appendChild(ts);
+  row.appendChild(wrap);
+  $messages.appendChild(row);
+  return row;
+}
+
+// ── Typing indicator ───────────────────────────────
+function addTyping(label = '') {
+  const row = document.createElement('div');
+  row.className = 'msg-row nexus';
+  row.id = 'typing-' + Date.now();
+
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.textContent = 'N';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+
+  if (label) {
+    bubble.textContent = label;
+  } else {
+    const dots = document.createElement('div');
+    dots.className = 'typing-dots';
+    dots.innerHTML = '<span></span><span></span><span></span>';
+    bubble.appendChild(dots);
+  }
+
+  wrap.appendChild(bubble);
+  row.appendChild(avatar);
+  row.appendChild(wrap);
+  $messages.appendChild(row);
+  scrollBottom();
+  return row;
+}
+
+function updateTyping(row, text) {
+  const bubble = row.querySelector('.bubble');
+  if (bubble) bubble.textContent = text;
+}
+
+function replaceTyping(row, msg) {
+  const newRow = renderMsg(msg);
+  $messages.replaceChild(newRow, row);
+  scrollBottom();
+}
+
+function scrollBottom() {
+  $messages.scrollTop = $messages.scrollHeight;
+}
+
+// ── Poll task ──────────────────────────────────────
+async function pollTask(taskId) {
+  const deadline = Date.now() + TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(POLL_MS);
+    const resp = await fetch(`/nexus/chat/poll/${taskId}`);
+    if (!resp.ok) throw new Error(`Poll HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.status === 'done')   return data;
+    if (data.status === 'failed') throw new Error(data.error || 'Tâche échouée');
+  }
+  throw new Error('Timeout — Nexus prend trop de temps (>2 min)');
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Send message ────────────────────────────────────
+async function send() {
+  const text = $input.value.trim();
+  if (!text || isProcessing) return;
+
+  isProcessing = true;
+  $sendBtn.disabled = true;
+  $input.value = '';
+  autoResize();
+
+  // Persist and show user message
+  const userMsg = { role: 'user', content: text, ts: new Date().toISOString() };
+  const stored  = loadStored();
+  stored.push(userMsg);
+  saveStored(stored);
+  renderMsg(userMsg);
+  scrollBottom();
+
+  // Show typing
+  const typingRow = addTyping();
+
+  try {
+    const resp = await fetch('/nexus/chat/send', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ message: text }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    const { taskId, explanation, agentType } = await resp.json();
+
+    // Show explanation while processing
+    updateTyping(typingRow, `⏳ ${explanation || 'Traitement en cours…'}`);
+
+    // Poll for result
+    const result = await pollTask(taskId);
+
+    const nexusMsg = {
+      role:      'nexus',
+      content:   result.output,
+      agentType: result.agentType || agentType,
+      ts:        new Date().toISOString(),
+    };
+
+    const s2 = loadStored();
+    s2.push(nexusMsg);
+    saveStored(s2);
+    replaceTyping(typingRow, nexusMsg);
+
+  } catch (err) {
+    const errMsg = { role: 'nexus', content: `❌ ${err.message}`, error: true, ts: new Date().toISOString() };
+    replaceTyping(typingRow, errMsg);
+    scrollBottom();
+  } finally {
+    isProcessing = false;
+    $sendBtn.disabled = false;
+    $input.focus();
+  }
+}
+
+// ── Auto-resize textarea ──────────────────────────
+function autoResize() {
+  $input.style.height = 'auto';
+  $input.style.height = Math.min($input.scrollHeight, 160) + 'px';
+}
+
+// ── Init ────────────────────────────────────────────
+function init() {
+  const stored = loadStored();
+
+  if (stored.length === 0) {
+    // Welcome message (not stored — ephemeral)
+    const welcome = {
+      role:    'nexus',
+      content: 'Bonjour Roberto. Je suis Nexus, ton assistant IA personnel.\n\nTous tes projets sont actifs — *PronoSight*, *MÉTAFICTION*, *NutriPlan*, *Fruity Arena*.\n\nQue veux-tu accomplir aujourd\'hui ?',
+      ts:      new Date().toISOString(),
+    };
+    renderMsg(welcome);
+  } else {
+    for (const msg of stored) renderMsg(msg);
+  }
+  scrollBottom();
+}
+
+// ── Events ──────────────────────────────────────────
+$input.addEventListener('input', autoResize);
+
+$input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+});
+
+$sendBtn.addEventListener('click', send);
+
+$clearBtn.addEventListener('click', () => {
+  if (!confirm('Effacer tout l\'historique ?')) return;
+  clearStored();
+  $messages.innerHTML = '';
+  // Re-show welcome
+  const welcome = {
+    role:    'nexus',
+    content: 'Conversation effacée. Comment puis-je t\'aider ?',
+    ts:      new Date().toISOString(),
+  };
+  renderMsg(welcome);
+  scrollBottom();
+  $input.focus();
+});
+
+// Quick action pills
+document.querySelectorAll('.pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const fill = btn.dataset.fill;
+    $input.value = fill;
+    $input.focus();
+    // Place cursor at end
+    $input.setSelectionRange(fill.length, fill.length);
+    autoResize();
+  });
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    $input.focus();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+    e.preventDefault();
+    $clearBtn.click();
+  }
+  if (e.key === 'Escape') {
+    $input.blur();
+  }
+});
+
+// Start
+init();
+</script>
+</body>
+</html>
