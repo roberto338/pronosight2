@@ -9,7 +9,7 @@
 // ══════════════════════════════════════════════
 
 export { default as nexusRouter }  from './routes.js';
-export { startNexusWorker }        from './worker.js';
+export { startNexusWorker, stopNexusWorker } from './worker.js';
 export { startNexusCron }          from './nexusCron.js';
 export { dispatchTask }            from './orchestrator.js';
 export { startTelegramHandler }    from './telegramHandler.js';

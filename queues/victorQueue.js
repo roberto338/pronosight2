@@ -7,7 +7,7 @@
 //                      each call returns a dedicated IORedis instance)
 // ══════════════════════════════════════════════
 
-import { Queue, QueueEvents } from 'bullmq';
+import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 
 // ── Config ─────────────────────────────────────
@@ -61,10 +61,11 @@ export const victorQueue = redisConnection
     })
   : null;
 
-// ── Queue Events — dedicated connection (uses SUBSCRIBE) ───────────────────
-export const victorQueueEvents = redisConnection
-  ? new QueueEvents('victor-analysis', { connection: createConnection('qevents-victor') })
-  : null;
+// ── Queue Events — disabled to save Redis connections ──────────────────────
+// QueueEvents uses a dedicated pub/sub socket (SUBSCRIBE). Disabled here
+// because no code path currently listens to victor-analysis events.
+// Re-enable if you add job-completion hooks: new QueueEvents('victor-analysis', { connection: createConnection('qevents-victor') })
+export const victorQueueEvents = null;
 
 // ── Helpers d'ajout de jobs ────────────────────
 
