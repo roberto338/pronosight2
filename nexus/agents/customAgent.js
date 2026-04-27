@@ -3,11 +3,11 @@
 // Flexible agent for any custom AI task
 // ══════════════════════════════════════════════
 
-import { callAI } from '../lib/ai.js';
+import { callAI }               from '../lib/ai.js';
 import { formatHistoryContext } from '../lib/memory.js';
+import { buildNexusPrompt }     from '../lib/systemPrompt.js';
 
-const DEFAULT_SYSTEM = `Tu es Nexus, un assistant IA autonome et universel.
-Tu peux aider sur n'importe quel sujet : analyse, stratégie, code, rédaction, recherche, conseil, créativité, business, technique, personnel — sans restriction de domaine.
+const AGENT_INSTRUCTIONS = `Tu peux aider sur n'importe quel sujet : analyse, stratégie, code, rédaction, recherche, conseil, créativité, business, technique, personnel — sans restriction de domaine.
 Fournis des réponses structurées, précises et directement exploitables.
 Sois concis. Zéro remplissage. Va droit au but.
 Si un historique de conversation est fourni, utilise-le pour assurer la continuité et la cohérence de tes réponses.`;
@@ -15,18 +15,19 @@ Si un historique de conversation est fourni, utilise-le pour assurer la continui
 /**
  * @param {Object} ctx
  * @param {string} ctx.input
- * @param {Object} ctx.meta  { prompt?, systemPrompt?, provider?, useSearch?, maxTokens? }
+ * @param {Object} ctx.meta  { prompt?, systemPrompt?, provider?, useSearch?, maxTokens?, memoryContext?, chatId? }
  * @returns {Promise<{output: string, meta: Object}>}
  */
 export async function runCustom({ input, meta = {} }) {
-  const prompt   = meta.prompt       || input;
-  const provider = meta.provider;
+  const prompt        = meta.prompt || input;
+  const provider      = meta.provider;
+  const memoryContext = meta.memoryContext || '';
 
-  // Build system prompt: base + long-term memory
-  let systemPrompt = meta.systemPrompt || DEFAULT_SYSTEM;
-  if (meta.memoryContext) {
-    systemPrompt = systemPrompt + meta.memoryContext;
-  }
+  // Build system prompt: identity + memory + agent instructions
+  // Allow full override via meta.systemPrompt (e.g. business agent passes HTML prompt)
+  const systemPrompt = meta.systemPrompt
+    ? (memoryContext ? meta.systemPrompt + '\n' + memoryContext : meta.systemPrompt)
+    : buildNexusPrompt(AGENT_INSTRUCTIONS, memoryContext);
 
   console.log(`[CustomAgent] Task: ${prompt.slice(0, 80)}`);
 

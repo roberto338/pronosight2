@@ -6,6 +6,7 @@
 // ══════════════════════════════════════════════
 
 import { callAI, callGemini } from '../lib/ai.js';
+import { buildNexusPrompt }  from '../lib/systemPrompt.js';
 
 const BROWSER_SYSTEM = `Tu es un expert en extraction de données web.
 Tu reçois le contenu HTML/texte d'une page web et une demande précise.
@@ -62,7 +63,8 @@ async function fetchPage(url) {
  * @param {Object} ctx.meta    { url?: string directe, useSearch?: boolean }
  */
 export async function runBrowser({ input, meta = {} }) {
-  const task = meta.task || input;
+  const task          = meta.task || input;
+  const memoryContext = meta.memoryContext || '';
   console.log(`[BrowserAgent] Tâche: ${task.slice(0, 80)}`);
 
   // ── Étape 1 : Détermine l'URL à visiter ──────
@@ -84,11 +86,17 @@ export async function runBrowser({ input, meta = {} }) {
     } catch { /* fallback to search */ }
   }
 
+  const browserSystem  = buildNexusPrompt(BROWSER_SYSTEM,  memoryContext);
+  const searchSystem   = buildNexusPrompt(
+    `Tu es un agent de navigation web expert. Réponds en français de façon claire et structurée.`,
+    memoryContext
+  );
+
   // ── Étape 2a : Sites JS-heavy → Gemini Search ─
   if (useSearch || !targetUrl) {
     console.log(`[BrowserAgent] Mode Google Search pour: ${task.slice(0, 60)}`);
     const output = await callGemini(
-      `Tu es un agent de navigation web expert. Réponds en français de façon claire et structurée.`,
+      searchSystem,
       task,
       { useSearch: true, maxTokens: 3000, temperature: 0.3 }
     );
@@ -107,7 +115,7 @@ export async function runBrowser({ input, meta = {} }) {
     // Fallback: Google Search si fetch échoue
     console.warn(`[BrowserAgent] Fetch échoué (${err.message}), fallback Search`);
     const output = await callGemini(
-      `Tu es un agent de navigation web expert. Réponds en français.`,
+      searchSystem,
       `${task}\nSource souhaitée: ${targetUrl}`,
       { useSearch: true, maxTokens: 3000, temperature: 0.3 }
     );
@@ -119,7 +127,7 @@ export async function runBrowser({ input, meta = {} }) {
 
   // ── Étape 3 : Analyse le contenu ─────────────
   const analysis = await callAI(
-    BROWSER_SYSTEM,
+    browserSystem,
     `Demande: ${task}\n\nContenu de la page (${targetUrl}):\n${pageText}`,
     { maxTokens: 2048, temperature: 0.2 }
   );

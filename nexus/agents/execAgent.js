@@ -4,7 +4,8 @@
 // corrige et relance si besoin (max 3 tentatives)
 // ══════════════════════════════════════════════
 
-import { callAI } from '../lib/ai.js';
+import { callAI }           from '../lib/ai.js';
+import { buildNexusPrompt } from '../lib/systemPrompt.js';
 import { exec }   from 'child_process';
 import { writeFile, unlink } from 'fs/promises';
 import { promisify } from 'util';
@@ -81,14 +82,17 @@ function extractCode(response) {
  * @param {Object} ctx.meta    { language?, allowNetwork? }
  */
 export async function runExec({ input, meta = {} }) {
-  const task   = meta.task   || input;
-  const fileId = randomBytes(4).toString('hex');
+  const task          = meta.task || input;
+  const memoryContext = meta.memoryContext || '';
+  const fileId        = randomBytes(4).toString('hex');
   console.log(`[ExecAgent] Tâche: ${task.slice(0, 80)}`);
+
+  const execSystem = buildNexusPrompt(EXEC_SYSTEM, memoryContext);
 
   // ── Étape 1 : Génère le code ─────────────────
   let code;
   try {
-    const raw = await callAI(EXEC_SYSTEM, `Tâche: ${task}`, {
+    const raw = await callAI(execSystem, `Tâche: ${task}`, {
       maxTokens: 4096,
       provider:  'claude', // Claude pour la qualité du code
     });

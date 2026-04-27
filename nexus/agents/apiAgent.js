@@ -5,7 +5,8 @@
 // Résumé intelligent de la réponse
 // ══════════════════════════════════════════════
 
-import { callAI } from '../lib/ai.js';
+import { callAI }           from '../lib/ai.js';
+import { buildNexusPrompt } from '../lib/systemPrompt.js';
 
 // Credentials disponibles (depuis les env vars du projet)
 function getAvailableCredentials() {
@@ -72,7 +73,8 @@ function injectCredentials(obj) {
  * @param {Object} ctx.meta    { summarize?: boolean, rawOutput?: boolean }
  */
 export async function runApi({ input, meta = {} }) {
-  const task = meta.task || input;
+  const task          = meta.task || input;
+  const memoryContext = meta.memoryContext || '';
   console.log(`[ApiAgent] Tâche: ${task.slice(0, 80)}`);
 
   const creds = getAvailableCredentials();
@@ -81,11 +83,16 @@ export async function runApi({ input, meta = {} }) {
     .map(([k]) => k)
     .join(', ');
 
+  const apiSystem = buildNexusPrompt(
+    API_SYSTEM + `\n\nCredentials actuellement configurés: ${credsList}`,
+    memoryContext
+  );
+
   // ── Étape 1 : Génère la spec d'appel ─────────
   let spec;
   try {
     const raw = await callAI(
-      API_SYSTEM + `\n\nCredentials actuellement configurés: ${credsList}`,
+      apiSystem,
       `Demande: ${task}`,
       { maxTokens: 1024, temperature: 0.1 }
     );

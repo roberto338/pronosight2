@@ -3,7 +3,8 @@
 // Monitors URLs, APIs, DB metrics
 // ══════════════════════════════════════════════
 
-import { callAI } from '../lib/ai.js';
+import { callAI }           from '../lib/ai.js';
+import { buildNexusPrompt } from '../lib/systemPrompt.js';
 import { query } from '../../db/database.js';
 
 /**
@@ -13,7 +14,8 @@ import { query } from '../../db/database.js';
  * @returns {Promise<{output: string, meta: Object}>}
  */
 export async function runMonitor({ input, meta = {} }) {
-  const type = meta.type || 'url';
+  const type          = meta.type || 'url';
+  const memoryContext = meta.memoryContext || '';
   console.log(`[MonitorAgent] Monitor [${type}]: ${input.slice(0, 80)}`);
 
   // ── URL monitoring ──────────────────────────
@@ -67,8 +69,9 @@ export async function runMonitor({ input, meta = {} }) {
   }
 
   // ── Custom monitoring via AI ────────────────
-  const systemPrompt = `Tu es un agent de monitoring. Analyse les données fournies et génère un rapport de statut.
+  const monitorInstructions = `Tu es un agent de monitoring. Analyse les données fournies et génère un rapport de statut.
 Identifie les anomalies, les alertes et les recommandations. Sois concis et factuel.`;
+  const systemPrompt = buildNexusPrompt(monitorInstructions, memoryContext);
   const output = await callAI(systemPrompt, input, { maxTokens: 2048 });
   return {
     output,

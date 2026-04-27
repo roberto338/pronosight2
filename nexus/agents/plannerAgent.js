@@ -4,7 +4,8 @@
 // chaque étape avec les agents appropriés
 // ══════════════════════════════════════════════
 
-import { callAI } from '../lib/ai.js';
+import { callAI }           from '../lib/ai.js';
+import { buildNexusPrompt } from '../lib/systemPrompt.js';
 import { runResearch } from './researchAgent.js';
 import { runWrite    } from './writeAgent.js';
 import { runCode     } from './codeAgent.js';
@@ -88,10 +89,8 @@ export async function runPlanner({ input, meta = {} }) {
   const chatId = meta.chatId || null;
   console.log(`[PlannerAgent] Objectif: ${goal.slice(0, 100)}`);
 
-  // Build planner system prompt enriched with long-term memory
-  const plannerSystem = meta.memoryContext
-    ? PLANNER_SYSTEM + meta.memoryContext
-    : PLANNER_SYSTEM;
+  // Build planner system prompt: Nexus identity + memory + planner expertise
+  const plannerSystem = buildNexusPrompt(PLANNER_SYSTEM, meta.memoryContext || '');
 
   // ── Étape 0 : Notifie la création du plan ──
   await progress(chatId, `🧠 *Nexus analyse ton objectif...*\n_Création du plan d'action en cours_`);

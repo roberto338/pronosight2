@@ -4,9 +4,10 @@
 // Méthodologie complète portée sur Render 24/7
 // ══════════════════════════════════════════════
 
-import { callGemini } from '../lib/ai.js';
+import { callGemini }       from '../lib/ai.js';
+import { buildNexusPrompt } from '../lib/systemPrompt.js';
 
-const RADAR_SYSTEM = `Tu es RADAR, analyste et trader sportif spécialisé football.
+const AGENT_INSTRUCTIONS = `Tu es RADAR, analyste et trader sportif spécialisé football.
 Ta méthode : données d'abord, intuition ensuite.
 Tu penses long terme, value expected, réduction de variance.
 Tu raisonnes comme un gestionnaire de risque, pas comme un parieur.
@@ -100,13 +101,16 @@ Objectif : moins de paris, meilleure qualité.`;
  * Utilise Gemini + Google Search pour données en temps réel
  * @param {Object} ctx
  * @param {string} ctx.input   Ex: "PSG vs Lyon ce soir" ou "analyse Ligue 1 ce week-end"
- * @param {Object} ctx.meta    { mode?: 'pre-match'|'live'|'value', match? }
+ * @param {Object} ctx.meta    { mode?: 'pre-match'|'live'|'value', match?, memoryContext? }
  * @returns {Promise<{output: string, meta: Object}>}
  */
 export async function runRadar({ input, meta = {} }) {
-  const query = meta.match || input;
-  const mode  = meta.mode  || 'pre-match';
+  const query         = meta.match || input;
+  const mode          = meta.mode  || 'pre-match';
+  const memoryContext = meta.memoryContext || '';
   console.log(`[RadarAgent] Analyse [${mode}]: ${query.slice(0, 80)}`);
+
+  const systemPrompt = buildNexusPrompt(AGENT_INSTRUCTIONS, memoryContext);
 
   // Recherche Google en temps réel pour les données du match
   const searchQuery = `${query} statistiques forme récente blessés composition today ${new Date().toISOString().slice(0, 10)}`;
@@ -117,10 +121,10 @@ export async function runRadar({ input, meta = {} }) {
     ? `MODE VALUE AGGRESSIF — Cherche les anomalies de cotes et les outsiders crédibles pour:\n${query}`
     : `MODE PRE-MATCH — Analyse complète pour:\n${query}\n\nSuis le process en 9 étapes et fournis le safe bet + value bet si disponible.`;
 
-  const output = await callGemini(RADAR_SYSTEM, prompt + '\n\nRecherche en temps réel: ' + searchQuery, {
+  const output = await callGemini(systemPrompt, prompt + '\n\nRecherche en temps réel: ' + searchQuery, {
     useSearch:   true,
     maxTokens:   4096,
-    temperature: 0.3, // Low temp for analytical precision
+    temperature: 0.3,
   });
 
   return {
