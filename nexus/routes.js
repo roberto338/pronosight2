@@ -26,7 +26,7 @@ function requireApiKey(req, res, next) {
 // ── GET /nexus/dashboard ────────────────────────
 router.get('/dashboard', async (req, res) => {
   try {
-    const [tasks, statsRes, memStats] = await Promise.all([
+    const [tasks, statsRes, memStats, goalsRes, routinesRes] = await Promise.all([
       listTasks({ limit: 50 }),
       query(`
         SELECT
@@ -38,8 +38,10 @@ router.get('/dashboard', async (req, res) => {
         FROM nexus_tasks
       `),
       getMemoryStats(),
+      query(`SELECT * FROM nexus_goals WHERE status='active' ORDER BY deadline ASC NULLS LAST`).catch(() => ({ rows: [] })),
+      query(`SELECT * FROM nexus_routines ORDER BY active DESC, created_at DESC`).catch(() => ({ rows: [] })),
     ]);
-    res.send(renderDashboard(tasks, statsRes.rows[0], memStats));
+    res.send(renderDashboard(tasks, statsRes.rows[0], memStats, goalsRes.rows, routinesRes.rows));
   } catch (err) {
     res.status(500).send(`<pre style="color:red">Erreur dashboard: ${err.message}</pre>`);
   }
@@ -68,6 +70,32 @@ router.get('/status', async (req, res) => {
   }
 });
 
+// ── POST /nexus/task (alias for /dispatch) ─────
+router.post('/task', requireApiKey, async (req, res) => {
+  const { type, agentType, payload, input, meta = {}, priority = 0 } = req.body;
+  const resolvedType  = type || agentType;
+  const resolvedInput = input || payload?.prompt || payload?.query || payload?.idea || JSON.stringify(payload || {});
+
+  if (!resolvedType || !resolvedInput) {
+    return res.status(400).json({ error: 'type/agentType et input/payload sont requis' });
+  }
+  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance', 'business', 'vision'];
+  if (!VALID.includes(resolvedType)) {
+    return res.status(400).json({ error: `type invalide. Valides: ${VALID.join(', ')}` });
+  }
+  try {
+    const result = await dispatchTask({
+      agentType: resolvedType,
+      input:     resolvedInput,
+      meta:      { ...(payload || {}), ...meta },
+      priority,
+    });
+    res.json({ status: 'queued', ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /nexus/dispatch ────────────────────────
 router.post('/dispatch', requireApiKey, async (req, res) => {
   const { agentType, input, meta = {}, priority = 0 } = req.body;
@@ -76,7 +104,7 @@ router.post('/dispatch', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'agentType et input sont requis' });
   }
 
-  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance'];
+  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance', 'business', 'vision'];
   if (!VALID.includes(agentType)) {
     return res.status(400).json({ error: `agentType invalide. Valides: ${VALID.join(', ')}` });
   }
@@ -114,6 +142,77 @@ router.get('/tasks/:id', requireApiKey, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ══════════════════════════════════════════════
+// GOALS
+// ══════════════════════════════════════════════
+
+router.get('/goals', requireApiKey, async (req, res) => {
+  try {
+    const { rows } = await query(`SELECT * FROM nexus_goals WHERE status='active' ORDER BY deadline ASC NULLS LAST`);
+    res.json({ total: rows.length, goals: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/goals', requireApiKey, async (req, res) => {
+  const { title, description, deadline } = req.body;
+  if (!title) return res.status(400).json({ error: 'title requis' });
+  try {
+    const { rows } = await query(
+      `INSERT INTO nexus_goals (title, description, deadline) VALUES ($1, $2, $3) RETURNING *`,
+      [title, description || null, deadline || null]
+    );
+    res.json({ status: 'created', goal: rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.patch('/goals/:id', requireApiKey, async (req, res) => {
+  const { progress, status } = req.body;
+  try {
+    const { rows } = await query(
+      `UPDATE nexus_goals SET progress=COALESCE($1, progress), status=COALESCE($2, status), updated_at=NOW() WHERE id=$3 RETURNING *`,
+      [progress ?? null, status || null, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Objectif non trouvé' });
+    res.json({ status: 'updated', goal: rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ══════════════════════════════════════════════
+// ROUTINES
+// ══════════════════════════════════════════════
+
+router.get('/routines', requireApiKey, async (req, res) => {
+  try {
+    const { rows } = await query(`SELECT * FROM nexus_routines ORDER BY created_at DESC`);
+    res.json({ total: rows.length, routines: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/routines', requireApiKey, async (req, res) => {
+  const { name, cron_expression, task_type, payload = {} } = req.body;
+  if (!name || !cron_expression || !task_type) {
+    return res.status(400).json({ error: 'name, cron_expression et task_type requis' });
+  }
+  try {
+    const { rows } = await query(
+      `INSERT INTO nexus_routines (name, cron_expression, task_type, payload) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [name, cron_expression, task_type, JSON.stringify(payload)]
+    );
+    const { scheduleRoutine } = await import('./nexusCron.js');
+    scheduleRoutine(rows[0]);
+    res.json({ status: 'created', routine: rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.patch('/routines/:id/stop', requireApiKey, async (req, res) => {
+  try {
+    await query(`UPDATE nexus_routines SET active=false WHERE id=$1`, [req.params.id]);
+    const { unscheduleRoutine } = await import('./nexusCron.js');
+    unscheduleRoutine(parseInt(req.params.id));
+    res.json({ status: 'stopped' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ══════════════════════════════════════════════

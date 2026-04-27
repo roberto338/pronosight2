@@ -19,6 +19,8 @@ import { runExec     } from './agents/execAgent.js';
 import { runApi      } from './agents/apiAgent.js';
 import { runBrowser  } from './agents/browserAgent.js';
 import { runFinance  } from './agents/financeAgent.js';
+import { runBusiness } from './agents/businessAgent.js';
+import { runVision   } from './agents/visionAgent.js';
 import { extractAndSave } from './lib/longTermMemory.js';
 
 const AGENT_MAP = {
@@ -34,6 +36,8 @@ const AGENT_MAP = {
   api:      runApi,
   browser:  runBrowser,
   finance:  runFinance,
+  business: runBusiness,
+  vision:   runVision,
 };
 
 /**
@@ -90,10 +94,12 @@ export function startNexusWorker() {
         console.log(`🧠 [NexusWorker] Memory extraction started for task #${taskId}`);
         setImmediate(() => extractAndSave(taskId, agentType, input, result.output || ''));
 
-        // Sauvegarde la réponse en mémoire
+        // Sauvegarde la réponse en mémoire + Telegram
         if (meta?.chatId) {
           await saveMessage(meta.chatId, 'assistant', result.output, agentType);
-          await replyToTelegram(meta.chatId, result.output, agentType, taskId);
+          // Business agent sends its own Telegram summary — skip generic reply
+          const useSummary = agentType === 'business' && result.meta?.summary;
+          await replyToTelegram(meta.chatId, useSummary ? result.meta.summary : result.output, agentType, taskId);
         }
 
         return { taskId, agentType, outputLength: result.output?.length || 0 };
@@ -110,8 +116,8 @@ export function startNexusWorker() {
     },
     {
       connection:  redisConnection,
-      concurrency: 2,
-      limiter:     { max: 10, duration: 60000 },
+      concurrency: 4,
+      limiter:     { max: 20, duration: 60000 },
     }
   );
 
@@ -125,6 +131,6 @@ export function startNexusWorker() {
     console.error('[NexusWorker] Worker error:', err.message)
   );
 
-  console.log('✅ [NexusWorker] Worker nexus-tasks démarré (concurrency: 2)');
+  console.log('✅ [NexusWorker] Worker nexus-tasks démarré (concurrency: 4)');
   return worker;
 }
