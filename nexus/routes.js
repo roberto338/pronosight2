@@ -330,24 +330,69 @@ router.get('/chat', requireChatAuth, (req, res) => {
 
 // ── POST /nexus/chat/send ───────────────────────
 router.post('/chat/send', requireChatAuth, async (req, res) => {
-  const { message } = req.body;
-  if (!message?.trim()) return res.status(400).json({ error: 'message requis' });
+  const { message, file } = req.body;
 
-  const chatId = 'nexus-web-chat';
+  // Require at least a message or an attached file
+  if (!message?.trim() && !file) return res.status(400).json({ error: 'message ou fichier requis' });
+
+  const chatId    = 'nexus-web-chat';
+  const userText  = message?.trim() || '';
 
   try {
-    // Save user message to conversational memory
-    await saveMessage(chatId, 'user', message.trim(), 'web');
+    // ── Determine agent / prompt from file type ──────
+    let agentType      = null;   // null → let Jarvis decide
+    let promptText     = userText;
+    let fileMeta       = {};
 
-    // Parse with Jarvis → structured task
-    const task     = await parseNaturalCommand(message.trim(), chatId);
-    const dispatch = jarvisTaskToDispatch(task);
+    if (file?.data && file?.type) {
+      if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+        // Vision agent handles images and PDFs
+        agentType = 'vision';
+        const defaultInstruction = file.type === 'application/pdf'
+          ? 'Analyse ce document PDF en détail.'
+          : 'Analyse cette image en détail.';
+        fileMeta = {
+          imageBase64:    file.data,
+          imageMediaType: file.type,
+          instruction:    userText || defaultInstruction,
+        };
+        promptText = fileMeta.instruction;
+      } else {
+        // Text / code / CSV — decode base64 and append to prompt
+        try {
+          const decoded = Buffer.from(file.data, 'base64').toString('utf8').slice(0, 8000);
+          promptText = (userText ? userText + '\n\n' : '') +
+                       `Contenu du fichier "${file.name}":\n\`\`\`\n${decoded}\n\`\`\``;
+        } catch {
+          promptText = userText || `Fichier reçu: ${file.name}`;
+        }
+      }
+    }
 
-    // Bug 2 fix: pre-inject LTM memory context (same as worker.js does for Telegram jobs)
-    // Also pass chatId so customAgent injects conversational history correctly
+    // ── Save user turn to conversational memory ──────
+    const memLabel = file
+      ? `[Fichier: ${file.name}] ${userText}`.trim()
+      : userText;
+    await saveMessage(chatId, 'user', memLabel || promptText.slice(0, 200), 'web');
+
+    // ── Build dispatch: vision bypasses Jarvis ────────
+    let dispatch        = {};
+    let taskPriority    = 0;
+    let taskExplanation = '';
+
+    if (agentType === 'vision') {
+      dispatch = { agentType: 'vision', input: promptText, meta: fileMeta };
+    } else {
+      const task  = await parseNaturalCommand(promptText, chatId);
+      dispatch    = jarvisTaskToDispatch(task);
+      taskPriority    = task.priority;
+      taskExplanation = task.explanation;
+    }
+
+    // ── Pre-inject LTM memory context ────────────────
     let memoryContext = '';
     try {
-      memoryContext = await buildMemoryContext(dispatch.agentType, message.trim());
+      memoryContext = await buildMemoryContext(dispatch.agentType, promptText);
       console.log('[Chat/send] Memory injected:', memoryContext.length, 'chars');
     } catch (err) {
       console.warn('[Chat/send] Memory fetch error (non-blocking):', err.message);
@@ -357,12 +402,12 @@ router.post('/chat/send', requireChatAuth, async (req, res) => {
       agentType: dispatch.agentType,
       input:     dispatch.input,
       meta:      { ...dispatch.meta, source: 'web-chat', chatId, memoryContext },
-      priority:  task.priority,
+      priority:  taskPriority,
     });
 
     res.json({
       taskId,
-      explanation: task.explanation,
+      explanation: taskExplanation,
       agentType:   dispatch.agentType,
     });
   } catch (err) {

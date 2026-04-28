@@ -3,8 +3,9 @@
 // Image analysis via Claude Vision API
 // ══════════════════════════════════════════════
 
-const VISION_SYSTEM = `Tu es un agent Vision expert. Tu analyses les images avec précision et retournes des insights structurés, actionnables et détaillés.
+const VISION_SYSTEM = `Tu es un agent Vision expert. Tu analyses les images et documents PDF avec précision et retournes des insights structurés, actionnables et détaillés.
 Identifie: éléments visuels clés, texte présent, métriques visibles, points d'amélioration, insights stratégiques.
+Pour les PDFs: résume le contenu, extrais les points clés, signale les informations importantes.
 Sois concis et précis. Structure ta réponse avec des sections claires.`;
 
 /**
@@ -26,10 +27,18 @@ export async function runVision({ input, meta = {} }) {
 
   console.log(`[VisionAgent] Analysing image: ${instruction.slice(0, 60)}`);
 
-  // Build image content block
-  const imageBlock = imageBase64
-    ? { type: 'image', source: { type: 'base64', media_type: imageMediaType, data: imageBase64 } }
-    : { type: 'image', source: { type: 'url', url: imageUrl } };
+  // Build image / document content block
+  // PDFs require type:'document' in the Claude API; images use type:'image'
+  let imageBlock;
+  if (imageBase64) {
+    if (imageMediaType === 'application/pdf') {
+      imageBlock = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageBase64 } };
+    } else {
+      imageBlock = { type: 'image', source: { type: 'base64', media_type: imageMediaType, data: imageBase64 } };
+    }
+  } else {
+    imageBlock = { type: 'image', source: { type: 'url', url: imageUrl } };
+  }
 
   const model = process.env.VISION_MODEL || 'claude-3-5-sonnet-20241022';
 
