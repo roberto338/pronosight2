@@ -15,6 +15,14 @@ import {
   generateWeeklyProjectReport,
 } from './projects.js';
 
+// ── Autonomous v3.0 modules ─────────────────────
+import { runDetectionCycle }      from './autonomous/opportunityEngine.js';
+import { generateDailyDecisions, getPendingDecisions, sendDecisionToTelegram } from './autonomous/decisionEngine.js';
+import { generateWeeklyCalendar } from './autonomous/contentEngine.js';
+import { runFollowUps }           from './autonomous/outreachEngine.js';
+import { sendDailyRevenueReport, syncRevenueToDb } from './autonomous/revenueTracker.js';
+import { runProblemSolver }       from './autonomous/problemSolver.js';
+
 // ── In-memory map of dynamic routine cron tasks ─
 const _routineTasks = new Map(); // routineId → cron.ScheduledTask
 
@@ -173,8 +181,155 @@ export function startNexusCron() {
     }
   });
 
+  // ════════════════════════════════════════════════
+  // AUTONOMOUS ENTREPRENEUR v3.0 — cron schedule
+  // ════════════════════════════════════════════════
+
+  // ── Daily 06:30 — generate decisions from LTM ──
+  cron.schedule('30 6 * * *', async () => {
+    console.log('[NexusCron] Autonomous: generating daily decisions...');
+    try {
+      const decisions = await generateDailyDecisions();
+      console.log(`[NexusCron] ${decisions?.length || 0} decisions generated`);
+    } catch (err) {
+      console.error('[NexusCron] generateDailyDecisions error:', err.message);
+    }
+  });
+
+  // ── Daily 07:30 — send pending decisions to Telegram ──
+  cron.schedule('30 7 * * *', async () => {
+    console.log('[NexusCron] Autonomous: sending pending decisions...');
+    try {
+      const pending = await getPendingDecisions();
+      if (pending.length === 0) return;
+      await sendAdmin(`🎯 *${pending.length} décision(s) t'attendent !*\n_Tape /decisions pour les voir._`);
+      for (const d of pending.slice(0, 3)) {
+        await sendDecisionToTelegram(d);
+        await new Promise(r => setTimeout(r, 800));
+      }
+    } catch (err) {
+      console.error('[NexusCron] send decisions error:', err.message);
+    }
+  });
+
+  // ── Daily 07:45 — revenue sync + daily report ──
+  cron.schedule('45 7 * * *', async () => {
+    console.log('[NexusCron] Autonomous: revenue report...');
+    try {
+      await syncRevenueToDb();
+      await sendDailyRevenueReport();
+    } catch (err) {
+      console.error('[NexusCron] revenue report error:', err.message);
+    }
+  });
+
+  // ── Daily 10:00 — outreach follow-ups ───────────
+  cron.schedule('0 10 * * *', async () => {
+    console.log('[NexusCron] Autonomous: outreach follow-ups...');
+    try {
+      const result = await runFollowUps();
+      if (result.total > 0) {
+        console.log(`[NexusCron] Follow-ups: ${result.followUpsSent}/${result.total} envoyés`);
+      }
+    } catch (err) {
+      console.error('[NexusCron] follow-ups error:', err.message);
+    }
+  });
+
+  // ── Daily 12:00 — opportunity detection (noon) ──
+  cron.schedule('0 12 * * *', async () => {
+    console.log('[NexusCron] Autonomous: opportunity scan (noon)...');
+    try {
+      const decisions = await runDetectionCycle();
+      if (decisions.length > 0) {
+        await sendAdmin(`🔍 *Nexus a détecté ${decisions.length} nouvelle(s) opportunité(s) !*\n_Tape /decisions pour décider._`);
+      }
+    } catch (err) {
+      console.error('[NexusCron] opportunity scan (noon) error:', err.message);
+    }
+  });
+
+  // ── Daily 18:00 — opportunity detection (evening) ──
+  cron.schedule('0 18 * * *', async () => {
+    console.log('[NexusCron] Autonomous: opportunity scan (evening)...');
+    try {
+      const decisions = await runDetectionCycle();
+      if (decisions.length > 0) {
+        await sendAdmin(`🌆 *${decisions.length} nouvelle(s) opportunité(s) détectée(s) ce soir !*\n_Tape /decisions pour voir._`);
+      }
+    } catch (err) {
+      console.error('[NexusCron] opportunity scan (evening) error:', err.message);
+    }
+  });
+
+  // ── Sunday 20:00 — generate weekly content calendar ──
+  cron.schedule('0 20 * * 0', async () => {
+    console.log('[NexusCron] Autonomous: weekly content calendar...');
+    try {
+      const result = await generateWeeklyCalendar();
+      if (result?.generated > 0) {
+        await sendAdmin(
+          `📅 *Calendrier contenu de la semaine prêt !*\n` +
+          `${result.generated} posts générés\n` +
+          `${result.scheduled} programmés via Buffer\n\n` +
+          `_Contenu pour: ${(result.projects || []).join(', ')}_`
+        );
+      }
+    } catch (err) {
+      console.error('[NexusCron] weekly calendar error:', err.message);
+    }
+  });
+
+  // ── Daily 22:00 — problem solver health check ──
+  cron.schedule('0 22 * * *', async () => {
+    console.log('[NexusCron] Autonomous: problem solver...');
+    try {
+      const result = await runProblemSolver();
+      if (result.problems > 0) {
+        console.log(`[NexusCron] ProblemSolver: ${result.summary}`);
+      }
+    } catch (err) {
+      console.error('[NexusCron] problem solver error:', err.message);
+    }
+  });
+
+  // ── Daily 00:30 — autonomous daily summary ──────
+  cron.schedule('30 0 * * *', async () => {
+    console.log('[NexusCron] Autonomous: daily summary...');
+    try {
+      const { rows: decisions } = await query(
+        `SELECT status, COUNT(*)::int AS n FROM nexus_decisions
+         WHERE created_at > NOW() - INTERVAL '24h' GROUP BY status`
+      ).catch(() => ({ rows: [] }));
+      const { rows: saas } = await query(
+        `SELECT COUNT(*)::int AS n FROM nexus_saas WHERE created_at > NOW() - INTERVAL '24h'`
+      ).catch(() => ({ rows: [{ n: 0 }] }));
+      const { rows: outreach } = await query(
+        `SELECT COUNT(*)::int AS n FROM nexus_outreach WHERE sent_at > NOW() - INTERVAL '24h'`
+      ).catch(() => ({ rows: [{ n: 0 }] }));
+
+      const approved  = decisions.find(r => r.status === 'approved')?.n  || 0;
+      const ignored   = decisions.find(r => r.status === 'ignored')?.n   || 0;
+      const pending   = decisions.find(r => r.status === 'pending')?.n   || 0;
+      const saasCount = saas[0]?.n || 0;
+      const emails    = outreach[0]?.n || 0;
+
+      if (approved + ignored + saasCount + emails > 0) {
+        await sendAdmin(
+          `🌙 *Récap 24h — Nexus Autonomous*\n${'━'.repeat(20)}\n\n` +
+          `🎯 Décisions: ${approved} approuvées | ${ignored} ignorées | ${pending} en attente\n` +
+          `🚀 SaaS lancés: ${saasCount}\n` +
+          `📧 Emails envoyés: ${emails}\n\n` +
+          `_Nexus continue de tourner — à demain !_`
+        );
+      }
+    } catch (err) {
+      console.error('[NexusCron] daily summary error:', err.message);
+    }
+  });
+
   // ── Load dynamic routines from DB ───────────────
   loadDynamicRoutines();
 
-  console.log('✅ [NexusCron] All cron jobs started (v2.0)');
+  console.log('✅ [NexusCron] All cron jobs started (v3.0 — Autonomous Entrepreneur)');
 }

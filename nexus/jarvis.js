@@ -12,7 +12,7 @@ Tu reçois des messages en langage naturel (français ou anglais) et tu les conv
 
 Retourne UNIQUEMENT du JSON valide. Aucun texte avant ou après:
 {
-  "type": "research|write|code|monitor|notify|custom|business|vision|radar|planner|exec|api|finance",
+  "type": "research|write|code|monitor|notify|custom|business|vision|radar|planner|exec|api|finance|critique",
   "payload": { ... },
   "priority": 1,
   "explanation": "ce que Nexus va faire en une phrase courte"
@@ -26,6 +26,9 @@ Contexte Roberto — entrepreneur tech:
 - URLs: PronoSight=https://pronosight2.onrender.com | NutriPlan=https://nutriplan-ai-w6nc.polsia.app | Nexus=/nexus/dashboard
 
 Règles de mapping:
+- "j'ai une idée/et si on faisait/je veux lancer/je pense à créer/nouveau projet/nouvelle app/nouveau business" → critique + { idea: message }
+- "qu'est-ce que tu penses de [une idée/un projet/une app]" → critique + { idea: message }
+- "critique/analyse mon idée/évalue ce projet" → critique + { idea: message }
 - "vérifie/check/ping si X tourne/fonctionne/est up" → monitor + url du projet
 - "recherche/trouve/qu'est-ce que/actualités/news" → research
 - "écris/rédige/génère un article/post/email/contenu" → write
@@ -50,7 +53,8 @@ Payload par type:
 - api: { description: "..." }
 - custom: { prompt: "..." }
 - radar: { match: "...", mode: "pre-match|live|value" }
-- planner: { goal: "..." }`;
+- planner: { goal: "..." }
+- critique: { idea: "description complète de l'idée ou du projet" }`;
 
 /**
  * Parse a natural language message into a structured Nexus task.
@@ -107,11 +111,11 @@ export function jarvisTaskToDispatch(task) {
   // Derive a natural language "input" from payload for logging/storage
   const input =
     payload.prompt    ||
+    payload.idea      ||
     payload.query     ||
     payload.goal      ||
     payload.topic     ||
     payload.task      ||
-    payload.idea      ||
     payload.match     ||
     payload.description ||
     JSON.stringify(payload).slice(0, 200);

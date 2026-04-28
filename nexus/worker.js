@@ -23,6 +23,7 @@ import { runBrowser }     from './agents/browserAgent.js';
 import { runFinance }     from './agents/financeAgent.js';
 import { runBusiness }    from './agents/businessAgent.js';
 import { runVision }      from './agents/visionAgent.js';
+import { runCritique }    from './agents/critiqueAgent.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -39,6 +40,7 @@ const AGENT_MAP = {
   finance:  runFinance,
   business: runBusiness,
   vision:   runVision,
+  critique: runCritique,
 };
 
 const POLL_INTERVAL_MS = 15_000; // 15 seconds between polls
@@ -100,16 +102,17 @@ async function processJob(job) {
     return;
   }
 
-  // Enrich meta with long-term memory context at execution time
+  // Enrich meta with long-term memory context at execution time.
+  // Always inject (even empty string) so agents always get ROBERTO_BASE
+  // from buildNexusPrompt regardless of LTM state.
   let enrichedMeta = meta;
   try {
     const memoryContext = await buildMemoryContext(agentType, input);
-    if (memoryContext) {
-      enrichedMeta = { ...meta, memoryContext };
-      console.log(`[NexusWorker] 🧠 Mémoire injectée pour tâche #${taskId}`);
-    }
+    console.log(`[NexusWorker] 🧠 Memory: ${memoryContext.length} chars, task #${taskId} (agent: ${agentType})`);
+    enrichedMeta = { ...meta, memoryContext };
   } catch (err) {
     console.warn('[NexusWorker] Memory fetch failed (non-blocking):', err.message);
+    enrichedMeta = { ...meta, memoryContext: '' }; // ensure key always exists
   }
 
   try {
@@ -123,19 +126,24 @@ async function processJob(job) {
 
     if (meta?.chatId) {
       await saveMessage(meta.chatId, 'assistant', result.output, agentType);
-      // Business agent sends its own Telegram summary — skip generic reply
-      const useSummary = agentType === 'business' && result.meta?.summary;
-      await replyToTelegram(
-        meta.chatId,
-        useSummary ? result.meta.summary : result.output,
-        agentType,
-        taskId
-      );
+      // Only Telegram-reply for numeric chat IDs.
+      // Non-numeric IDs (e.g. 'nexus-web-chat') are web-UI sessions — the poll
+      // endpoint delivers the response; no Telegram message needed.
+      const isTelegramId = /^\d+$/.test(String(meta.chatId));
+      if (isTelegramId) {
+        const useSummary = agentType === 'business' && result.meta?.summary;
+        await replyToTelegram(
+          meta.chatId,
+          useSummary ? result.meta.summary : result.output,
+          agentType,
+          taskId
+        );
+      }
     }
   } catch (err) {
     console.error(`[NexusWorker] ❌ Tâche #${taskId} échouée:`, err.message);
     await updateTaskStatus(taskId, 'failed', err.message);
-    if (meta?.chatId) {
+    if (meta?.chatId && /^\d+$/.test(String(meta.chatId))) {
       await replyToTelegram(meta.chatId, `❌ Erreur agent ${agentType}: ${err.message}`, agentType, taskId);
     }
   }

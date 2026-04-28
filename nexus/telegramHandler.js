@@ -57,6 +57,40 @@ export async function sendNexusMessage(chatId, text) {
   }
 }
 
+// ── Envoie un message avec clavier inline ─────
+export async function sendNexusKeyboard(chatId, text, reply_markup) {
+  if (!nexusBot || !chatId) return null;
+  try {
+    const msg = await nexusBot.sendMessage(chatId, text, {
+      parse_mode:               'Markdown',
+      disable_web_page_preview: true,
+      reply_markup,
+    });
+    return msg.message_id;
+  } catch (err) {
+    console.error('[NexusBot] sendNexusKeyboard error:', err.message);
+    return null;
+  }
+}
+
+// ── Édite un message existant (retire les boutons) ──
+export async function editNexusMessage(chatId, messageId, text) {
+  if (!nexusBot || !chatId || !messageId) return;
+  try {
+    await nexusBot.editMessageText(text, {
+      chat_id:                  chatId,
+      message_id:               messageId,
+      parse_mode:               'Markdown',
+      disable_web_page_preview: true,
+    });
+  } catch (err) {
+    // 400 "message is not modified" is normal — ignore silently
+    if (!err.message?.includes('not modified')) {
+      console.error('[NexusBot] editNexusMessage error:', err.message);
+    }
+  }
+}
+
 // ── Vérifie si l'utilisateur est autorisé ──────
 function isAuthorized(chatId) {
   if (!ADMIN_ID) return true; // Pas de restriction si ADMIN_ID non défini
@@ -125,12 +159,13 @@ export function startTelegramHandler() {
         `🤖 *NEXUS v2.0 — Jarvis Mode*\n\n` +
         `💬 *Message libre* — Jarvis comprend et agit\n` +
         `_Ex: "vérifie si PronoSight tourne"_\n` +
-        `_Ex: "lance un business de coaching IA"_\n\n` +
+        `_Ex: "j'ai une idée d'app de coaching IA"_\n\n` +
         `${'─'.repeat(24)}\n` +
+        `🔍 */critique [idée]* — Critique business 8 étapes + score /25\n` +
         `🚀 */plan [objectif]* — Plan multi-agents autonome\n` +
         `🏢 */business [idée]* — MVP complet en 10min\n` +
         `👁 */vision [instruction]* — Analyse d'image\n` +
-        `🔍 */research [question]* — Recherche web temps réel\n` +
+        `🔎 */research [question]* — Recherche web temps réel\n` +
         `✍️ */write [sujet]* — Rédaction structurée\n` +
         `💻 */exec [tâche]* — Exécution code Node.js\n` +
         `🌐 */browser [site]* — Extraction web\n` +
@@ -144,7 +179,11 @@ export function startTelegramHandler() {
         `${'─'.repeat(24)}\n` +
         `🔮 */memories* | 💾 */remember* | 🗑 */forget*\n` +
         `🧠 */memory* | 🧹 */clear* | 📊 */status*\n\n` +
-        `_Nexus v2.0 — 24h/24 sur Render ✅_`
+        `${'─'.repeat(24)}\n` +
+        `🤖 *Autonomous v3.0*\n` +
+        `🎯 */decisions* — Décisions en attente (OUI/NON)\n` +
+        `💰 */revenue* — Rapport revenus Stripe temps réel\n\n` +
+        `_Nexus v3.0 — Autonomous Entrepreneur 24h/24 ✅_`
       );
     });
 
@@ -159,6 +198,23 @@ export function startTelegramHandler() {
         return;
       }
       await handleCommand(msg.chat.id, 'business', idea, { idea, market: 'francophone', budget: 0 });
+    });
+
+    // ── /critique — Roberto business critique framework ──
+    nexusBot.onText(/^\/critique\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const idea = (match[1] || '').trim();
+      if (!idea) {
+        await sendNexusMessage(msg.chat.id,
+          '🔍 *Critique Business — Roberto Edition*\n\n' +
+          'Donne-moi une idée, un projet ou une fonctionnalité à analyser.\n\n' +
+          '_Ex: /critique app de coaching sportif IA pour la diaspora haïtienne_\n' +
+          '_Ex: /critique SaaS de gestion de devis pour artisans francophones_\n\n' +
+          '→ Analyse 8 étapes : verdict, diagnostic 3D, concurrence, finances, acquisition, MVP, risques, score /25'
+        );
+        return;
+      }
+      await handleCommand(msg.chat.id, 'critique', idea, { idea, prompt: idea });
     });
 
     // ── /radar ──────────────────────────────────
@@ -629,6 +685,116 @@ export function startTelegramHandler() {
       } catch (err) {
         console.error('[NexusBot] Jarvis error:', err.message);
         await sendNexusMessage(msg.chat.id, `❌ Erreur: ${err.message}`);
+      }
+    });
+
+    // ── /decisions — décisions autonomes en attente ──
+    nexusBot.onText(/^\/decisions/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      try {
+        const { getPendingDecisions, sendDecisionToTelegram } = await import('./autonomous/decisionEngine.js');
+        const pending = await getPendingDecisions();
+        if (pending.length === 0) {
+          await sendNexusMessage(msg.chat.id,
+            '🎯 Aucune décision en attente.\n_Nexus génère de nouvelles opportunités toutes les 6h._\n\n' +
+            '_Tu peux forcer un scan: /scan_'
+          );
+          return;
+        }
+        await sendNexusMessage(msg.chat.id, `🎯 *${pending.length} décision(s) en attente* — Envoi en cours...`);
+        for (const d of pending.slice(0, 5)) {
+          await sendDecisionToTelegram(d);
+          await new Promise(r => setTimeout(r, 600));
+        }
+      } catch (err) {
+        await sendNexusMessage(msg.chat.id, `❌ Erreur /decisions: ${err.message}`);
+      }
+    });
+
+    // ── /revenue — rapport revenus temps réel ────────
+    nexusBot.onText(/^\/revenue/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      try {
+        const { buildRevenueReport } = await import('./autonomous/revenueTracker.js');
+        await sendNexusMessage(msg.chat.id, '💰 Récupération des données Stripe...');
+        const report = await buildRevenueReport();
+        await sendNexusMessage(msg.chat.id, report);
+      } catch (err) {
+        await sendNexusMessage(msg.chat.id, `❌ Revenue error: ${err.message}`);
+      }
+    });
+
+    // ── /scan — force opportunity detection ──────────
+    nexusBot.onText(/^\/scan/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      await sendNexusMessage(msg.chat.id, '🔍 *Nexus* scan les opportunités...\n_Peut prendre 30-60 secondes._');
+      try {
+        const { runDetectionCycle } = await import('./autonomous/opportunityEngine.js');
+        const decisions = await runDetectionCycle();
+        if (decisions.length === 0) {
+          await sendNexusMessage(msg.chat.id, '🔍 Scan terminé — aucune opportunité ≥7/10 détectée cette fois.');
+        } else {
+          await sendNexusMessage(msg.chat.id, `✅ *${decisions.length} nouvelle(s) décision(s) créée(s) !*\n_Tape /decisions pour les voir._`);
+        }
+      } catch (err) {
+        await sendNexusMessage(msg.chat.id, `❌ Scan error: ${err.message}`);
+      }
+    });
+
+    // ── Callback query — OUI / NON / PLUS TARD ───────
+    nexusBot.on('callback_query', async (cbq) => {
+      const chatId = cbq.message?.chat?.id;
+      if (!isAuthorized(chatId)) return;
+
+      const data      = cbq.data || '';
+      const msgId     = cbq.message?.message_id;
+
+      // Always dismiss the spinner
+      try { await nexusBot.answerCallbackQuery(cbq.id); } catch { /* ignore */ }
+
+      // ── OUI → execute decision ──
+      if (data.startsWith('decision_yes_')) {
+        const decisionId = data.slice('decision_yes_'.length);
+        try {
+          const { executeDecision } = await import('./autonomous/decisionEngine.js');
+          await editNexusMessage(chatId, msgId, `⚡ _Exécution en cours..._\n\n_ID: ${decisionId.slice(0, 8)}..._`);
+          await sendNexusMessage(chatId, `⚡ *Nexus se met au travail !*\n_Je te notifie quand c'est lancé._`);
+          const result = await executeDecision(decisionId);
+          await sendNexusMessage(chatId,
+            `✅ *Décision exécutée*\n${'━'.repeat(20)}\n\n` +
+            `_${result?.summary || 'Tâche démarrée avec succès.'}_`
+          );
+        } catch (err) {
+          console.error('[NexusBot] decision_yes error:', err.message);
+          await sendNexusMessage(chatId, `❌ Erreur exécution: ${err.message}`);
+        }
+        return;
+      }
+
+      // ── NON → ignore decision ──
+      if (data.startsWith('decision_no_')) {
+        const decisionId = data.slice('decision_no_'.length);
+        try {
+          const { markIgnored } = await import('./autonomous/decisionEngine.js');
+          await editNexusMessage(chatId, msgId, `🚫 _Décision ignorée._`);
+          await markIgnored(decisionId);
+        } catch (err) {
+          console.error('[NexusBot] decision_no error:', err.message);
+        }
+        return;
+      }
+
+      // ── PLUS TARD → reschedule +24h ──
+      if (data.startsWith('decision_later_')) {
+        const decisionId = data.slice('decision_later_'.length);
+        try {
+          const { rescheduleDecision } = await import('./autonomous/decisionEngine.js');
+          await editNexusMessage(chatId, msgId, `⏰ _Reporté à demain._`);
+          await rescheduleDecision(decisionId, 24);
+        } catch (err) {
+          console.error('[NexusBot] decision_later error:', err.message);
+        }
+        return;
       }
     });
 
