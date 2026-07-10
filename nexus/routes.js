@@ -11,11 +11,26 @@ import { listTasks, getTask, getOutputs }   from './lib/db.js';
 import { renderDashboard }                  from './dashboard.js';
 import { query }                            from '../db/database.js';
 import { parseNaturalCommand, jarvisTaskToDispatch } from './jarvis.js';
-import { saveMessage }                      from './lib/memory.js';
+import { saveMessage, formatHistoryContext }  from './lib/memory.js';
 import {
   remember, forget, listMemories, consolidate, getMemoryStats,
-  buildMemoryContext,
+  buildMemoryContext, extractAndSave,
 } from './lib/longTermMemory.js';
+import { buildNexusPrompt } from './lib/systemPrompt.js';
+
+// ── Per-type streaming instructions ────────────
+const STREAM_INSTRUCTIONS = {
+  custom:   `Tu peux aider sur n'importe quel sujet. Sois concis, précis, directement actionnable.`,
+  research: `Tu es un agent de recherche. Fournis des informations factuelles, structurées, sourcées. Identifie les points clés.`,
+  write:    `Tu es un expert en rédaction. Produis un texte fluide, bien structuré, adapté au format demandé.`,
+  code:     `Tu es un expert développeur. Fournis du code propre, commenté, directement exécutable. Explique brièvement les choix.`,
+  planner:  `Tu es un planificateur. Décompose l'objectif en étapes concrètes, séquencées, avec livrables clairs.`,
+  critique: `Tu es un critique business expert. Analyse l'idée selon 8 axes : marché, concurrence, technique, coûts, acquisition, MVP, risques, et donne un score /25.`,
+  business: `Tu es un expert business builder. Construis un MVP complet : concept, stack, plan de lancement, pricing, distribution.`,
+  exec:     `Tu es un agent d'exécution. Analyse les données fournies, calcule, raisonne, et fournis un résultat précis.`,
+  finance:  `Tu es un gestionnaire financier. Analyse les données de bankroll, calcule les statistiques, recommande des actions.`,
+  vision:   `Tu es un agent Vision expert. Analyse l'image ou le document avec précision. Identifie éléments clés, texte, métriques, insights.`,
+};
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -87,7 +102,7 @@ router.post('/task', requireApiKey, async (req, res) => {
   if (!resolvedType || !resolvedInput) {
     return res.status(400).json({ error: 'type/agentType et input/payload sont requis' });
   }
-  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance', 'business', 'vision', 'critique'];
+  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance', 'business', 'vision', 'critique', 'google'];
   if (!VALID.includes(resolvedType)) {
     return res.status(400).json({ error: `type invalide. Valides: ${VALID.join(', ')}` });
   }
@@ -112,7 +127,7 @@ router.post('/dispatch', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'agentType et input sont requis' });
   }
 
-  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance', 'business', 'vision', 'critique'];
+  const VALID = ['research', 'write', 'code', 'monitor', 'notify', 'custom', 'radar', 'planner', 'exec', 'api', 'browser', 'finance', 'business', 'vision', 'critique', 'google'];
   if (!VALID.includes(agentType)) {
     return res.status(400).json({ error: `agentType invalide. Valides: ${VALID.join(', ')}` });
   }
@@ -306,7 +321,10 @@ function requireChatAuth(req, res, next) {
   const colonIdx = decoded.indexOf(':');
   const user = decoded.slice(0, colonIdx);
   const pass = decoded.slice(colonIdx + 1);
-  const expected = process.env.NEXUS_CHAT_PASSWORD || 'nexus';
+  const expected = process.env.NEXUS_CHAT_PASSWORD;
+  if (!expected) {
+    return res.status(503).send('NEXUS_CHAT_PASSWORD non configuré — accès refusé');
+  }
   if (user !== 'roberto' || pass !== expected) {
     res.setHeader('WWW-Authenticate', 'Basic realm="Nexus Chat"');
     return res.status(401).send('Identifiants invalides');
@@ -413,6 +431,150 @@ router.post('/chat/send', requireChatAuth, async (req, res) => {
   } catch (err) {
     console.error('[Chat/send]', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /nexus/chat/stream ─────────────────────
+// Bypass queue — stream Claude response directly via SSE.
+// First token in <1s. Saves to memory async after completion.
+router.post('/chat/stream', requireChatAuth, async (req, res) => {
+  const { message, file } = req.body;
+  if (!message?.trim() && !file) return res.status(400).json({ error: 'message ou fichier requis' });
+
+  // SSE headers — disable all buffering
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Nginx: disable buffering
+  res.flushHeaders();
+
+  const chatId    = 'nexus-web-chat';
+  const userText  = message?.trim() || '';
+  const send      = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {} };
+
+  try {
+    // ── File routing ─────────────────────────────
+    let imageBlock = null;
+    let promptText = userText;
+    let forceType  = null; // override Jarvis when file present
+
+    if (file?.data && file?.type) {
+      if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+        forceType  = 'vision';
+        promptText = userText || (file.type === 'application/pdf' ? 'Analyse ce document PDF en détail.' : 'Analyse cette image en détail.');
+        imageBlock = file.type === 'application/pdf'
+          ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.data } }
+          : { type: 'image',    source: { type: 'base64', media_type: file.type,          data: file.data } };
+      } else {
+        try {
+          const decoded = Buffer.from(file.data, 'base64').toString('utf8').slice(0, 8000);
+          promptText = (userText ? userText + '\n\n' : '') + `Contenu de "${file.name}":\n\`\`\`\n${decoded}\n\`\`\``;
+        } catch { promptText = userText || `Fichier: ${file.name}`; }
+      }
+    }
+
+    // ── Memory + Jarvis in parallel ───────────────
+    const [memoryContext, task, historyContext] = await Promise.all([
+      buildMemoryContext(forceType || 'custom', promptText).catch(() => ''),
+      forceType === 'vision'
+        ? Promise.resolve({ type: 'vision', payload: {}, priority: 2, explanation: 'Analyse visuelle' })
+        : parseNaturalCommand(promptText, chatId).catch(() => ({ type: 'custom', payload: { prompt: promptText }, priority: 2, explanation: '' })),
+      formatHistoryContext(chatId).catch(() => ''),
+    ]);
+
+    // ── Save user turn ────────────────────────────
+    const memLabel = file ? `[Fichier: ${file.name}] ${userText}`.trim() : userText;
+    saveMessage(chatId, 'user', memLabel || promptText.slice(0, 200), 'web').catch(() => {});
+
+    // ── Build system prompt ───────────────────────
+    const resolvedType = forceType || task.type || 'custom';
+    const agentInstr   = STREAM_INSTRUCTIONS[resolvedType] || STREAM_INSTRUCTIONS.custom;
+    const systemPrompt = buildNexusPrompt(agentInstr, memoryContext);
+
+    // ── Build user message content ────────────────
+    const contextualPrompt = historyContext
+      ? historyContext + '\nMessage actuel: ' + promptText
+      : promptText;
+
+    const userContent = imageBlock
+      ? [imageBlock, { type: 'text', text: contextualPrompt }]
+      : contextualPrompt;
+
+    const model  = resolvedType === 'vision'
+      ? (process.env.VISION_MODEL || 'claude-3-5-sonnet-20241022')
+      : (process.env.CHAT_MODEL   || 'claude-3-5-haiku-20241022');
+
+    // ── Stream from Claude API ────────────────────
+    const apiKey     = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { send({ error: 'ANTHROPIC_API_KEY manquant' }); res.end(); return; }
+
+    const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        system:     systemPrompt,
+        stream:     true,
+        messages:   [{ role: 'user', content: userContent }],
+      }),
+    });
+
+    if (!claudeResp.ok) {
+      const errData = await claudeResp.json().catch(() => ({}));
+      send({ error: `Claude ${claudeResp.status}: ${errData.error?.message || claudeResp.statusText}` });
+      res.end();
+      return;
+    }
+
+    // ── Forward SSE tokens to client ──────────────
+    const reader  = claudeResp.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText  = '';
+    let buf       = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep incomplete line
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(raw);
+          if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+            const token = evt.delta.text;
+            fullText   += token;
+            send({ token });
+          }
+        } catch { /* ignore malformed SSE lines */ }
+      }
+    }
+
+    send({ done: true, agentType: resolvedType });
+    res.end();
+
+    // ── Async post-save (non-blocking) ────────────
+    setImmediate(async () => {
+      try {
+        await saveMessage(chatId, 'assistant', fullText, resolvedType);
+        extractAndSave('chat', promptText, fullText);
+      } catch (err) {
+        console.error('[Chat/stream] Post-save error:', err.message);
+      }
+    });
+
+  } catch (err) {
+    console.error('[Chat/stream]', err.message);
+    send({ error: err.message });
+    try { res.end(); } catch {}
   }
 });
 
@@ -589,6 +751,77 @@ router.post('/autonomous/health', requireApiKey, async (req, res) => {
     const { runProblemSolver } = await import('./autonomous/problemSolver.js');
     const result = await runProblemSolver();
     res.json({ status: 'done', ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════
+// GOOGLE OAUTH
+// ══════════════════════════════════════════════
+
+// ── GET /nexus/google/status ────────────────────
+router.get('/google/status', requireChatAuth, async (req, res) => {
+  try {
+    const { isGoogleConnected } = await import('./lib/googleAuth.js');
+    const connected = await isGoogleConnected();
+    res.json({ connected });
+  } catch (err) {
+    res.json({ connected: false });
+  }
+});
+
+// ── GET /nexus/google/auth ──────────────────────
+// Redirects to Google OAuth consent screen
+router.get('/google/auth', requireChatAuth, async (req, res) => {
+  try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.status(503).send(`
+        <div style="font-family:sans-serif;padding:40px;background:#0f0f0f;color:#f5f5f5;min-height:100vh">
+          <h2 style="color:#ef4444">⚠️ Google OAuth non configuré</h2>
+          <p>Ajoute ces variables dans <code>.env</code> et sur Render:</p>
+          <pre style="background:#1a1a1a;padding:16px;border-radius:8px;color:#a78bfa">
+GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your_client_secret
+GOOGLE_REDIRECT_URI=https://pronosight2.onrender.com/nexus/google/callback</pre>
+          <p><a href="https://console.cloud.google.com" style="color:#7c3aed">→ console.cloud.google.com</a></p>
+          <a href="/nexus/chat" style="color:#888">← Retour au chat</a>
+        </div>
+      `);
+    }
+    const { getAuthUrl } = await import('./lib/googleAuth.js');
+    res.redirect(getAuthUrl());
+  } catch (err) {
+    res.status(500).send(`Erreur: ${err.message}`);
+  }
+});
+
+// ── GET /nexus/google/callback ──────────────────
+// Receives the code from Google, saves tokens, redirects to chat
+router.get('/google/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) {
+    return res.redirect(`/nexus/chat?google=error&reason=${encodeURIComponent(error)}`);
+  }
+  if (!code) {
+    return res.redirect('/nexus/chat?google=error&reason=no_code');
+  }
+  try {
+    const { exchangeCode } = await import('./lib/googleAuth.js');
+    await exchangeCode(code);
+    console.log('[Google OAuth] Tokens saved successfully');
+    res.redirect('/nexus/chat?google=connected');
+  } catch (err) {
+    console.error('[Google OAuth] Callback error:', err.message);
+    res.redirect(`/nexus/chat?google=error&reason=${encodeURIComponent(err.message)}`);
+  }
+});
+
+// ── GET /nexus/google/disconnect ───────────────
+router.post('/google/disconnect', requireChatAuth, async (req, res) => {
+  try {
+    await query(`DELETE FROM nexus_ltm WHERE key = 'google_oauth_tokens'`);
+    res.json({ status: 'disconnected' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

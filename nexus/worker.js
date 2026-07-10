@@ -24,6 +24,7 @@ import { runFinance }     from './agents/financeAgent.js';
 import { runBusiness }    from './agents/businessAgent.js';
 import { runVision }      from './agents/visionAgent.js';
 import { runCritique }    from './agents/critiqueAgent.js';
+import { runGoogle }      from './agents/googleAgent.js';
 
 const AGENT_MAP = {
   research: runResearch,
@@ -41,6 +42,7 @@ const AGENT_MAP = {
   business: runBusiness,
   vision:   runVision,
   critique: runCritique,
+  google:   runGoogle,
 };
 
 const POLL_INTERVAL_MS = 15_000; // 15 seconds between polls

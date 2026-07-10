@@ -12,7 +12,7 @@ Tu reçois des messages en langage naturel (français ou anglais) et tu les conv
 
 Retourne UNIQUEMENT du JSON valide. Aucun texte avant ou après:
 {
-  "type": "research|write|code|monitor|notify|custom|business|vision|radar|planner|exec|api|finance|critique",
+  "type": "research|write|code|monitor|notify|custom|business|vision|radar|planner|exec|api|finance|critique|google",
   "payload": { ... },
   "priority": 1,
   "explanation": "ce que Nexus va faire en une phrase courte"
@@ -41,6 +41,15 @@ Règles de mapping:
 - "paris/match/pronostic/cote/radar" → radar
 - "planifie/décompose/fais-moi un plan" → planner
 - "bankroll/mise/bet/finance" → finance
+- "lis mes emails/montre mes emails/emails non lus" → google + { action: "read_emails", count: 10, query: "is:unread" }
+- "cherche l'email de/cherche email/recherche email" → google + { action: "search_emails", query: "..." }
+- "envoie un email à/send email to" → google + { action: "send_email", to: "...", subject: "...", body: "..." }
+- "brouillon/draft email" → google + { action: "draft_email", to: "...", subject: "...", body: "..." }
+- "agenda/rdv/événements/qu'est-ce que j'ai aujourd'hui|cette semaine|demain" → google + { action: "get_events", days: 1 }
+- "crée un rdv/ajoute un événement/réunion" → google + { action: "create_event", title: "...", start: "ISO", end: "ISO" }
+- "suis-je libre/disponible le/disponibilité" → google + { action: "check_availability", date: "ISO ou texte" }
+- "trouve le fichier/mes fichiers/Drive/Google Drive" → google + { action: "search_files", query: "..." }
+- "lis le document/ouvre le fichier" → google + { action: "read_file", fileName: "..." }
 - tout le reste → custom + { prompt: message }
 
 Payload par type:
@@ -54,7 +63,8 @@ Payload par type:
 - custom: { prompt: "..." }
 - radar: { match: "...", mode: "pre-match|live|value" }
 - planner: { goal: "..." }
-- critique: { idea: "description complète de l'idée ou du projet" }`;
+- critique: { idea: "description complète de l'idée ou du projet" }
+- google: { action: "read_emails|send_email|draft_email|search_emails|get_events|create_event|check_availability|list_files|search_files|read_file", ...params }`;
 
 /**
  * Parse a natural language message into a structured Nexus task.

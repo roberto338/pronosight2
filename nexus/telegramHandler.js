@@ -183,6 +183,12 @@ export function startTelegramHandler() {
         `🤖 *Autonomous v3.0*\n` +
         `🎯 */decisions* — Décisions en attente (OUI/NON)\n` +
         `💰 */revenue* — Rapport revenus Stripe temps réel\n\n` +
+        `${'─'.repeat(24)}\n` +
+        `🔗 *Google*\n` +
+        `*/google* — Statut connexion\n` +
+        `📧 */gmail [recherche]* — Emails non lus / chercher\n` +
+        `📅 */agenda [jours]* — Événements calendrier\n` +
+        `📁 */drive [recherche]* — Chercher sur Drive\n\n` +
         `_Nexus v3.0 — Autonomous Entrepreneur 24h/24 ✅_`
       );
     });
@@ -686,6 +692,65 @@ export function startTelegramHandler() {
         console.error('[NexusBot] Jarvis error:', err.message);
         await sendNexusMessage(msg.chat.id, `❌ Erreur: ${err.message}`);
       }
+    });
+
+    // ── /google — statut connexion Google ──────────
+    nexusBot.onText(/^\/google/, async (msg) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      try {
+        const { isGoogleConnected } = await import('./lib/googleAuth.js');
+        const connected = await isGoogleConnected();
+        if (connected) {
+          await sendNexusMessage(msg.chat.id,
+            `✅ *Google connecté*\n\nCommandes disponibles:\n` +
+            `📧 */gmail* — 10 derniers emails non lus\n` +
+            `📅 */agenda* — Événements d'aujourd'hui\n` +
+            `📁 */drive [recherche]* — Chercher sur Drive\n\n` +
+            `_Ou parle naturellement: "envoie un email à...", "qu'est-ce que j'ai demain ?"_`
+          );
+        } else {
+          await sendNexusMessage(msg.chat.id,
+            `🔗 *Google non connecté*\n\n` +
+            `Pour connecter Gmail, Calendar et Drive:\n` +
+            `→ https://pronosight2.onrender.com/nexus/google/auth\n\n` +
+            `_Une fois connecté, tu pourras gérer tes emails, agenda et fichiers Drive depuis Nexus._`
+          );
+        }
+      } catch (err) {
+        await sendNexusMessage(msg.chat.id, `❌ Erreur Google: ${err.message}`);
+      }
+    });
+
+    // ── /gmail — derniers emails non lus ───────────
+    nexusBot.onText(/^\/gmail\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const searchQuery = (match[1] || '').trim();
+      const action = searchQuery ? 'search_emails' : 'read_emails';
+      const q      = searchQuery || 'is:unread';
+      await handleCommand(msg.chat.id, 'google',
+        searchQuery ? `Cherche emails: ${searchQuery}` : 'Lis mes emails non lus',
+        { action, count: 10, query: q }
+      );
+    });
+
+    // ── /agenda — événements du jour ───────────────
+    nexusBot.onText(/^\/agenda\s*(\d+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const days = parseInt(match[1] || '7') || 7;
+      await handleCommand(msg.chat.id, 'google',
+        `Montre mes événements des ${days} prochains jours`,
+        { action: 'get_events', days }
+      );
+    });
+
+    // ── /drive [recherche] ─────────────────────────
+    nexusBot.onText(/^\/drive\s*([\s\S]+)?/, async (msg, match) => {
+      if (!isAuthorized(msg.chat.id)) return;
+      const q = (match[1] || '').trim();
+      await handleCommand(msg.chat.id, 'google',
+        q ? `Cherche sur Drive: ${q}` : 'Liste mes fichiers récents sur Drive',
+        { action: q ? 'search_files' : 'list_files', query: q, count: 10 }
+      );
     });
 
     // ── /decisions — décisions autonomes en attente ──

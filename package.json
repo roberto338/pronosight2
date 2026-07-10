@@ -25,6 +25,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "googleapis": "^144.0.0"
   }
 }
