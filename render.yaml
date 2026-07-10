@@ -7,15 +7,63 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+
+      # ── IA ──────────────────────────────────────
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
       - key: GROQ_API_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # ── Données sportives ───────────────────────
       - key: ODDS_API_KEY
         sync: false
       - key: FOOTBALL_DATA_KEY
         sync: false
       - key: RAPIDAPI_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-2.0-flash
+      - key: API_FOOTBALL_KEY
+        sync: false
+
+      # ── Infrastructure ──────────────────────────
+      - key: DATABASE_URL
+        sync: false   # PostgreSQL (Neon ou Render)
+      - key: REDIS_URL
+        sync: false   # Redis (BullMQ / queues)
+
+      # ── Telegram ────────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
+      - key: TELEGRAM_ADMIN_ID
+        sync: false
+
+      # ── Sécurité API interne ────────────────────
+      - key: VICTOR_API_KEY
+        sync: false
+      - key: NEXUS_CHAT_PASSWORD
+        sync: false   # OBLIGATOIRE — le chat Nexus renvoie 503 sinon
+
+      # ── Intégrations Nexus ──────────────────────
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER_EMAIL
+        sync: false
+      - key: BREVO_SENDER_NAME
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: NETLIFY_TOKEN
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: BUFFER_TOKEN
+        sync: false
+      - key: BUFFER_PROFILE_IDS
+        sync: false

@@ -1,18 +1,20 @@
-# PronoSight v5 — Victor IA
+# PronoSight v4.1 — Victor IA + Nexus
 
 Plateforme de pronostics sportifs propulsée par l'intelligence artificielle.
 **Victor** analyse tous les sports, toutes compétitions, 48h à l'avance.
+**Nexus** : assistant multi-agents (chat web + Telegram) avec mémoire long terme et moteurs autonomes.
 
 ## Architecture
 
 | Composant | Technologie |
 |---|---|
 | Backend | Node.js 20 + Express |
-| IA principale | Claude Sonnet (Anthropic) + Web Search |
-| IA fallback | Gemini 2.0 Flash + Groq llama-3.1 |
-| Base de données | PostgreSQL (Render.com) |
+| IA Victor | Gemini 2.0 Flash (+ Google Search) avec fallback Groq llama-3.1 |
+| IA Nexus | Claude (Anthropic) |
+| Base de données | PostgreSQL |
+| Queues | Redis + BullMQ |
 | Bot | Telegram @pronosight_bot |
-| Déploiement | Render.com (auto-deploy depuis GitHub) |
+| Déploiement | Render.com (auto-deploy depuis GitHub) — variables : voir render.yaml |
 
 ## Victor — Le cerveau IA
 

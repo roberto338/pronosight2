@@ -47,7 +47,7 @@ function requireApiKey(req, res, next) {
 }
 
 // ── GET /nexus/dashboard ────────────────────────
-router.get('/dashboard', async (req, res) => {
+router.get('/dashboard', requireChatAuth, async (req, res) => {
   try {
     const [tasks, statsRes, memStats, goalsRes, routinesRes] = await Promise.all([
       listTasks({ limit: 50 }),
@@ -72,6 +72,12 @@ router.get('/dashboard', async (req, res) => {
 
 // ── GET /nexus/status ───────────────────────────
 router.get('/status', async (req, res) => {
+  // Sans API key : simple ping (monitoring uptime), pas de détails internes
+  const key = req.headers['x-api-key'] || req.query.key;
+  const expected = process.env.NEXUS_API_KEY || process.env.VICTOR_API_KEY;
+  if (!expected || key !== expected) {
+    return res.json({ status: 'ok' });
+  }
   try {
     const { rows } = await query(`
       SELECT
