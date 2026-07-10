@@ -1,3 +1,21 @@
+## Base de données — Règle de modification du schéma
+
+Toute modification de structure BDD (table, colonne, index, contrainte) suit
+obligatoirement ce processus, dans un seul et même changement (commit) :
+
+1. Écrire une **migration numérotée** dans `nexus/migrations/`
+   (suivant : `008_xxx.sql`, avec son runner `run_xxx.js` si besoin).
+2. Appliquer la migration sur la base Neon de prod.
+3. **Régénérer `db/schema_neon.sql` par introspection de la prod**
+   (information_schema + pg_indexes + pg_constraint), jamais à la main.
+4. Commiter migration + schéma régénéré ensemble.
+
+**Ne JAMAIS éditer `db/schema_neon.sql` à la main.** Ce fichier est la source
+de vérité de l'état de la base : il reflète la prod, il ne la précède pas.
+Dernière régénération : 10/07/2026 (18 tables — 4 ps_* + 14 nexus_*).
+
+---
+
 ## Comportement par défaut — Critique systématique (Roberto Edition)
 
 ### Déclenchement automatique — sans phrase d'activation
