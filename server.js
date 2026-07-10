@@ -9,8 +9,8 @@ import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
 import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
-import { victorQueue, addLiveJob }  from './queues/victorQueue.js';
-import { setupBullBoard }           from './admin/bullBoard.js';
+import { victorQueue, addLiveJob, getQueueCounts } from './queues/victorQueue.js';
+import { setupQueueDashboard }      from './admin/queueDashboard.js';
 import { nexusRouter, startNexusWorker, startNexusCron, startTelegramHandler } from './nexus/index.js';
 import express from 'express';
 import cors from 'cors';
@@ -479,18 +479,18 @@ app.post('/api/victor/refresh', async (req, res) => {
     return res.status(401).json({ error: 'Non autorisé — x-api-key invalide' });
   }
 
-  console.log('🔄 [Victor/refresh] Refresh manuel demandé → BullMQ');
+  console.log('🔄 [Victor/refresh] Refresh manuel demandé → file PostgreSQL');
 
   try {
     const job = await addLiveJob({ triggeredBy: 'manual-refresh', source: 'api' });
     res.json({
       status:  'queued',
       jobId:   job.id,
-      message: `Job live #${job.id} ajouté à la queue. Résultats dans /api/victor/today dans 30-90 secondes.`,
+      message: `Job live #${job.id} ajouté à la file. Résultats dans /api/victor/today dans 30-90 secondes.`,
     });
   } catch (queueErr) {
-    // Fallback synchrone si Redis indisponible
-    console.warn('⚠️  Queue indisponible, fallback synchrone:', queueErr.message);
+    // Fallback synchrone si la BDD est indisponible
+    console.warn('⚠️  File indisponible, fallback synchrone:', queueErr.message);
     runVictor().then(async (result) => {
       if (result?.events?.length > 0) {
         await broadcastDaily(result).catch(e => console.error('Telegram:', e.message));
@@ -499,7 +499,7 @@ app.post('/api/victor/refresh', async (req, res) => {
 
     res.json({
       status:  'started',
-      message: 'Victor lance l\'analyse (mode direct — Redis indisponible).',
+      message: 'Victor lance l\'analyse (mode direct — file indisponible).',
     });
   }
 });
@@ -509,23 +509,14 @@ app.get('/api/ping', (req, res) => {
   res.json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()) });
 });
 
-// ── ROUTE diagnostic Redis (temporaire) ────────
-app.get('/api/redis-status', async (req, res) => {
-  const hasUrl   = !!process.env.REDIS_URL;
-  const urlStart = process.env.REDIS_URL?.slice(0, 20) || '(vide)';
-  const isTLS    = process.env.REDIS_URL?.startsWith('rediss://') || false;
-  let pingOk     = false;
-  let pingErr    = null;
+// ── ROUTE diagnostic file de jobs ──────────────
+app.get('/api/queue-status', async (req, res) => {
   try {
-    const { redisConnection } = await import('./queues/victorQueue.js');
-    if (redisConnection) {
-      await redisConnection.ping();
-      pingOk = true;
-    }
+    const counts = await getQueueCounts();
+    res.json({ backend: 'postgres', table: 'victor_jobs', counts });
   } catch (e) {
-    pingErr = e.message;
+    res.status(500).json({ backend: 'postgres', error: e.message });
   }
-  res.json({ hasUrl, urlStart, isTLS, pingOk, pingErr, queue: !!victorQueue });
 });
 
 // ── ROUTE 6 : GET /api/victor/status ──────────
@@ -564,22 +555,11 @@ app.get('/api/victor/status', async (req, res) => {
     } catch { /* counts fallback to 0 */ }
   }
 
-  // ── État Redis / BullMQ ──────────────────────
-  const redisUrlSet   = !!process.env.REDIS_URL;
-  const redisIsTLS    = process.env.REDIS_URL?.startsWith('rediss://') || false;
-  const redisPrefix   = process.env.REDIS_URL?.slice(0, 25) || '(vide)';
-  let   redisPingOk   = false;
-  let   redisPingErr  = null;
+  // ── État de la file PostgreSQL ───────────────
+  let queueCounts = null;
   try {
-    if (victorQueue) {
-      const { redisConnection: rc } = await import('./queues/victorQueue.js');
-      if (rc) {
-        const pong = await withTimeout(rc.ping(), 3000, 'TIMEOUT');
-        redisPingOk  = pong === 'PONG';
-        redisPingErr = pong === 'TIMEOUT' ? 'ping timeout 3s' : null;
-      }
-    }
-  } catch (e) { redisPingErr = e.message; }
+    queueCounts = await withTimeout(getQueueCounts(), 3000, null);
+  } catch { /* file indisponible = counts null */ }
 
   res.json({
     status:           dbStatus === 'connected' ? 'ok' : 'degraded',
@@ -591,13 +571,10 @@ app.get('/api/victor/status', async (req, res) => {
     patterns_actifs:  patternsActifs,
     version:          '4.1.0',
     uptime:           Math.round(process.uptime()),
-    bullmq: {
-      redis_url_set: redisUrlSet,
-      redis_prefix:  redisPrefix,
-      redis_tls:     redisIsTLS,
-      queue_active:  !!victorQueue,
-      ping_ok:       redisPingOk,
-      ping_error:    redisPingErr,
+    queue: {
+      backend: 'postgres',
+      active:  !!victorQueue,
+      counts:  queueCounts,
     },
   });
 });
@@ -627,18 +604,18 @@ app.listen(PORT, () => {
   console.log(`    PostgreSQL:     ${process.env.DATABASE_URL      ? '✅' : '❌ manquante'}`);
   console.log(`    Telegram:       ${process.env.TELEGRAM_BOT_TOKEN ? '✅' : '⚠️  optionnelle'}\n`);
 
-  // ── Démarrage Worker BullMQ ───────────────────
+  // ── Démarrage Worker Victor (poller PostgreSQL) ──
   try {
     startWorker();
   } catch (workerErr) {
-    console.warn('⚠️  Worker BullMQ non démarré (Redis indisponible ?):', workerErr.message);
+    console.warn('⚠️  Worker Victor non démarré:', workerErr.message);
   }
 
-  // ── Bull Board dashboard ──────────────────────
+  // ── Dashboard file Victor ─────────────────────
   try {
-    setupBullBoard(app);
+    setupQueueDashboard(app);
   } catch (boardErr) {
-    console.warn('⚠️  Bull Board non monté:', boardErr.message);
+    console.warn('⚠️  Dashboard file non monté:', boardErr.message);
   }
 
   // ── Démarrage du scheduler Victor ────────────
@@ -652,11 +629,6 @@ app.listen(PORT, () => {
   } catch (nexusErr) {
     console.warn('⚠️  Nexus non démarré:', nexusErr.message);
   }
-  // ── Résumé état BullMQ / Redis ───────────────
-  const redisUrl = process.env.REDIS_URL || '';
-  const redisTLS = redisUrl.startsWith('rediss://');
-  console.log(`    Redis URL:      ${redisUrl ? `✅ définie (${redisUrl.slice(0, 25)}...)` : '❌ manquante (BullMQ désactivé)'}`);
-  console.log(`    Redis TLS:      ${redisTLS ? '✅ rediss:// (Upstash)' : redisUrl ? '⚠️  redis:// (non-TLS)' : 'N/A'}`);
-  console.log(`    BullMQ Queue:   ${victorQueue ? '✅ queue active' : '❌ désactivée (pas de Redis)'}`);
-  console.log('🎙️  PronoSight v4.1 — Victor opérationnel (BullMQ activé)\n');
+  console.log('    File de jobs:   ✅ PostgreSQL (victor_jobs) — zéro Redis');
+  console.log('🎙️  PronoSight v4.1 — Victor opérationnel\n');
 });

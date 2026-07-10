@@ -1,19 +1,28 @@
 // ══════════════════════════════════════════════
-// queues/workerManager.js
-// Instancie le Worker BullMQ et dispatche par job name
+// queues/workerManager.js — Worker Victor (poller PostgreSQL)
+//
+// Remplace le Worker BullMQ : claim atomique FOR UPDATE SKIP LOCKED
+// sur victor_jobs, même pattern que nexus/worker.js. Zéro Redis.
+//
+// Sémantique BullMQ conservée :
+//   - concurrency 1 + minimum 10s entre deux jobs (rate limit IA)
+//   - 3 tentatives, backoff exponentiel base 5s
+//   - job.updateProgress() persiste la colonne progress
 // ══════════════════════════════════════════════
 
-import { Worker } from 'bullmq';
-import { redisConnection } from './victorQueue.js';
-import { prematchProcessor }    from './workers/prematchWorker.js';
-import { valueProcessor }       from './workers/valueWorker.js';
-import { liveProcessor }        from './workers/liveWorker.js';
+import { prematchProcessor } from './workers/prematchWorker.js';
+import { valueProcessor }    from './workers/valueWorker.js';
+import { liveProcessor }     from './workers/liveWorker.js';
 import { checkResults, updateVictorStats, weeklyVictorReview } from '../victor/core.js';
-import { discoverNewPatterns }  from '../victor/patterns.js';
-import { sendDailyStats }       from '../bot/telegram.js';
-import { query }                from '../db/database.js';
+import { discoverNewPatterns } from '../victor/patterns.js';
+import { sendDailyStats }    from '../bot/telegram.js';
+import { query }             from '../db/database.js';
+import { pruneOldJobs }      from './victorQueue.js';
 
-// ── Dispatcher principal ───────────────────────
+const POLL_INTERVAL_MS = 10_000; // 1 claim max par tick → max 1 job / 10s (ex-limiter BullMQ)
+const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
+
+// ── Dispatcher principal (inchangé fonctionnellement) ──────────
 async function processor(job) {
   console.log(`\n⚙️  [Worker] Job reçu : ${job.name} #${job.id}`);
 
@@ -36,7 +45,6 @@ async function processor(job) {
       await updateVictorStats();
       await job.updateProgress(85);
 
-      // Envoie les stats du jour sur Telegram
       try {
         const { rows } = await query(
           'SELECT * FROM ps_victor_stats WHERE date = CURRENT_DATE'
@@ -69,51 +77,109 @@ async function processor(job) {
   }
 }
 
-// ── Création du Worker ─────────────────────────
-let workerInstance = null;
+// ── Claim atomique du prochain job ──────────────────────────────
+async function claimNextJob() {
+  const { rows } = await query(`
+    UPDATE victor_jobs
+    SET    status     = 'running',
+           started_at = NOW(),
+           updated_at = NOW(),
+           attempts   = attempts + 1
+    WHERE  id = (
+      SELECT id
+      FROM   victor_jobs
+      WHERE  status = 'pending'
+        AND  (scheduled_for IS NULL OR scheduled_for <= NOW())
+      ORDER  BY priority ASC, created_at ASC
+      LIMIT  1
+      FOR    UPDATE SKIP LOCKED
+    )
+    RETURNING id, name, data, attempts, max_attempts AS "maxAttempts"
+  `);
+  return rows[0] || null;
+}
+
+// ── Exécution d'un job réclamé ──────────────────────────────────
+async function processClaimedJob(row) {
+  const job = {
+    id:   row.id,
+    name: row.name,
+    data: typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}),
+    updateProgress: async (p) => {
+      try {
+        await query(`UPDATE victor_jobs SET progress = $1, updated_at = NOW() WHERE id = $2`, [p, row.id]);
+      } catch { /* le progress est cosmétique — jamais bloquant */ }
+    },
+  };
+
+  try {
+    const result = await processor(job);
+    await query(
+      `UPDATE victor_jobs
+       SET status = 'done', result = $1, error = NULL, completed_at = NOW(), updated_at = NOW()
+       WHERE id = $2`,
+      [JSON.stringify(result ?? {}), row.id]
+    );
+    console.log(`✅ [Worker] Job terminé : ${row.name} #${row.id}`, JSON.stringify(result ?? {}).slice(0, 100));
+  } catch (err) {
+    const willRetry = row.attempts < row.maxAttempts;
+    const backoffMs = BACKOFF_BASE_MS * 2 ** (row.attempts - 1);
+    console.error(`❌ [Worker] Job échoué : ${row.name} #${row.id} (tentative ${row.attempts}/${row.maxAttempts}) — ${err.message}`);
+
+    await query(
+      `UPDATE victor_jobs
+       SET status = $1, error = $2,
+           scheduled_for = CASE WHEN $1 = 'pending' THEN NOW() + ($3 || ' milliseconds')::interval ELSE scheduled_for END,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [willRetry ? 'pending' : 'failed', err.message, String(backoffMs), row.id]
+    );
+  }
+}
+
+// ── Boucle de polling (concurrency 1) ───────────────────────────
+let _running   = false;
+let _timer     = null;
+let _lastPrune = 0;
+
+async function tick() {
+  if (!_running) return;
+  try {
+    const row = await claimNextJob();
+    if (row) await processClaimedJob(row); // séquentiel : 1 job IA à la fois
+
+    // Purge quotidienne des vieux jobs terminés
+    if (Date.now() - _lastPrune > 24 * 60 * 60 * 1000) {
+      _lastPrune = Date.now();
+      const n = await pruneOldJobs(14).catch(() => 0);
+      if (n > 0) console.log(`🧹 [Worker] ${n} vieux job(s) purgés`);
+    }
+  } catch (err) {
+    console.error('❌ [Worker] Poll error:', err.message);
+  } finally {
+    if (_running) _timer = setTimeout(tick, POLL_INTERVAL_MS);
+  }
+}
 
 export function startWorker() {
-  if (!redisConnection) {
-    console.warn('⚠️  Worker BullMQ non démarré — REDIS_URL manquante');
-    return null;
-  }
-  if (workerInstance) {
+  if (_running) {
     console.log('⚙️  Worker déjà démarré');
-    return workerInstance;
+    return true;
   }
+  _running = true;
+  _timer   = setTimeout(tick, 2_000);
+  console.log('⚙️  Worker Victor démarré — poller PostgreSQL (victor_jobs, 1 job / 10s max)');
+  return true;
+}
 
-  workerInstance = new Worker('victor-analysis', processor, {
-    connection:  redisConnection,
-    concurrency: 1, // 1 seul job IA à la fois (rate limits)
-    limiter: {
-      max:      1,
-      duration: 10000, // max 1 job toutes les 10s
-    },
-  });
-
-  // ── Événements du Worker ───────────────────
-  workerInstance.on('completed', (job, result) => {
-    console.log(`✅ [Worker] Job terminé : ${job.name} #${job.id}`, JSON.stringify(result).slice(0, 100));
-  });
-
-  workerInstance.on('failed', (job, err) => {
-    console.error(`❌ [Worker] Job échoué : ${job?.name} #${job?.id} (tentative ${job?.attemptsMade}) — ${err.message}`);
-  });
-
-  workerInstance.on('error', (err) => {
-    console.error('❌ [Worker] Erreur Worker:', err.message);
-  });
-
-  workerInstance.on('stalled', (jobId) => {
-    console.warn(`⚠️  [Worker] Job bloqué : #${jobId}`);
-  });
-
-  console.log('⚙️  Worker BullMQ démarré — queue: victor-analysis (concurrency: 1)');
-  return workerInstance;
+export function stopWorker() {
+  _running = false;
+  if (_timer) { clearTimeout(_timer); _timer = null; }
+  console.log('[Worker] Arrêté (le job en cours se termine)');
 }
 
 export function getWorker() {
-  return workerInstance;
+  return _running ? { backend: 'postgres', running: true } : null;
 }
 
 export default startWorker;

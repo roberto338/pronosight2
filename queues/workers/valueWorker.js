@@ -9,7 +9,7 @@ import { runVictor } from '../../victor/core.js';
  * Processeur du job 'value'.
  * Lancé à 13h00 — refresh des matchs du soir,
  * focus value betting.
- * @param {import('bullmq').Job} job
+ * @param {{id: number, name: string, data: object, updateProgress: (p: number) => Promise<void>}} job
  */
 export async function valueProcessor(job) {
   console.log(`\n🌆 [value #${job.id}] Démarrage analyse value betting...`);

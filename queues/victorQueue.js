@@ -1,110 +1,109 @@
 // ══════════════════════════════════════════════
-// queues/victorQueue.js — BullMQ Queue + Redis
+// queues/victorQueue.js — File Victor en PostgreSQL
 //
-// Connection model (BullMQ requirement):
-//   redisConnection  → shared across all Queue instances (non-blocking)
-//   createConnection → factory for Workers & QueueEvents (blocking / pub-sub,
-//                      each call returns a dedicated IORedis instance)
+// Remplace BullMQ/Redis (Upstash) : les jobs vivent dans la table
+// victor_jobs (migration 008), claim atomique via FOR UPDATE SKIP
+// LOCKED dans workerManager.js. Zéro dépendance Redis.
+//
+// Sémantique BullMQ conservée :
+//   - priority : plus petit = plus prioritaire
+//   - jobId quotidien (prematch-YYYY-MM-DD) → dedupe_key UNIQUE :
+//     un 2e ajout le même jour renvoie le job existant
+//   - attempts/backoff : gérés par workerManager (3 essais, expo 5s)
 // ══════════════════════════════════════════════
 
-import { Queue } from 'bullmq';
-import IORedis from 'ioredis';
+import { query } from '../db/database.js';
 
-// ── Config ─────────────────────────────────────
-const REDIS_URL = process.env.REDIS_URL || '';
-const IS_TLS    = REDIS_URL.startsWith('rediss://');
-
-/** Base IORedis options shared by every connection */
-const BASE_OPTS = {
-  maxRetriesPerRequest: null,   // required by BullMQ
-  enableReadyCheck:     false,
-  lazyConnect:          false,
-  ...(IS_TLS ? { tls: { rejectUnauthorized: false } } : {}),
-};
+// Objet queue minimal — les routes de statut testent seulement sa présence
+export const victorQueue = { backend: 'postgres', table: 'victor_jobs' };
 
 /**
- * Create a new dedicated IORedis connection.
- * Call this for Workers and QueueEvents — they need their own sockets
- * because they issue blocking commands (BLMOVE, SUBSCRIBE) that would
- * stall a shared connection.
- *
- * @param {string} [label]  Optional name shown in logs
- * @returns {IORedis | null}
+ * Insère un job. Si dedupeKey existe déjà (job quotidien), renvoie
+ * le job existant sans en créer un nouveau (comportement jobId BullMQ).
+ * @returns {Promise<{id: number, deduped?: boolean}>}
  */
-export function createConnection(label = 'redis') {
-  if (!REDIS_URL) return null;
-  const conn = new IORedis(REDIS_URL, BASE_OPTS);
-  conn.on('connect', () => console.log(`🔴 [${label}] Redis connecté (${IS_TLS ? 'TLS' : 'plain'})`));
-  conn.on('ready',   () => console.log(`✅ [${label}] Redis prêt`));
-  conn.on('error',  (err) => console.warn(`⚠️  [${label}] Redis erreur:`, err.message));
-  conn.on('close',  ()    => console.warn(`⚠️  [${label}] Redis déconnecté`));
-  return conn;
+async function addJob(name, data = {}, { priority = 5, dedupeKey = null } = {}) {
+  const payload = JSON.stringify({ ...data, addedAt: new Date().toISOString() });
+
+  if (dedupeKey) {
+    const { rows } = await query(
+      `INSERT INTO victor_jobs (name, data, priority, dedupe_key)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (dedupe_key) DO NOTHING
+       RETURNING id`,
+      [name, payload, priority, dedupeKey]
+    );
+    if (rows[0]) return { id: rows[0].id };
+    const { rows: existing } = await query(
+      `SELECT id FROM victor_jobs WHERE dedupe_key = $1`, [dedupeKey]
+    );
+    return { id: existing[0]?.id, deduped: true };
+  }
+
+  const { rows } = await query(
+    `INSERT INTO victor_jobs (name, data, priority)
+     VALUES ($1, $2, $3)
+     RETURNING id`,
+    [name, payload, priority]
+  );
+  return { id: rows[0].id };
 }
 
-// ── Shared Queue connection (non-blocking, reused by all Queue instances) ──
-export const redisConnection = createConnection('queue-shared');
-
-if (!redisConnection) {
-  console.warn('⚠️  REDIS_URL non définie — BullMQ désactivé, fallback synchrone actif');
-}
-
-// ── Queue principale Victor ────────────────────
-export const victorQueue = redisConnection
-  ? new Queue('victor-analysis', {
-      connection: redisConnection,       // shared — Queue only does non-blocking SET/ZADD
-      defaultJobOptions: {
-        attempts:         3,
-        backoff:          { type: 'exponential', delay: 5000 },
-        removeOnComplete: { count: 10 },
-        removeOnFail:     { count: 50 },
-      },
-    })
-  : null;
-
-// ── Queue Events — disabled to save Redis connections ──────────────────────
-// QueueEvents uses a dedicated pub/sub socket (SUBSCRIBE). Disabled here
-// because no code path currently listens to victor-analysis events.
-// Re-enable if you add job-completion hooks: new QueueEvents('victor-analysis', { connection: createConnection('qevents-victor') })
-export const victorQueueEvents = null;
-
-// ── Helpers d'ajout de jobs ────────────────────
+const today = () => new Date().toISOString().slice(0, 10);
 
 export async function addPrematchJob(data = {}) {
-  if (!victorQueue) throw new Error('Redis indisponible');
-  return victorQueue.add('prematch', { ...data, addedAt: new Date().toISOString() }, {
-    priority: 1,
-    jobId: `prematch-${new Date().toISOString().slice(0, 10)}`,
-  });
+  return addJob('prematch', data, { priority: 1, dedupeKey: `prematch-${today()}` });
 }
 
 export async function addValueJob(data = {}) {
-  if (!victorQueue) throw new Error('Redis indisponible');
-  return victorQueue.add('value', { ...data, addedAt: new Date().toISOString() }, {
-    priority: 2,
-    jobId: `value-${new Date().toISOString().slice(0, 10)}`,
-  });
+  return addJob('value', data, { priority: 2, dedupeKey: `value-${today()}` });
 }
 
 export async function addLiveJob(data = {}) {
-  if (!victorQueue) throw new Error('Redis indisponible');
-  return victorQueue.add('live', { ...data, addedAt: new Date().toISOString() }, {
-    priority: 1,
-  });
+  return addJob('live', data, { priority: 1 });
 }
 
 export async function addCheckResultsJob(data = {}) {
-  if (!victorQueue) throw new Error('Redis indisponible');
-  return victorQueue.add('check-results', { ...data, addedAt: new Date().toISOString() }, {
-    priority: 3,
-    jobId: `check-results-${new Date().toISOString().slice(0, 10)}`,
-  });
+  return addJob('check-results', data, { priority: 3, dedupeKey: `check-results-${today()}` });
 }
 
 export async function addWeeklyReviewJob(data = {}) {
-  if (!victorQueue) throw new Error('Redis indisponible');
-  return victorQueue.add('weekly-review', { ...data, addedAt: new Date().toISOString() }, {
-    priority: 5,
-  });
+  return addJob('weekly-review', data, { priority: 5 });
+}
+
+/** Compteurs par statut — utilisé par le dashboard /admin/queues */
+export async function getQueueCounts() {
+  const { rows } = await query(`
+    SELECT status, COUNT(*)::int AS n
+    FROM victor_jobs
+    GROUP BY status
+  `);
+  const counts = { pending: 0, running: 0, done: 0, failed: 0 };
+  for (const r of rows) counts[r.status] = r.n;
+  return counts;
+}
+
+/** Derniers jobs — utilisé par le dashboard /admin/queues */
+export async function getRecentJobs(limit = 30) {
+  const { rows } = await query(`
+    SELECT id, name, status, priority, attempts, progress, error,
+           dedupe_key, created_at, started_at, completed_at
+    FROM victor_jobs
+    ORDER BY created_at DESC
+    LIMIT $1
+  `, [limit]);
+  return rows;
+}
+
+/** Purge des jobs terminés anciens (appelé par le worker, 1×/jour) */
+export async function pruneOldJobs(keepDays = 14) {
+  const { rowCount } = await query(
+    `DELETE FROM victor_jobs
+     WHERE status IN ('done', 'failed')
+       AND created_at < NOW() - ($1 || ' days')::interval`,
+    [String(keepDays)]
+  );
+  return rowCount;
 }
 
 export default victorQueue;

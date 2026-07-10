@@ -1,10 +1,11 @@
 -- ══════════════════════════════════════════════════════════════
 -- PronoSight v4.1 — Schéma PostgreSQL complet (SOURCE DE VÉRITÉ)
 -- Généré depuis l'introspection de la base Neon de prod le 10/07/2026
+-- (mis à jour après migration 008 — victor_jobs)
 -- Compatible Neon.tech / tout PostgreSQL ≥ 13 (gen_random_uuid)
 -- Idempotent : exécutable sur une base vide ou existante
--- 18 tables : 4 ps_* (Victor) + 14 nexus_* (assistant Nexus)
--- Les migrations nexus/migrations/001→007 restent l'historique ;
+-- 19 tables : 4 ps_* (Victor) + 14 nexus_* (Nexus) + victor_jobs (file)
+-- Les migrations nexus/migrations/001→008 restent l'historique ;
 -- ce fichier est l'état de référence pour recréer une base neuve.
 -- ══════════════════════════════════════════════════════════════
 
@@ -335,9 +336,37 @@ CREATE INDEX IF NOT EXISTS idx_outreach_campaign ON nexus_outreach(campaign);
 CREATE INDEX IF NOT EXISTS idx_outreach_followup ON nexus_outreach(follow_up_at);
 CREATE INDEX IF NOT EXISTS idx_outreach_status   ON nexus_outreach(status);
 
+-- ────────────────────────────────────────────────────────────────
+-- PARTIE 3 — FILE DE JOBS VICTOR (migration 008)
+-- Remplace BullMQ/Redis : claim atomique FOR UPDATE SKIP LOCKED
+-- ────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS victor_jobs (
+  id            SERIAL PRIMARY KEY,
+  name          VARCHAR(32) NOT NULL,
+  data          JSONB NOT NULL DEFAULT '{}',
+  status        VARCHAR(16) NOT NULL DEFAULT 'pending',
+  priority      INTEGER NOT NULL DEFAULT 5,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  max_attempts  INTEGER NOT NULL DEFAULT 3,
+  progress      INTEGER NOT NULL DEFAULT 0,
+  error         TEXT,
+  result        JSONB,
+  dedupe_key    VARCHAR(64) UNIQUE,
+  scheduled_for TIMESTAMPTZ,
+  started_at    TIMESTAMPTZ,
+  completed_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_victor_jobs_claim   ON victor_jobs(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_victor_jobs_created ON victor_jobs(created_at DESC);
+
 -- ══════════════════════════════════════════════════════════════
--- Vérification : doit retourner 18 tables
+-- Vérification : doit retourner 19 tables
 -- SELECT table_name FROM information_schema.tables
 -- WHERE table_schema = 'public'
---   AND (table_name LIKE 'ps_%' OR table_name LIKE 'nexus_%');
+--   AND (table_name LIKE 'ps_%' OR table_name LIKE 'nexus_%'
+--        OR table_name = 'victor_jobs');
 -- ══════════════════════════════════════════════════════════════

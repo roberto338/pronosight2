@@ -10,7 +10,7 @@ import { broadcastDaily, sendAlert } from '../../bot/telegram.js';
  * Processeur du job 'live'.
  * Déclenché manuellement via POST /api/victor/refresh
  * ou par un event live (webhook futur).
- * @param {import('bullmq').Job} job
+ * @param {{id: number, name: string, data: object, updateProgress: (p: number) => Promise<void>}} job
  */
 export async function liveProcessor(job) {
   const { triggeredBy = 'manual', matchId = null } = job.data || {};

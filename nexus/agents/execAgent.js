@@ -21,7 +21,7 @@ Tu écris du code JavaScript (ES Modules) qui s'exécute sur Node.js 20+.
 
 RÈGLES ABSOLUES :
 - Utilise uniquement les modules Node.js natifs (fs, path, https, crypto, etc.) ou des modules déjà installés dans le projet
-- Modules projet disponibles : node-fetch, pg, ioredis, bullmq, node-telegram-bot-api, axios
+- Modules projet disponibles : node-fetch, pg, grammy
 - Toujours terminer par console.log() du résultat final
 - Gérer les erreurs avec try/catch
 - Pas d'interactions utilisateur (pas de readline, pas de prompt)

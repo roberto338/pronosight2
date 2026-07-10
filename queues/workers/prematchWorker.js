@@ -9,7 +9,7 @@ import { broadcastDaily } from '../../bot/telegram.js';
 /**
  * Processeur du job 'prematch'.
  * Lancé à 07h00 chaque jour.
- * @param {import('bullmq').Job} job
+ * @param {{id: number, name: string, data: object, updateProgress: (p: number) => Promise<void>}} job
  */
 export async function prematchProcessor(job) {
   console.log(`\n🌅 [prematch #${job.id}] Démarrage analyse pré-match...`);

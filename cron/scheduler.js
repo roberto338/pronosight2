@@ -68,7 +68,7 @@ const jobHebdo = cron.schedule('0 1 * * 0', async () => {
 // ══════════════════════════════════════════════
 
 export function startScheduler() {
-  console.log('⏰ Démarrage du scheduler Victor (BullMQ)...');
+  console.log('⏰ Démarrage du scheduler Victor (file PostgreSQL)...');
   jobMatin.start();
   console.log('   Job Matin     (07h00 Paris) démarré');
   jobSoir.start();
@@ -95,8 +95,8 @@ export function startScheduler() {
   }
 
   console.log('\n⏰ Scheduler Victor démarré :');
-  console.log('   🌅 07h00 — prematch        → BullMQ (quotidien)');
-  console.log('   🌆 13h00 — value           → BullMQ (quotidien)');
-  console.log('   🔍 23h30 — check-results   → BullMQ (quotidien)');
-  console.log('   📊 01h00 — weekly-review   → BullMQ (dimanche)\n');
+  console.log('   🌅 07h00 — prematch        → victor_jobs (quotidien)');
+  console.log('   🌆 13h00 — value           → victor_jobs (quotidien)');
+  console.log('   🔍 23h30 — check-results   → victor_jobs (quotidien)');
+  console.log('   📊 01h00 — weekly-review   → victor_jobs (dimanche)\n');
 }
