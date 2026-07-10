@@ -30,7 +30,7 @@ services:
 
       # ── Infrastructure ──────────────────────────
       - key: DATABASE_URL
-        sync: false   # PostgreSQL (Neon ou Render)
+        sync: false   # PostgreSQL Neon — schéma de référence : db/schema_neon.sql (node db/init.js)
       - key: REDIS_URL
         sync: false   # Redis (BullMQ / queues)
 

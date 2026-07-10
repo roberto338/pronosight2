@@ -235,7 +235,7 @@ async function initDB() {
   // ── Étape 1 : Exécution du schéma SQL ────────
   console.log('📐 Création des tables (schéma)...');
   try {
-    const schemaSql = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
+    const schemaSql = readFileSync(join(__dirname, 'schema_neon.sql'), 'utf8');
     // Supprimer les lignes de commentaires SQL avant le split
     const cleanedSql = schemaSql
       .split('\n')
@@ -251,7 +251,7 @@ async function initDB() {
     for (const stmt of statements) {
       await query(stmt);
     }
-    console.log('   ✅ Tables créées (ps_pronostics, ps_victor_patterns, ps_victor_rules, ps_victor_stats)');
+    console.log('   ✅ Tables créées (4 ps_* Victor + 14 nexus_* — voir db/schema_neon.sql)');
   } catch (err) {
     console.error('   ❌ Erreur création tables:', err.message);
     process.exit(1);

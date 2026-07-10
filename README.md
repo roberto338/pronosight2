@@ -50,7 +50,7 @@ pronosight/
 │   └── scheduler.js     ← 4 jobs planifiés (07h, 13h, 23h30, dim 01h)
 │
 ├── db/
-│   ├── schema.sql       ← 4 tables ps_* PostgreSQL
+│   ├── schema_neon.sql  ← SOURCE DE VÉRITÉ : 18 tables (4 ps_* + 14 nexus_*)
 │   ├── database.js      ← Pool pg, query(), getClient()
 │   └── init.js          ← Init tables + 15 patterns (node db/init.js)
 │
