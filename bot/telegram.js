@@ -3,7 +3,7 @@
 // ══════════════════════════════════════════════
 
 import 'dotenv/config';
-import TelegramBot from 'node-telegram-bot-api';
+import TelegramBot from '../nexus/lib/telegramCompat.js';
 
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
@@ -15,7 +15,7 @@ if (!TOKEN) {
   console.warn('⚠️  TELEGRAM_BOT_TOKEN absent — bot désactivé');
 } else {
   try {
-    bot = new TelegramBot(TOKEN, { polling: false });
+    bot = new TelegramBot(TOKEN); // envoi seul — pas de polling (le polling vit dans nexus/telegramHandler.js)
     console.log('📱 Bot Telegram initialisé');
   } catch (err) {
     console.error('❌ Erreur init Telegram:', err.message);

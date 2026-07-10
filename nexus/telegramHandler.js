@@ -5,7 +5,7 @@
 // renvoie les résultats automatiquement
 // ══════════════════════════════════════════════
 
-import TelegramBot from 'node-telegram-bot-api';
+import TelegramBot from './lib/telegramCompat.js';
 import { dispatchTask }                   from './orchestrator.js';
 import { saveMessage, clearHistory, getHistory } from './lib/memory.js';
 import { remember, forget, listMemories } from './lib/longTermMemory.js';
