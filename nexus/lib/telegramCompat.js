@@ -98,24 +98,42 @@ export default class CompatBot {
 
   startPolling(pollingOpts = {}) {
     const timeout = pollingOpts.params?.timeout;
-    this._running = this.bot
-      .start({
-        allowed_updates: ['message', 'callback_query'],
-        ...(timeout ? { timeout } : {}),
-      })
-      .catch((err) => {
-        const compat = toCompatError(err);
-        const handlers = this._eventHandlers.polling_error;
-        if (handlers.length === 0) {
-          console.error('[TelegramCompat] Polling error:', compat.message);
-          return;
+    // Comme node-telegram-bot-api : le polling ne meurt JAMAIS sur erreur.
+    // grammY traite les erreurs getUpdates (dont le 409 pendant le
+    // chevauchement de deploys) comme fatales → on relance en boucle
+    // avec délai jusqu'à stopPolling().
+    this._stopped = false;
+    this._retryDelayMs = this._retryDelayMs ?? 10_000;
+
+    const loop = async () => {
+      while (!this._stopped) {
+        try {
+          await this.bot.start({
+            allowed_updates: ['message', 'callback_query'],
+            ...(timeout ? { timeout } : {}),
+          });
+          return; // start() ne se résout qu'après bot.stop() → arrêt volontaire
+        } catch (err) {
+          const compat = toCompatError(err);
+          const handlers = this._eventHandlers.polling_error;
+          if (handlers.length === 0) {
+            console.error('[TelegramCompat] Polling error:', compat.message);
+          } else {
+            for (const cb of handlers) this._safeCall(cb, compat);
+          }
+          await new Promise((r) => setTimeout(r, this._retryDelayMs));
         }
-        for (const cb of handlers) this._safeCall(cb, compat);
-      });
+      }
+    };
+
+    this._running = loop();
     return this._running;
   }
 
-  async stopPolling() { await this.bot.stop(); }
+  async stopPolling() {
+    this._stopped = true;
+    await this.bot.stop();
+  }
 
   // ── Envoi (mêmes signatures que node-telegram-bot-api) ──
   async sendMessage(chatId, text, opts) {
