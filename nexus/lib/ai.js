@@ -14,12 +14,15 @@ export async function callClaude(systemPrompt, userMessage, options = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY non configurée');
 
-  const model     = options.model     || 'claude-3-5-haiku-20241022';
+  const model     = options.model     || 'claude-haiku-4-5';
   const maxTokens = options.maxTokens || 4096;
 
   const body = {
     model,
     max_tokens: maxTokens,
+    // Sonnet 5 active le thinking adaptatif par défaut — off explicite pour
+    // garder le comportement (et le budget max_tokens) des anciens modèles
+    thinking: { type: 'disabled' },
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
   };
@@ -40,7 +43,8 @@ export async function callClaude(systemPrompt, userMessage, options = {}) {
   }
 
   const data = await resp.json();
-  return data.content?.[0]?.text || '';
+  // Le premier bloc peut être un bloc thinking — chercher le bloc texte
+  return data.content?.find((b) => b.type === 'text')?.text || '';
 }
 
 /**

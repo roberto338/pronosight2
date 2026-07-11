@@ -162,7 +162,7 @@ export async function runCritique({ input, meta = {} }) {
 
   // Force Claude — critique requires best reasoning, never Gemini
   const output = await callClaude(systemPrompt, idea, {
-    model:     'claude-3-5-sonnet-20241022',
+    model:     'claude-sonnet-5',
     maxTokens: 4096,
   });
 
@@ -177,7 +177,7 @@ export async function runCritique({ input, meta = {} }) {
     meta: {
       agent:    'critique',
       score,
-      model:    'claude-3-5-sonnet-20241022',
+      model:    'claude-sonnet-5',
       ideaSnip: idea.slice(0, 120),
     },
   };

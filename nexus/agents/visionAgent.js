@@ -40,11 +40,13 @@ export async function runVision({ input, meta = {} }) {
     imageBlock = { type: 'image', source: { type: 'url', url: imageUrl } };
   }
 
-  const model = process.env.VISION_MODEL || 'claude-3-5-sonnet-20241022';
+  const model = process.env.VISION_MODEL || 'claude-sonnet-5';
 
   const body = {
     model,
     max_tokens: meta.maxTokens || 4096,
+    // Sonnet 5 : thinking adaptatif par défaut — off pour garder le budget tokens
+    thinking:   { type: 'disabled' },
     system:     VISION_SYSTEM,
     messages: [{
       role:    'user',
@@ -71,7 +73,8 @@ export async function runVision({ input, meta = {} }) {
   }
 
   const data   = await resp.json();
-  const output = data.content?.[0]?.text || '';
+  // Le premier bloc peut être un bloc thinking — chercher le bloc texte
+  const output = data.content?.find((b) => b.type === 'text')?.text || '';
 
   return {
     output,

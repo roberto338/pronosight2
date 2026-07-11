@@ -507,8 +507,8 @@ router.post('/chat/stream', requireChatAuth, async (req, res) => {
       : contextualPrompt;
 
     const model  = resolvedType === 'vision'
-      ? (process.env.VISION_MODEL || 'claude-3-5-sonnet-20241022')
-      : (process.env.CHAT_MODEL   || 'claude-3-5-haiku-20241022');
+      ? (process.env.VISION_MODEL || 'claude-sonnet-5')
+      : (process.env.CHAT_MODEL   || 'claude-haiku-4-5');
 
     // ── Stream from Claude API ────────────────────
     const apiKey     = process.env.ANTHROPIC_API_KEY;

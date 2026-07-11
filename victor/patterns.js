@@ -311,8 +311,10 @@ ${JSON.stringify(resultats, null, 2).slice(0, 15000)}`;
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-5',
         max_tokens: 4000,
+        // Sonnet 5 : thinking adaptatif par défaut — off pour que le JSON tienne dans max_tokens
+        thinking: { type: 'disabled' },
         system: 'Tu analyses des données sportives et retournes uniquement un JSON valide. Aucun texte hors JSON.',
         messages: [{ role: 'user', content: prompt }],
       }),

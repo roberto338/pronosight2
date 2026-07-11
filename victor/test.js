@@ -9,7 +9,7 @@ import { runVictor } from './core.js';
 import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 
 console.log('🧪 Test Victor — démarrage\n');
-console.log('   Modèle  :', 'claude-sonnet-4-20250514');
+console.log('   Modèle  :', 'claude-sonnet-5');
 console.log('   API Key :', process.env.ANTHROPIC_API_KEY ? '✅ présente' : '❌ manquante');
 console.log('   DB URL  :', process.env.DATABASE_URL ? '✅ présente' : '❌ manquante');
 console.log('');

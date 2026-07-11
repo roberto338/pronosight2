@@ -23,7 +23,7 @@ INSERT INTO nexus_ltm (category, key, value) VALUES
   (
     'preference',
     'critique_model',
-    'Toujours utiliser Claude (claude-3-5-sonnet) pour les critiques business, jamais Gemini. La critique nécessite le meilleur raisonnement disponible.'
+    'Toujours utiliser Claude (claude-sonnet-5) pour les critiques business, jamais Gemini. La critique nécessite le meilleur raisonnement disponible.'
   ),
   (
     'preference',
