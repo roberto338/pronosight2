@@ -127,29 +127,85 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
 }
 
 /**
- * Auto-select AI provider.
- * Gemini for research (useSearch), Claude otherwise.
- * Falls back to Gemini if Claude not configured.
+ * Call Groq (format OpenAI) — filet de sécurité gratuit quand
+ * Claude (crédits) et Gemini (quota free tier) sont indisponibles.
  * @param {string} systemPrompt
  * @param {string} userMessage
- * @param {Object} options  { provider?: 'claude'|'gemini', useSearch?, maxTokens?, ... }
+ * @param {Object} options
+ * @returns {Promise<string>}
+ */
+export async function callGroq(systemPrompt, userMessage, options = {}) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY non configurée');
+
+  const model     = options.groqModel || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  const maxTokens = Math.min(options.maxTokens || 4096, 8192);
+
+  const messages = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: userMessage });
+
+  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.7 }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(`Groq HTTP ${resp.status} [${model}]: ${err.error?.message || resp.statusText}`);
+  }
+
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+/**
+ * Auto-select AI provider.
+ * Chaîne de secours : Claude (qualité) → Groq (gratuit) → Gemini (dernier recours).
+ * useSearch force Gemini en premier (seul à avoir le grounding Google Search),
+ * avec Groq en secours dégradé (sans recherche web).
+ * @param {string} systemPrompt
+ * @param {string} userMessage
+ * @param {Object} options  { provider?: 'claude'|'gemini'|'groq', useSearch?, maxTokens?, ... }
  * @returns {Promise<string>}
  */
 export async function callAI(systemPrompt, userMessage, options = {}) {
   const { provider, useSearch } = options;
 
+  if (provider === 'groq') {
+    return callGroq(systemPrompt, userMessage, options);
+  }
+
   if (provider === 'gemini' || useSearch) {
-    return callGemini(systemPrompt, userMessage, options);
+    try {
+      return await callGemini(systemPrompt, userMessage, options);
+    } catch (err) {
+      console.warn('[Nexus/AI] Gemini failed, fallback Groq (sans recherche web):', err.message);
+      return callGroq(systemPrompt, userMessage, options);
+    }
   }
 
   if (provider === 'claude' || process.env.ANTHROPIC_API_KEY) {
     try {
       return await callClaude(systemPrompt, userMessage, options);
     } catch (err) {
-      console.warn('[Nexus/AI] Claude failed, fallback Gemini:', err.message);
-      return callGemini(systemPrompt, userMessage, options);
+      console.warn('[Nexus/AI] Claude failed, fallback Groq:', err.message);
+      try {
+        return await callGroq(systemPrompt, userMessage, options);
+      } catch (groqErr) {
+        console.warn('[Nexus/AI] Groq failed, fallback Gemini:', groqErr.message);
+        return callGemini(systemPrompt, userMessage, options);
+      }
     }
   }
 
-  return callGemini(systemPrompt, userMessage, options);
+  try {
+    return await callGroq(systemPrompt, userMessage, options);
+  } catch {
+    return callGemini(systemPrompt, userMessage, options);
+  }
 }
