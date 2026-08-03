@@ -1,17 +1,28 @@
-// ══════════════════════════════════════════════
+﻿// ══════════════════════════════════════════════
 // victor/core.js — Cerveau de Victor
 // ══════════════════════════════════════════════
 
-import dotenv from 'dotenv';
-dotenv.config({ override: true });
+// ⚠️ Doit rester le TOUT PREMIER import : les imports ESM sont hoistés,
+// donc db/database.js s'évaluerait avant un dotenv.config() placé dans le
+// corps du module — et lirait un process.env.DATABASE_URL encore vide.
+import 'dotenv/config';
 import { query } from '../db/database.js';
 import { VICTOR_PROMPT } from './prompt.js';
 import { detectPatterns, formatPatternsForVictor } from './patterns.js';
+import {
+  getFixturesOfDay, getResultsOfDay, buildFormIndex,
+  formatFixturesForPrompt, fetchWithTimeout,
+} from './sources.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL        = process.env.GEMINI_MODEL        || 'gemini-flash-latest';
 const GEMINI_SEARCH_MODEL = process.env.GEMINI_SEARCH_MODEL || 'gemini-flash-latest';
 const GEMMA_MODEL       = process.env.GEMMA_MODEL        || 'gemma-4-31b-it';
+const GROQ_API_KEY      = process.env.GROQ_API_KEY;
+const GROQ_MODEL        = process.env.GROQ_MODEL         || 'llama-3.3-70b-versatile';
+
+// Timeout de tout appel IA. Sans lui un blocage réseau fige le worker.
+const AI_TIMEOUT_MS     = Number(process.env.AI_TIMEOUT_MS || 90_000);
 
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
@@ -155,226 +166,98 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
   // Pour les analyses JSON, utiliser GEMINI_MODEL (gemini-2.5-flash)
   const modelName = model || (search ? GEMINI_SEARCH_MODEL : GEMINI_MODEL);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
-  const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!resp.ok) { const t = await resp.text(); throw new Error(`Gemini HTTP ${resp.status}: ${t}`); }
+  // Timeout obligatoire : sans lui, un blocage réseau fige le worker
+  // (concurrency 1) et le job reste 'running' indéfiniment.
+  const resp = await fetchWithTimeout(
+    url,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    AI_TIMEOUT_MS
+  );
+  if (!resp.ok) { const t = await resp.text(); throw new Error(`Gemini HTTP ${resp.status}: ${t.slice(0, 200)}`); }
   const data = await resp.json();
   if (data.error) throw new Error(`Gemini: ${data.error.message}`);
   return data;
 }
 
-// ── Appel Gemini : étape 1 = recherche web, étape 2 = stats, étape 3 = JSON ──
-async function callGemini(systemPrompt, userMessage, maxTokens = 8000) {
-  const today = new Date().toLocaleDateString('fr-FR', {
-    timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric'
-  });
-  const todayEN = new Date().toLocaleDateString('en-US', {
-    timeZone: 'Europe/Paris', month: 'long', day: 'numeric', year: 'numeric'
-  });
+// ── Appel Groq (3e moteur — indépendant du quota Google) ──────
+async function groqRequest(systemPrompt, userMessage, maxTokens = 8000) {
+  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY manquante');
+  const resp = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userMessage },
+      ],
+      max_tokens: Math.min(maxTokens, 8000),
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+    }),
+  }, AI_TIMEOUT_MS);
 
-  // ÉTAPE 1 : Recherche des vrais matchs du jour (requête courte et ciblée)
-  console.log('   🔍 Étape 1 — Recherche matchs réels du jour...');
-  let matchList = '';
-  try {
-    const step1 = await geminiRequest(
-      [{ role: 'user', parts: [{ text:
-        `Quels matchs sportifs ont lieu aujourd'hui ${today} ? Cherche sur internet et liste tous les matchs réels : football (Ligue 1, Premier League, Liga, Serie A, Champions League, Europa League), basketball NBA, tennis, rugby. Pour chaque match : équipes exactes, heure, compétition. Texte libre.`
-      }] }],
-      { maxTokens: 2500, search: true }
-    );
-    matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-    console.log(`   ✅ Matchs trouvés : ${matchList.length} chars`);
-  } catch (err) {
-    console.warn('   ⚠️  Étape 1 échouée:', err.message);
-  }
-
-  if (!matchList) throw new Error('Recherche Google Step 1 vide — aucun match trouvé');
-
-  // ÉTAPE 2 : Stats réelles pour les matchs trouvés
-  console.log('   📊 Étape 2 — Récupération stats (forme, H2H, blessés)...');
-  let statsData = '';
-  try {
-    const step2 = await geminiRequest(
-      [{ role: 'user', parts: [{ text:
-        `Pour les matchs suivants du ${today}, trouve sur internet les statistiques réelles :
-${matchList}
-
-Pour chaque match indique :
-- Forme récente des 2 équipes (5 derniers matchs : V/N/D et scores)
-- Bilan head-to-head récent
-- Blessés / suspendus importants
-- Position au classement et enjeu du match
-- Moyenne de buts marqués/encaissés cette saison
-Réponds en texte libre détaillé.`
-      }] }],
-      { maxTokens: 4000, search: true }
-    );
-    statsData = step2.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-    console.log(`   ✅ Stats récupérées : ${statsData.length} chars`);
-  } catch (err) {
-    console.warn('   ⚠️  Étape 2 (stats) partielle:', err.message);
-  }
-
-  // ÉTAPE 3 : Analyse JSON stricte avec les données réelles
-  console.log('   🧠 Étape 3 — Génération JSON analyse...');
-  const analysisPrompt =
-    `${systemPrompt}\n\n---\n\n${userMessage}\n\n` +
-    `══ MATCHS RÉELS DU ${today} (source Google — utilise UNIQUEMENT ces matchs) ══\n${matchList}\n\n` +
-    (statsData ? `══ STATISTIQUES RÉELLES ══\n${statsData}\n\n` : '') +
-    `⚠️ N'invente aucun match. N'analyse que les matchs listés ci-dessus.`;
-
-  const step3 = await geminiRequest(
-    [{ role: 'user', parts: [{ text: analysisPrompt }] }],
-    { maxTokens, jsonMode: true }
-  );
-  return step3;
+  if (!resp.ok) { const t = await resp.text(); throw new Error(`Groq HTTP ${resp.status}: ${t.slice(0, 200)}`); }
+  const data = await resp.json();
+  if (data.error) throw new Error(`Groq: ${data.error.message}`);
+  // Ré-emballé au format Gemini pour qu'extractJSON n'ait qu'un seul format à gérer
+  return { candidates: [{ content: { parts: [{ text: data.choices?.[0]?.message?.content || '' }] } }] };
 }
 
-// ── Appel Gemma : 3 étapes — matchs réels + stats + analyse JSON ──
-async function callGemmaVictor(systemPrompt, userMessage, maxTokens = 8000) {
-  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
-
-  const today = new Date().toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric' });
-
-  // ÉTAPE 1 : Gemini + Google Search → vrais matchs du jour
-  console.log('   🔍 Étape 1 — Recherche matchs réels du jour...');
-  let matchList = '';
-  try {
-    const step1 = await geminiRequest(
-      [{ role: 'user', parts: [{ text: `Recherche sur internet les matchs sportifs qui ont lieu AUJOURD'HUI ${today}.
-Inclus : football (Ligue 1, Premier League, Liga, Champions League, Europa League), basketball (NBA, EuroLeague), tennis (tournois en cours), rugby, autres sports majeurs.
-Pour chaque match donne : équipes exactes, heure, compétition. Minimum 6 matchs réels. Texte libre.` }] }],
-      { maxTokens: 2500, search: true }
-    );
-    matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-    console.log(`   ✅ Matchs trouvés : ${matchList.length} chars`);
-  } catch (err) {
-    console.warn('   ⚠️  Étape 1 échouée:', err.message);
-  }
-
-  if (!matchList) throw new Error('Impossible de trouver des matchs réels via Google Search');
-
-  // ÉTAPE 2 : Gemini + Google Search → stats réelles pour chaque match
-  console.log('   📊 Étape 2 — Récupération stats réelles (forme, H2H, blessés)...');
-  let statsData = '';
-  try {
-    const step2 = await geminiRequest(
-      [{ role: 'user', parts: [{ text: `Pour les matchs suivants qui ont lieu aujourd'hui ${today}, recherche sur internet les statistiques réelles :
-${matchList}
-
-Pour chaque match, trouve :
-- Forme récente de chaque équipe (5 derniers matchs : V/N/D avec scores)
-- Bilan head-to-head (dernières confrontations directes)
-- Absences importantes / blessés / suspendus
-- Position au classement et contexte de l'enjeu
-- Statistiques de buts (moyenne buts marqués/encaissés)
-
-Réponds en texte libre avec toutes les stats trouvées.` }] }],
-      { maxTokens: 4000, search: true }
-    );
-    statsData = step2.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-    console.log(`   ✅ Stats récupérées : ${statsData.length} chars`);
-  } catch (err) {
-    console.warn('   ⚠️  Étape 2 (stats) échouée:', err.message);
-  }
-
-  // ÉTAPE 3 : Gemma 4 31B → analyse JSON avec toutes les données réelles
-  console.log(`   🧠 Étape 3 — Analyse Gemma (${GEMMA_MODEL}) avec stats réelles...`);
-  const analysisPrompt = `${systemPrompt}
-
----
-
-${userMessage}
-
-══ DONNÉES RÉELLES TROUVÉES VIA GOOGLE (utilise UNIQUEMENT ces matchs et stats) ══
-
-📅 MATCHS DU JOUR (${today}) :
-${matchList}
-
-📊 STATISTIQUES RÉELLES :
-${statsData || '(stats non disponibles pour certains matchs)'}
-
-⚠️ RÈGLE ABSOLUE : N'analyse QUE les matchs listés ci-dessus. N'invente aucun match, aucun score, aucune stat.`;
-
-  const step3 = await geminiRequest(
-    [{ role: 'user', parts: [{ text: analysisPrompt }] }],
-    { maxTokens, jsonMode: true, model: GEMMA_MODEL }
-  );
-  return step3;
-}
-
-// ── callAI : Recherche commune → Gemini JSON ou Gemma JSON ───
+// ── callAI : cascade Gemini JSON → Gemma → Groq ───────────────
+//
+// La découverte des matchs ne passe PLUS par googleSearch (quota
+// épuisé + matchs hallucinés). Les faits arrivent déjà dans
+// `userMessage`, construits par victor/sources.js. L'IA ne fait
+// plus qu'analyser des données réelles.
 async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
-  if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
+  const erreurs = [];
 
-  const today = new Date().toLocaleDateString('fr-FR', {
-    timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit', year: 'numeric'
-  });
-
-  // ── Étape 1 : Recherche vrais matchs (commune) ──
-  console.log('   🔍 Étape 1 — Recherche matchs réels du jour...');
-  let matchList = '';
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // ── 1. Gemini en mode JSON strict (primaire) ──
+  if (GEMINI_API_KEY) {
     try {
-      const step1 = await geminiRequest(
-        [{ role: 'user', parts: [{ text:
-          `Quels matchs sportifs ont lieu aujourd'hui ${today} ? Cherche sur internet et liste tous les matchs réels : football (Ligue 1, Premier League, Liga, Serie A, Champions League, Europa League), basketball NBA, tennis, rugby. Pour chaque match : équipes exactes, heure, compétition. Texte libre.`
-        }] }],
-        { maxTokens: 2500, search: true }
+      const data = await geminiRequest(
+        [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }],
+        { maxTokens, jsonMode: true }
       );
-      matchList = step1.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-      if (matchList) break;
+      console.log(`   🤖 Moteur : Gemini (${GEMINI_MODEL})`);
+      return { source: 'gemini', data };
     } catch (err) {
-      if (attempt === 3) throw new Error(`Recherche matchs échouée après 3 tentatives: ${err.message}`);
-      console.warn(`   ⚠️  Tentative ${attempt} échouée, retry...`);
-      await new Promise(r => setTimeout(r, 3000 * attempt));
+      erreurs.push(`gemini: ${err.message}`);
+      console.warn(`   ⚠️  Gemini échoué (${err.message.slice(0, 120)}) — bascule Gemma`);
+    }
+
+    // ── 2. Gemma (même clé, quota distinct) ──
+    // Gemma ne supporte pas responseMimeType → extractJSON parse le texte brut.
+    try {
+      const data = await geminiRequest(
+        [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}\n\nRéponds UNIQUEMENT avec le JSON brut, sans markdown, sans texte avant ou après.` }] }],
+        { maxTokens, jsonMode: false, model: GEMMA_MODEL }
+      );
+      console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
+      return { source: 'gemma', data };
+    } catch (err) {
+      erreurs.push(`gemma: ${err.message}`);
+      console.warn(`   ⚠️  Gemma échoué (${err.message.slice(0, 120)}) — bascule Groq`);
     }
   }
-  console.log(`   ✅ Matchs trouvés : ${matchList.length} chars`);
 
-  // ── Étape 2 : Stats réelles (commune) ──
-  console.log('   📊 Étape 2 — Récupération stats (forme, H2H, blessés)...');
-  let statsData = '';
-  try {
-    const step2 = await geminiRequest(
-      [{ role: 'user', parts: [{ text:
-        `Pour les matchs suivants du ${today}, trouve sur internet les statistiques réelles :\n${matchList}\n\nPour chaque match : forme récente des 2 équipes (5 derniers matchs V/N/D), bilan H2H, blessés/suspendus, classement, moyenne de buts. Texte libre détaillé.`
-      }] }],
-      { maxTokens: 4000, search: true }
-    );
-    statsData = step2.candidates?.flatMap(c => c.content?.parts || []).filter(p => p.text).map(p => p.text).join('') || '';
-    console.log(`   ✅ Stats récupérées : ${statsData.length} chars`);
-  } catch (err) {
-    console.warn('   ⚠️  Stats partielles:', err.message);
+  // ── 3. Groq (fournisseur différent : survit à une panne Google) ──
+  if (GROQ_API_KEY) {
+    try {
+      const data = await groqRequest(
+        `${systemPrompt}\n\nRéponds UNIQUEMENT avec du JSON valide.`,
+        userMessage,
+        maxTokens
+      );
+      console.log(`   🤖 Moteur : Groq (${GROQ_MODEL})`);
+      return { source: 'groq', data };
+    } catch (err) {
+      erreurs.push(`groq: ${err.message}`);
+    }
   }
 
-  // ── Contexte commun à injecter dans l'analyse ──
-  const dataContext =
-    `══ MATCHS RÉELS DU ${today} (source Google — utilise UNIQUEMENT ces matchs) ══\n${matchList}\n\n` +
-    (statsData ? `══ STATISTIQUES RÉELLES ══\n${statsData}\n\n` : '') +
-    `⚠️ N'invente aucun match. N'analyse que les matchs listés ci-dessus.`;
-
-  // ── Étape 3 : Gemini JSON (primaire) ──
-  console.log('   🧠 Étape 3 — Analyse JSON (Gemini)...');
-  try {
-    const step3 = await geminiRequest(
-      [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}\n\n${dataContext}` }] }],
-      { maxTokens, jsonMode: true }
-    );
-    console.log('   🤖 Moteur : Gemini JSON');
-    return { source: 'gemini', data: step3 };
-  } catch (err) {
-    console.warn(`   ⚠️  Gemini JSON échoué (${err.message}) — bascule Gemma`);
-  }
-
-  // ── Étape 3 fallback : Gemma JSON avec données déjà collectées ──
-  // Gemma ne supporte pas responseMimeType → jsonMode: false, extractJSON parse le texte brut
-  console.log(`   🧠 Étape 3 fallback — Analyse JSON (${GEMMA_MODEL})...`);
-  const step3gemma = await geminiRequest(
-    [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}\n\n${dataContext}\n\nRéponds UNIQUEMENT avec le JSON brut, sans markdown, sans texte avant ou après.` }] }],
-    { maxTokens, jsonMode: false, model: GEMMA_MODEL }
-  );
-  console.log(`   🤖 Moteur : Gemma (${GEMMA_MODEL})`);
-  return { source: 'gemma', data: step3gemma };
+  throw new Error(`Tous les moteurs IA ont échoué — ${erreurs.join(' | ')}`);
 }
 
 // ══════════════════════════════════════════════
@@ -451,9 +334,63 @@ function extractJSON(aiResponse) {
       .replace(/\r/g, ' ')
       .replace(/\s+/g, ' ');
     return JSON.parse(oneLine);
+  } catch (_) {}
+
+  // Tentative 4 : réparation d'une réponse TRONQUÉE.
+  // Les modèles à raisonnement (Gemini 2.5) consomment leur budget de
+  // sortie en réflexion et peuvent s'arrêter en plein milieu du JSON.
+  // Plutôt que de tout perdre, on coupe à la dernière structure complète
+  // et on referme. Mieux vaut 5 pronostics que zéro.
+  try {
+    const repare = repairTruncatedJSON(raw.slice(raw.indexOf('{')));
+    const data = JSON.parse(repare);
+    console.warn(`   ⚠️  Réponse IA tronquée — JSON réparé (${data.events?.length ?? 0} event(s) récupéré(s))`);
+    return data;
   } catch (e) {
-    throw new Error(`JSON invalide après 3 tentatives: ${e.message}`);
+    throw new Error(`JSON invalide après 4 tentatives: ${e.message}`);
   }
+}
+
+/**
+ * Referme un JSON interrompu en cours d'écriture : on tronque à la
+ * dernière valeur complète, puis on ferme les structures encore ouvertes.
+ * @param {string} s  texte débutant par '{'
+ * @returns {string}  JSON syntaxiquement valide
+ */
+export function repairTruncatedJSON(s) {
+  // On ne coupe QUE sur une fermeture de structure ('}' ou ']'). Couper
+  // ailleurs laisserait un objet à moitié écrit : un event sans
+  // pronostic_principal serait inséré en base avec des colonnes vides.
+  // Mieux vaut perdre le dernier match que d'enregistrer une coquille.
+  let dansChaine = false, echap = false, coupe = -1;
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (echap)      { echap = false; continue; }
+    if (c === '\\') { echap = true;  continue; }
+    if (c === '"')  { dansChaine = !dansChaine; continue; }
+    if (dansChaine) continue;
+    if (c === '}' || c === ']') coupe = i;
+  }
+
+  if (coupe === -1) throw new Error('Rien de récupérable dans la réponse tronquée');
+
+  const tete = s.slice(0, coupe + 1);
+
+  // Recalcule les structures encore ouvertes à la position de coupe
+  const ouverts = [];
+  dansChaine = false; echap = false;
+  for (let i = 0; i < tete.length; i++) {
+    const c = tete[i];
+    if (echap)      { echap = false; continue; }
+    if (c === '\\') { echap = true;  continue; }
+    if (c === '"')  { dansChaine = !dansChaine; continue; }
+    if (dansChaine) continue;
+    if (c === '{' || c === '[') ouverts.push(c === '{' ? '}' : ']');
+    else if (c === '}' || c === ']') ouverts.pop();
+  }
+
+  return tete + ouverts.reverse().join('');
 }
 
 // ══════════════════════════════════════════════
@@ -515,44 +452,27 @@ export async function runVictor() {
     timeZone: 'Europe/Paris'
   });
   const dateISO = today.toISOString().slice(0, 10);
-  const dateEN  = today.toLocaleDateString('en-US', {
-    month: 'long', day: 'numeric', year: 'numeric', timeZone: 'Europe/Paris'
-  });
 
-  // ── Détection fenêtre FIFA (trêve internationale) ──
-  // Fenêtres 2025/2026 : mars 20-25 / sept 1-9 / oct 6-14 / nov 10-18
-  const parisDate = new Date(today.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
-  const m = parisDate.getMonth() + 1; // 1-12
-  const d = parisDate.getDate();
-  const isFifaWindow = (m === 3  && d >= 20 && d <= 31)  // Mars
-                    || (m === 6  && d >= 1  && d <= 10)  // Juin
-                    || (m === 9  && d >= 1  && d <= 9)   // Septembre
-                    || (m === 10 && d >= 6  && d <= 14)  // Octobre
-                    || (m === 11 && d >= 10 && d <= 18); // Novembre
+  // ── Matchs réels du jour (sources factuelles, aucun LLM) ──────
+  // Remplace l'ancienne découverte par googleSearch : quota Gemini
+  // épuisé, et surtout Victor inventait des matchs inexistants.
+  console.log('📡 Récupération des matchs réels du jour...');
+  const fixtures = await getFixturesOfDay(dateISO);
+  const aVenir   = fixtures.filter(f => f.status !== 'FT');
 
-  const fifaContext = isFifaWindow ? `
-CONTEXTE FENÊTRE FIFA ACTIVE — PRIORITÉ ABSOLUE :
-Aujourd'hui ${dateStr} des matchs internationaux se jouent partout dans le monde.
-Recherche OBLIGATOIRE :
-1. "qualifications coupe du monde 2026 ${dateStr}"
-2. "World Cup 2026 qualifiers ${dateEN}"
-3. "international friendlies ${dateEN}"
-4. "matchs amicaux internationaux ce soir"
-5. "friendly football matches today ${dateEN}"
-6. "matchs foot ce soir ${dateStr}"
-Les qualifications ET amicaux internationaux sont prioritaires sur les championnats domestiques.
-` : `
-CONTEXTE CHAMPIONNATS DOMESTIQUES :
-Aujourd'hui ${dateStr} les championnats nationaux et coupes continentales sont en cours.
-Recherche OBLIGATOIRE :
-1. "football matches today ${dateEN}"
-2. "matchs foot ce soir ${dateStr}"
-3. "Ligue 1 Premier League Liga Bundesliga Serie A ${dateEN}"
-4. "Champions League Europa League Coupe de France ${dateEN}"
-5. "NBA basketball matches tonight"
-6. "tennis results today ${dateEN}"
-Couvre TOUS les sports disponibles : football clubs, basketball, tennis, MMA...
-`;
+  if (aVenir.length === 0) {
+    console.warn(`⚠️  Aucun match à venir trouvé pour le ${dateISO} — analyse annulée`);
+    return {
+      date: dateISO,
+      generated_at: new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }),
+      events: [],
+      raison: 'aucun match disponible ce jour',
+    };
+  }
+
+  console.log('📊 Construction de l\'indice de forme...');
+  const formIndex   = await buildFormIndex(20).catch(() => new Map());
+  const matchsReels = formatFixturesForPrompt(aVenir, formIndex);
 
   // ── Message utilisateur ──────────────────────
   const userMessage = `Nous sommes le ${dateStr}.
@@ -560,10 +480,19 @@ Couvre TOUS les sports disponibles : football clubs, basketball, tennis, MMA...
 ${briefing}
 
 ${patternsTexte}
-${fifaContext}
-Tu dois trouver un maximum de matchs avec des enjeux réels. Minimum 3 matchs, idéalement 5-8.
 
-Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Réponds UNIQUEMENT avec ce JSON :
+══ MATCHS RÉELS DU ${dateStr} ══
+Cette liste provient d'APIs sportives officielles. Elle est exhaustive et vérifiée.
+
+${matchsReels}
+
+⚠️ RÈGLES ABSOLUES :
+- N'analyse QUE des matchs de la liste ci-dessus. N'en invente AUCUN autre.
+- Reprends les noms d'équipes EXACTEMENT tels qu'écrits ci-dessus.
+- Si la forme d'une équipe n'est pas fournie, ne l'invente pas : dis-le et baisse ta confiance.
+- Sélectionne les ${Math.min(aVenir.length, 8)} matchs les plus intéressants (enjeu, value).
+
+Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON :
 {
   "date": "YYYY-MM-DD",
   "generated_at": "HH:MM",
@@ -608,7 +537,7 @@ Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Ré
 }`;
 
   // ── Appel Claude ─────────────────────────────
-  console.log('🤖 Appel Claude API (web_search activé)...');
+  console.log(`🤖 Analyse IA de ${aVenir.length} match(s) réel(s)...`);
   let claudeResp;
   try {
     claudeResp = await callAI(VICTOR_PROMPT, userMessage, 8000);
@@ -690,30 +619,8 @@ Lance l'analyse complète et retourne le JSON avec tous les matchs trouvés. Ré
  */
 // ── Helpers checkResults ─────────────────────
 
-/**
- * Récupère tous les matchs terminés du jour via API-Football.
- * Retourne un tableau plat de fixtures avec score.
- */
-async function fetchApiFootballResults(dateISO) {
-  // Accepte les deux noms de variable (cohérence server.js vs victor)
-  const API_KEY = process.env.API_FOOTBALL_KEY || process.env.RAPIDAPI_KEY;
-  if (!API_KEY) return [];
-  try {
-    const url = `https://v3.football.api-sports.io/fixtures?date=${dateISO}&status=FT`;
-    const resp = await fetch(url, {
-      headers: { 'x-apisports-key': API_KEY },
-    });
-    if (!resp.ok) {
-      console.warn(`   ⚠️  API-Football HTTP ${resp.status}`);
-      return [];
-    }
-    const data = await resp.json();
-    return data.response || [];
-  } catch (err) {
-    console.warn(`   ⚠️  API-Football indisponible: ${err.message}`);
-    return [];
-  }
-}
+// La récupération des scores vit désormais dans victor/sources.js
+// (getResultsOfDay) : multi-sources, avec détection des refus HTTP 200.
 
 /**
  * Normalise un nom d'équipe pour la comparaison : minuscules, sans accents, sans ponctuation.
@@ -779,46 +686,93 @@ function teamsMatch(a, b) {
 }
 
 /**
- * Tente de matcher un pronostic DB (string "TeamA vs TeamB") avec un fixture API-Football.
- * Retourne le fixture correspondant ou null.
+ * Tente de matcher un pronostic DB (string "TeamA vs TeamB") avec un
+ * match normalisé de victor/sources.js. Retourne le match ou null.
  */
-function matchFixture(pronoMatch, fixtures) {
-  const parts = pronoMatch.split(/\s+vs\.?\s+/i);
+export function matchFixture(pronoMatch, fixtures) {
+  const parts = String(pronoMatch || '').split(/\s+vs\.?\s+/i);
   if (parts.length < 2) return null;
   const [a, b] = parts.map(normalizeTeam);
 
   return fixtures.find(f => {
-    const home = normalizeTeam(f.teams?.home?.name || '');
-    const away = normalizeTeam(f.teams?.away?.name || '');
+    const home = normalizeTeam(f.home || '');
+    const away = normalizeTeam(f.away || '');
     return (teamsMatch(home, a) && teamsMatch(away, b))
         || (teamsMatch(home, b) && teamsMatch(away, a));
   }) || null;
 }
 
 /**
- * Évalue si le pronostic principal est correct d'après le score réel.
- * Logique simple sur les cas fréquents — Claude prend le relais pour les cas complexes.
+ * Évalue si un pronostic est correct d'après le score réel.
+ * Déterministe — aucun appel LLM.
+ *
+ * ⚠️ L'ordre des tests est critique. "Portugal -2.5" est un HANDICAP
+ * (gagner par 3+ buts d'écart), pas un "Under 2.5 buts". L'ancienne
+ * version testait l'Over/Under en premier et inversait donc tous les
+ * handicaps — ce qui corrompait le taux de réussite à la source.
+ *
+ * @param {string} pronostic          ex. "Victoire Portugal", "Portugal -2.5", "Over 2.5"
+ * @param {number} homeGoals
+ * @param {number} awayGoals
+ * @param {string} [homeName]         nom de l'équipe à domicile (si connu)
+ * @param {string} [awayName]         nom de l'équipe à l'extérieur (si connu)
+ * @returns {boolean|null}            null = cas non géré → fallback IA
  */
-function evalPronostic(pronosticPrincipal, homeGoals, awayGoals) {
-  const p = (pronosticPrincipal || '').toLowerCase();
-  const diff = homeGoals - awayGoals;
+export function evalPronostic(pronostic, homeGoals, awayGoals, homeName = '', awayName = '') {
+  const p = String(pronostic || '').toLowerCase().replace(',', '.');
+  if (!p) return null;
 
-  if (/victoire.*(dom|home|équipe a|team a|\b1\b)/i.test(p) || /home win/i.test(p)) return diff > 0;
-  if (/victoire.*(ext|away|équipe b|team b|\b2\b)/i.test(p) || /away win/i.test(p)) return diff < 0;
-  if (/nul|draw|\b[xX]\b/.test(p)) return diff === 0;
-  if (/\+2\.5|over 2\.5|plus de 2\.5/i.test(p)) return (homeGoals + awayGoals) > 2.5;
-  if (/-2\.5|under 2\.5|moins de 2\.5/i.test(p)) return (homeGoals + awayGoals) < 2.5;
-  if (/\+1\.5|over 1\.5/i.test(p)) return (homeGoals + awayGoals) > 1.5;
-  if (/btts|les deux.*marquent|both.*score/i.test(p)) return homeGoals > 0 && awayGoals > 0;
-  return null; // cas non géré → fallback Claude
+  const diff  = homeGoals - awayGoals;
+  const total = homeGoals + awayGoals;
+
+  const nomDom  = normalizeTeam(homeName);
+  const nomExt  = normalizeTeam(awayName);
+  const pNorm   = normalizeTeam(p);
+  const viseDom = Boolean(nomDom && pNorm.includes(nomDom));
+  const viseExt = Boolean(nomExt && pNorm.includes(nomExt));
+
+  // ── 1. HANDICAP — impérativement avant l'Over/Under ──────────
+  // Reconnu si : le mot "handicap", ou un ±N accolé à un nom d'équipe.
+  const mHcp = p.match(/([+-]\s*\d+(?:\.\d+)?)/);
+  const estHandicap = mHcp && (/handicap|hcp/.test(p) || ((viseDom || viseExt) && !/(over|under|plus de|moins de|buts|goals|but)/.test(p)));
+  if (estHandicap) {
+    const h = parseFloat(mHcp[1].replace(/\s+/g, ''));
+    // Handicap appliqué à l'équipe visée : son écart + handicap doit rester > 0
+    return viseExt && !viseDom ? (-diff + h) > 0 : (diff + h) > 0;
+  }
+
+  // ── 2. OVER / UNDER (buts totaux) ────────────────────────────
+  const mTot = p.match(/(over|under|plus de|moins de|\+|-)\s*(\d+(?:\.\d+)?)/);
+  if (mTot && /(over|under|plus de|moins de|buts|goals)/.test(p)) {
+    const seuil = parseFloat(mTot[2]);
+    const estOver = /over|plus de|\+/.test(mTot[1]);
+    return estOver ? total > seuil : total < seuil;
+  }
+
+  // ── 3. Match nul ─────────────────────────────────────────────
+  // "X" seul = nul, mais pas le "X" d'un pari combiné type "1/X"
+  // (mi-temps/fin de match), qui doit partir en arbitrage IA.
+  if (/\bnul\b|\bdraw\b/.test(p) || /^[xn]$/.test(p.trim())) return diff === 0;
+
+  // ── 4. 1N2, y compris désigné par le nom de l'équipe ─────────
+  const estVictoire = /victoire|win|gagne|vainqueur/.test(p);
+  if (estVictoire && viseDom && !viseExt) return diff > 0;
+  if (estVictoire && viseExt && !viseDom) return diff < 0;
+  if (/victoire.*(dom|home|équipe a|team a|\b1\b)|home win/.test(p)) return diff > 0;
+  if (/victoire.*(ext|away|équipe b|team b|\b2\b)|away win/.test(p)) return diff < 0;
+
+  // ── 5. Les deux équipes marquent ─────────────────────────────
+  if (/btts|les deux.*marquent|both.*score/.test(p)) return homeGoals > 0 && awayGoals > 0;
+
+  return null; // cas non géré → fallback IA
 }
 
 /**
- * Évalue si le value_bet est correct (même logique simple).
+ * Évalue si le value_bet est correct (même logique).
  */
-function evalValueBet(valueBet, homeGoals, awayGoals) {
-  if (!valueBet || valueBet === 'aucun') return null;
-  return evalPronostic(valueBet, homeGoals, awayGoals);
+export function evalValueBet(valueBet, homeGoals, awayGoals, homeName = '', awayName = '') {
+  if (!valueBet || /^aucun$/i.test(String(valueBet).trim())) return null;
+  return evalPronostic(valueBet, homeGoals, awayGoals, homeName, awayName);
 }
 
 export async function checkResults() {
@@ -840,70 +794,72 @@ export async function checkResults() {
 
   console.log(`📋 ${pronostics.length} pronostic(s) à vérifier...`);
 
-  // ── Source primaire : API-Football ────────────
-  const fixtures = await fetchApiFootballResults(dateISO);
-  console.log(`   📡 API-Football: ${fixtures.length} match(s) terminé(s) récupéré(s)`);
+  // ── Source primaire : APIs sportives (football-data / TSDB / API-Football) ──
+  const fixtures = await getResultsOfDay(dateISO);
 
   for (const p of pronostics) {
     try {
       let scoreReel = null, resultatReel = null, pronosticCorrect = null, valueBetCorrect = null;
-      let source = 'claude';
+      let source = 'ia';
 
-      // ── Tentative API-Football ─────────────────
+      // ── Tentative sources factuelles ───────────
       const fixture = matchFixture(p.match, fixtures);
 
       if (fixture) {
-        const status = fixture.fixture?.status?.short;
-        // Guard : match pas encore terminé
-        if (!['FT', 'AET', 'PEN'].includes(status)) {
-          console.log(`   ⏳ ${p.match} — Pas encore terminé (${status}), skip`);
+        // Guard : match pas encore terminé (getResultsOfDay ne renvoie
+        // en principe que du FT, mais on ne fait pas confiance à l'amont)
+        if (fixture.status !== 'FT') {
+          console.log(`   ⏳ ${p.match} — Pas encore terminé (${fixture.status}), skip`);
           continue;
         }
 
-        const hg = fixture.goals?.home ?? 0;
-        const ag = fixture.goals?.away ?? 0;
+        const hg = fixture.homeGoals ?? 0;
+        const ag = fixture.awayGoals ?? 0;
         scoreReel = `${hg}-${ag}`;
-        resultatReel = `${fixture.teams?.home?.name} ${hg}-${ag} ${fixture.teams?.away?.name}`;
-        pronosticCorrect = evalPronostic(p.pronostic_principal, hg, ag);
-        valueBetCorrect  = evalValueBet(p.value_bet, hg, ag);
-        source = 'api-football';
+        resultatReel = `${fixture.home} ${hg}-${ag} ${fixture.away}`;
+        pronosticCorrect = evalPronostic(p.pronostic_principal, hg, ag, fixture.home, fixture.away);
+        valueBetCorrect  = evalValueBet(p.value_bet, hg, ag, fixture.home, fixture.away);
+        source = fixture.source;
       }
 
-      // ── Fallback Gemma si match absent ou eval impossible ─────
-      if (source === 'claude' || pronosticCorrect === null) {
-        console.log(`   🤖 Fallback Gemma (${GEMMA_MODEL}) pour "${p.match}"...`);
-        const userMsg = `Quel est le résultat final du match "${p.match}" joué aujourd'hui (${dateISO}) ?
-Réponds UNIQUEMENT avec ce JSON (pas de texte autour) :
-{
-  "score_reel": "X-X",
-  "resultat_reel": "description courte",
-  "pronostic_correct": true,
-  "value_bet_correct": true,
-  "commentaire": ""
-}
-Le pronostic principal était : "${p.pronostic_principal}"
-Le value bet était : "${p.value_bet || 'aucun'}"
-Si le match n'est pas encore terminé, réponds : { "skip": true }`;
+      // ── Match introuvable dans les sources : on NE DEMANDE PAS
+      // le score à l'IA. Sans accès web elle l'inventerait, et c'est
+      // exactement l'hallucination qu'on cherche à éliminer. On laisse
+      // le pronostic en attente : il sera repris au prochain passage.
+      if (!fixture) {
+        console.log(`   ❔ ${p.match} — Absent des sources, laissé en attente`);
+        continue;
+      }
+
+      // ── Score connu mais type de pari non géré par evalPronostic :
+      // l'IA ne fait qu'ARBITRER un score déjà factuel. Aucun risque
+      // d'invention — on lui interdit de fournir le score.
+      if (pronosticCorrect === null) {
+        console.log(`   🤖 Arbitrage IA pour "${p.match}" (${scoreReel})...`);
+        const userMsg = `Score final RÉEL et vérifié : ${resultatReel}
+(${fixture.home} a marqué ${fixture.homeGoals}, ${fixture.away} a marqué ${fixture.awayGoals})
+
+Pronostic principal à juger : "${p.pronostic_principal}"
+Value bet à juger : "${p.value_bet || 'aucun'}"
+
+Le score ci-dessus est un fait établi : ne le remets pas en cause et n'en propose aucun autre.
+Détermine uniquement si chaque pari est gagné. Réponds UNIQUEMENT avec ce JSON :
+{ "pronostic_correct": true, "value_bet_correct": true, "commentaire": "" }
+Utilise null si un pari est impossible à trancher.`;
 
         try {
-          const resp = await callAI(
-            'Tu cherches les résultats sportifs réels du jour. Réponds uniquement en JSON.',
+          const resp   = await callAI(
+            'Tu arbitres des paris sportifs à partir d\'un score fourni. Réponds uniquement en JSON.',
             userMsg,
             400
           );
-          const result = extractJSON(resp); // resp = { source, data } — extractJSON gère le wrapper
-          if (result.skip) {
-            console.log(`   ⏳ ${p.match} — Pas encore terminé selon Claude, skip`);
-            continue;
-          }
-          scoreReel        = result.score_reel      || scoreReel;
-          resultatReel     = result.resultat_reel   || resultatReel;
-          pronosticCorrect = result.pronostic_correct ?? pronosticCorrect;
+          const result = extractJSON(resp);
+          pronosticCorrect = result.pronostic_correct ?? null;
           valueBetCorrect  = result.value_bet_correct ?? valueBetCorrect;
-          source = 'gemma';
-        } catch (gemmaErr) {
-          console.warn(`   ⚠️  Gemma fallback échoué pour "${p.match}": ${gemmaErr.message}`);
-          continue;
+          source = `${fixture.source}+ia`;
+        } catch (iaErr) {
+          console.warn(`   ⚠️  Arbitrage IA échoué pour "${p.match}": ${iaErr.message}`);
+          // Le score reste factuel et exploitable : on l'enregistre quand même
         }
       }
 
@@ -1112,14 +1068,14 @@ Réponds UNIQUEMENT avec ce JSON :
 
   let reviewData;
   try {
-    const resp = await callGemmaVictor(
+    const resp = await callAI(
       'Tu analyses des données sportives. Réponds uniquement en JSON valide, sans texte hors JSON.',
       prompt,
       2000
     );
     reviewData = extractJSON(resp);
   } catch (err) {
-    console.error(`❌ [Review] Erreur Gemma (${GEMMA_MODEL}):`, err.message);
+    console.error('❌ [Review] Tous les moteurs IA ont échoué:', err.message);
     return;
   }
 

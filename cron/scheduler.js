@@ -11,6 +11,7 @@ import {
   addValueJob,
   addCheckResultsJob,
   addWeeklyReviewJob,
+  addHeartbeatJob,
 } from '../queues/victorQueue.js';
 
 // ── Helper : timestamp Paris ──────────────────
@@ -64,6 +65,18 @@ const jobHebdo = cron.schedule('0 1 * * 0', async () => {
 }, { timezone: 'Europe/Paris', scheduled: false });
 
 // ══════════════════════════════════════════════
+// JOB 5 — Heartbeat (08h30 chaque jour)
+//
+// Passe APRÈS le job du matin : si l'analyse de 07h a échoué,
+// le heartbeat de 08h30 le signale le jour même. C'est le job qui
+// rend toute panne visible en moins de 24h.
+// ══════════════════════════════════════════════
+const jobHeartbeat = cron.schedule('30 8 * * *', async () => {
+  console.log(`\n💓 [${now()}] Victor — Ajout job heartbeat...`);
+  await enqueue('heartbeat', addHeartbeatJob, { source: 'cron-heartbeat' });
+}, { timezone: 'Europe/Paris', scheduled: false });
+
+// ══════════════════════════════════════════════
 // START SCHEDULER
 // ══════════════════════════════════════════════
 
@@ -77,6 +90,8 @@ export function startScheduler() {
   console.log('   Job Résultats (23h30 Paris) démarré');
   jobHebdo.start();
   console.log('   Job Hebdo     (Dim 01h00 Paris) démarré');
+  jobHeartbeat.start();
+  console.log('   Job Heartbeat (08h30 Paris) démarré');
 
   // ── Keepalive Render free tier ────────────────
   const RENDER_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
@@ -96,6 +111,7 @@ export function startScheduler() {
 
   console.log('\n⏰ Scheduler Victor démarré :');
   console.log('   🌅 07h00 — prematch        → victor_jobs (quotidien)');
+  console.log('   💓 08h30 — heartbeat       → victor_jobs (quotidien)');
   console.log('   🌆 13h00 — value           → victor_jobs (quotidien)');
   console.log('   🔍 23h30 — check-results   → victor_jobs (quotidien)');
   console.log('   📊 01h00 — weekly-review   → victor_jobs (dimanche)\n');

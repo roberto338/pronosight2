@@ -15,12 +15,51 @@ import { valueProcessor }    from './workers/valueWorker.js';
 import { liveProcessor }     from './workers/liveWorker.js';
 import { checkResults, updateVictorStats, weeklyVictorReview } from '../victor/core.js';
 import { discoverNewPatterns } from '../victor/patterns.js';
-import { sendDailyStats }    from '../bot/telegram.js';
+import { sendDailyStats, sendHeartbeat } from '../bot/telegram.js';
+import { runHealthcheck }    from '../victor/healthcheck.js';
 import { query }             from '../db/database.js';
 import { pruneOldJobs }      from './victorQueue.js';
 
 const POLL_INTERVAL_MS = 10_000; // 1 claim max par tick → max 1 job / 10s (ex-limiter BullMQ)
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
+const STALE_AFTER_MIN  = Number(process.env.JOB_STALE_MINUTES || 20);
+const RETRY_WINDOW_H   = Number(process.env.JOB_RETRY_WINDOW_HOURS || 2);
+
+// ── Reprise des jobs orphelins ──────────────────────────────────
+// Un job passé en 'running' dont le process meurt (redéploiement Render,
+// spin-down du free tier, OOM) n'est plus jamais repris : claimNextJob()
+// ne regarde que 'pending'. 26 jobs sont ainsi restés figés du 15/07 au
+// 03/08/2026 — panne invisible de 3 semaines. Ce balayage est le filet.
+async function requeueStaleJobs() {
+  try {
+    // Un job récent mérite un retry (redémarrage Render passager).
+    // Un job ancien ne doit PAS être rejoué : il porterait un contexte
+    // périmé, et 26 zombies accumulés partiraient tous d'un coup au
+    // premier déploiement. Au-delà de RETRY_WINDOW_H → abandon direct.
+    const { rows } = await query(`
+      UPDATE victor_jobs
+      SET    status = CASE
+                        WHEN attempts < max_attempts
+                         AND started_at > NOW() - ($2 || ' hours')::interval
+                        THEN 'pending' ELSE 'failed'
+                      END,
+             error  = COALESCE(error, 'Job orphelin — process interrompu en cours de traitement'),
+             updated_at = NOW()
+      WHERE  status = 'running'
+        AND  started_at < NOW() - ($1 || ' minutes')::interval
+      RETURNING id, name, status
+    `, [String(STALE_AFTER_MIN), String(RETRY_WINDOW_H)]);
+
+    if (rows.length > 0) {
+      const requeues = rows.filter(r => r.status === 'pending').length;
+      console.warn(`♻️  [Worker] ${rows.length} job(s) orphelin(s) — ${requeues} requeué(s), ${rows.length - requeues} abandonné(s) (trop ancien)`);
+    }
+    return rows.length;
+  } catch (err) {
+    console.error('❌ [Worker] Balayage des orphelins impossible:', err.message);
+    return 0;
+  }
+}
 
 // ── Dispatcher principal (inchangé fonctionnellement) ──────────
 async function processor(job) {
@@ -69,6 +108,16 @@ async function processor(job) {
       await weeklyVictorReview();
       await job.updateProgress(100);
       return { done: true, week: new Date().toISOString().slice(0, 10) };
+    }
+
+    case 'heartbeat': {
+      console.log(`\n💓 [heartbeat #${job.id}] Diagnostic de santé...`);
+      await job.updateProgress(30);
+      const diag = await runHealthcheck();
+      await job.updateProgress(70);
+      await sendHeartbeat(diag);
+      await job.updateProgress(100);
+      return { done: true, problemes: diag.problemes };
     }
 
     default:
@@ -145,6 +194,7 @@ let _lastPrune = 0;
 async function tick() {
   if (!_running) return;
   try {
+    await requeueStaleJobs();     // avant tout claim : libère les zombies
     const row = await claimNextJob();
     if (row) await processClaimedJob(row); // séquentiel : 1 job IA à la fois
 

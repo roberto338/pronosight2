@@ -4,7 +4,7 @@
 // ══════════════════════════════════════════════
 
 import { runVictor } from '../../victor/core.js';
-import { broadcastDaily } from '../../bot/telegram.js';
+import { broadcastDaily, sendAlert } from '../../bot/telegram.js';
 
 /**
  * Processeur du job 'prematch'.
@@ -25,11 +25,18 @@ export async function prematchProcessor(job) {
   console.log(`   ✅ [prematch #${job.id}] ${nbPronostics} pronostic(s) générés`);
 
   // ── Broadcast Telegram ─────────────────────
+  // Zéro pronostic n'est PAS un cas normal à passer sous silence :
+  // c'est ainsi que 3 semaines de panne sont passées inaperçues.
+  let telegramSent = false;
   if (nbPronostics > 0) {
     await broadcastDaily(result);
+    telegramSent = true;
     console.log(`   📱 [prematch #${job.id}] Telegram envoyé`);
   } else {
-    console.warn(`   ⚠️  [prematch #${job.id}] Aucun pronostic — Telegram non envoyé`);
+    const raison = result?.raison || 'cause inconnue';
+    console.warn(`   ⚠️  [prematch #${job.id}] Aucun pronostic généré — ${raison}`);
+    await sendAlert(`Victor n'a généré aucun pronostic ce matin (${raison}).`, 'danger')
+      .catch(e => console.error('   ❌ Alerte Telegram impossible:', e.message));
   }
 
   await job.updateProgress(100);
@@ -37,7 +44,8 @@ export async function prematchProcessor(job) {
   return {
     date:          result?.date,
     nbPronostics,
-    telegramSent:  nbPronostics > 0,
+    telegramSent,
+    raison:        result?.raison ?? null,
     generatedAt:   new Date().toISOString(),
   };
 }

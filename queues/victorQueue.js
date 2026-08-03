@@ -26,14 +26,31 @@ async function addJob(name, data = {}, { priority = 5, dedupeKey = null } = {}) 
   const payload = JSON.stringify({ ...data, addedAt: new Date().toISOString() });
 
   if (dedupeKey) {
+    // La déduplication ne doit PAS emprisonner la journée : si le job du
+    // jour a échoué ou s'est figé, un nouvel ajout doit le relancer.
+    // Sans ce DO UPDATE, un seul plantage matinal bloquait tous les
+    // déclenchements suivants jusqu'au lendemain.
     const { rows } = await query(
       `INSERT INTO victor_jobs (name, data, priority, dedupe_key)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (dedupe_key) DO NOTHING
+       ON CONFLICT (dedupe_key) DO UPDATE
+         SET status        = 'pending',
+             data          = EXCLUDED.data,
+             attempts      = 0,
+             progress      = 0,
+             error         = NULL,
+             scheduled_for = NULL,
+             started_at    = NULL,
+             completed_at  = NULL,
+             updated_at    = NOW()
+         WHERE victor_jobs.status = 'failed'
+            OR (victor_jobs.status = 'running'
+                AND victor_jobs.started_at < NOW() - INTERVAL '20 minutes')
        RETURNING id`,
       [name, payload, priority, dedupeKey]
     );
     if (rows[0]) return { id: rows[0].id };
+    // Aucune ligne renvoyée = job déjà 'pending' ou 'done' → on le réutilise
     const { rows: existing } = await query(
       `SELECT id FROM victor_jobs WHERE dedupe_key = $1`, [dedupeKey]
     );
@@ -69,6 +86,10 @@ export async function addCheckResultsJob(data = {}) {
 
 export async function addWeeklyReviewJob(data = {}) {
   return addJob('weekly-review', data, { priority: 5 });
+}
+
+export async function addHeartbeatJob(data = {}) {
+  return addJob('heartbeat', data, { priority: 4, dedupeKey: `heartbeat-${today()}` });
 }
 
 /** Compteurs par statut — utilisé par le dashboard /admin/queues */

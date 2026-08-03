@@ -9,7 +9,10 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch --env-file=.env server.js"
+    "dev": "node --watch --env-file=.env server.js",
+    "test": "node victor/test-unit.js",
+    "test:live": "node victor/test-unit.js --live",
+    "health": "node victor/healthcheck.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -73,7 +73,13 @@ export function getEmojiBySport(sport = '') {
 // ══════════════════════════════════════════════
 
 export async function broadcastDaily(victorData) {
-  if (!bot || !CHANNEL_ID) return;
+  // Ne JAMAIS sortir en silence : une env var manquante rendait tout le
+  // système muet sans la moindre trace dans les logs.
+  if (!bot || !CHANNEL_ID) {
+    throw new Error(
+      `Broadcast impossible — ${!bot ? 'TELEGRAM_BOT_TOKEN absent' : 'TELEGRAM_CHANNEL_ID absente'}`
+    );
+  }
 
   try {
     const events   = victorData.events || [];
@@ -147,7 +153,10 @@ export async function broadcastDaily(victorData) {
     console.log(`✅ Broadcast Telegram envoyé (${eventsToShow.length} pronostics)`);
 
   } catch (err) {
+    // On loggue ET on remonte : sans le throw, le job concluait
+    // « telegramSent: true » alors que rien n'était parti.
     console.error('❌ Erreur broadcast Telegram:', err.message);
+    throw err;
   }
 }
 
@@ -156,7 +165,10 @@ export async function broadcastDaily(victorData) {
 // ══════════════════════════════════════════════
 
 export async function sendAlert(message, type = 'info') {
-  if (!bot || !CHANNEL_ID) return;
+  if (!bot || !CHANNEL_ID) {
+    console.error(`❌ Alerte non envoyée (${!bot ? 'token' : 'channel id'} absent) : ${message}`);
+    return;
+  }
 
   const emojis = {
     success: '✅',
@@ -201,6 +213,50 @@ export async function sendDailyStats(stats) {
     console.log('📊 Stats journalières envoyées sur Telegram');
   } catch (err) {
     console.error('❌ Erreur sendDailyStats:', err.message);
+  }
+}
+
+// ══════════════════════════════════════════════
+// HEARTBEAT — État de santé quotidien
+//
+// Envoyé TOUS LES JOURS, y compris quand tout va bien. C'est ce qui
+// distingue « ça marche » de « je n'ai pas de nouvelles » : le système
+// est resté mort 3 semaines (15/07 → 03/08/2026) sans aucun signal.
+// ══════════════════════════════════════════════
+
+export async function sendHeartbeat(diag) {
+  if (!bot || !CHANNEL_ID) {
+    console.error('❌ Heartbeat impossible — bot ou TELEGRAM_CHANNEL_ID absent');
+    return false;
+  }
+
+  const ok = diag.problemes.length === 0;
+  let text = ok
+    ? `✅ *PronoSight — tout va bien*\n`
+    : `🚨 *PronoSight — ${diag.problemes.length} problème(s)*\n`;
+
+  text += `━━━━━━━━━━━━━━━\n`;
+  text += `📅 ${esc(diag.date)}\n`;
+  text += `🎯 Pronostics aujourd'hui : ${diag.pronosticsAujourdhui}\n`;
+  text += `📊 Dernier pronostic : ${esc(diag.dernierPronostic || 'jamais')}\n`;
+  text += `⚙️ Jobs — en attente ${diag.jobs.pending} · en cours ${diag.jobs.running} · échoués ${diag.jobs.failed}\n`;
+
+  if (diag.jobsBloques > 0) text += `⛔ Jobs figés : ${diag.jobsBloques}\n`;
+
+  if (!ok) {
+    text += `━━━━━━━━━━━━━━━\n`;
+    diag.problemes.forEach(p => { text += `• ${esc(p)}\n`; });
+  }
+
+  text += `━━━━━━━━━━━━━━━\n_Heartbeat automatique_`;
+
+  try {
+    await send(CHANNEL_ID, text);
+    console.log(`💓 Heartbeat envoyé (${ok ? 'OK' : diag.problemes.length + ' problème(s)'})`);
+    return true;
+  } catch (err) {
+    console.error('❌ Erreur heartbeat:', err.message);
+    return false;
   }
 }
 

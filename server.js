@@ -504,6 +504,20 @@ app.post('/api/victor/refresh', async (req, res) => {
   }
 });
 
+// ── ROUTE santé — diagnostic complet du système Victor ──
+app.get('/api/victor/health', generalLimiter, async (req, res) => {
+  try {
+    const { runHealthcheck } = await import('./victor/healthcheck.js');
+    const diag = await runHealthcheck({ verifierSources: req.query.sources !== '0' });
+    res.status(diag.problemes.length === 0 ? 200 : 503).json({
+      ok: diag.problemes.length === 0,
+      ...diag,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ── ROUTE keepalive — évite le sleep Render free tier ──
 app.get('/api/ping', (req, res) => {
   res.json({ ok: true, ts: Date.now(), uptime: Math.floor(process.uptime()) });
