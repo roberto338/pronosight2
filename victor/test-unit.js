@@ -14,7 +14,10 @@
 // ══════════════════════════════════════════════
 
 import 'dotenv/config'; // doit précéder tout import qui lit process.env
-import { evalPronostic, evalValueBet, matchFixture, repairTruncatedJSON } from './core.js';
+import {
+  evalPronostic, evalValueBet, matchFixture, repairTruncatedJSON,
+  estNotable, validerEvent, normalizeTeam,
+} from './core.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -129,7 +132,71 @@ const t4 = repare('{"events":[{"match":"A vs B"}],"verdict_journee":"ok"}');
 verifie('JSON complet préservé', t4?.verdict_journee, 'ok');
 
 // ══════════════════════════════════════════════
-// 5. Sources de données (uniquement avec --live)
+// 5. Portillon de validation — ce qui entre en base
+//
+// Régression couverte : le 03/08/2026 la production a inséré 5 lignes
+// "NO BET" / vides. Impossibles à noter, elles auraient dilué le taux
+// de réussite sans jamais le faire bouger.
+// ══════════════════════════════════════════════
+const evBase = { match: 'Portugal vs Luxembourg', equipe_a: 'Portugal', equipe_b: 'Luxembourg', cote_estimee: 1.8 };
+const ev = (extra) => ({ ...evBase, ...extra });
+
+// estNotable
+verifie('notable — victoire',   estNotable(ev({ pronostic_principal: 'Victoire Portugal' })), true);
+verifie('notable — handicap',   estNotable(ev({ pronostic_principal: 'Portugal -2.5' })),     true);
+verifie('notable — over',       estNotable(ev({ pronostic_principal: 'Over 2.5 buts' })),     true);
+verifie('non notable — NO BET', estNotable(ev({ pronostic_principal: 'NO BET' })),            false);
+verifie('non notable — vide',   estNotable(ev({ pronostic_principal: '' })),                  false);
+verifie('non notable — absent', estNotable(ev({})),                                           false);
+verifie('non notable — exotique', estNotable(ev({ pronostic_principal: 'Score exact 2-1' })), false);
+
+// validerEvent : 0 motif = publiable
+const cles = new Set(['portugal|luxembourg']);
+verifie('valide — cas nominal',
+  validerEvent(ev({ pronostic_principal: 'Victoire Portugal' }), cles).length, 0);
+verifie('rejet — NO BET',
+  validerEvent(ev({ pronostic_principal: 'NO BET' }), cles).length, 1);
+verifie('rejet — pronostic vide',
+  validerEvent(ev({ pronostic_principal: '' }), cles).length, 1);
+verifie('rejet — cote implausible',
+  validerEvent(ev({ pronostic_principal: 'Victoire Portugal', cote_estimee: 0.4 }), cles).length, 1);
+verifie('rejet — cote absurde',
+  validerEvent(ev({ pronostic_principal: 'Victoire Portugal', cote_estimee: 120 }), cles).length, 1);
+// Match cohérent en lui-même, mais absent des sources → inventé
+const evInvente = { match: 'Real Madrid vs Barcelona', equipe_a: 'Real Madrid', equipe_b: 'Barcelona',
+                    cote_estimee: 2.1, pronostic_principal: 'Victoire Real Madrid' };
+verifie('rejet — match inventé', validerEvent(evInvente, cles).length, 1);
+verifie('rejet — équipes manquantes',
+  validerEvent({ pronostic_principal: 'Victoire Portugal' }, cles).length > 0, true);
+// Sans liste de référence, on ne contrôle pas l'existence du match
+verifie('sans sources — pas de contrôle d\'existence',
+  validerEvent(evInvente, null).length, 0);
+
+// Rejeu de la sortie de production du 03/08/2026 : les 5 lignes réellement
+// insérées (4 "NO BET" + 1 vide) doivent toutes être rejetées.
+const matchsDuJour = [
+  ['Philadelphia Phillies', 'Washington Nationals'],
+  ['Platense', 'Talleres de Córdoba'],
+  ['Atlanta Dream', 'Las Vegas Aces'],
+];
+// ⚠️ Les clés DOIVENT être construites avec le normalizeTeam de core.js —
+// celui de sources.js retire « de » et produirait un faux « match inventé ».
+const clesJour = new Set(matchsDuJour.map(([a, b]) => `${normalizeTeam(a)}|${normalizeTeam(b)}`));
+
+verifie('prod 03/08 — pronostic vide rejeté',
+  validerEvent({ match: 'Philadelphia Phillies vs Washington Nationals', equipe_a: 'Philadelphia Phillies',
+                 equipe_b: 'Washington Nationals', pronostic_principal: '' }, clesJour).length > 0, true);
+verifie('prod 03/08 — NO BET rejeté',
+  validerEvent({ match: 'Atlanta Dream vs Las Vegas Aces', equipe_a: 'Atlanta Dream',
+                 equipe_b: 'Las Vegas Aces', pronostic_principal: 'NO BET' }, clesJour).length > 0, true);
+// Accents + particule : ne doit PAS être pris pour un match inventé
+verifie('accents et particules — pas de faux positif',
+  validerEvent({ match: 'Platense vs Talleres de Córdoba', equipe_a: 'Platense',
+                 equipe_b: 'Talleres de Córdoba', pronostic_principal: 'Victoire Platense',
+                 cote_estimee: 2.0 }, clesJour).length, 0);
+
+// ══════════════════════════════════════════════
+// 6. Sources de données (uniquement avec --live)
 // ══════════════════════════════════════════════
 if (process.argv.includes('--live')) {
   console.log('\n🌐 Vérification des sources de données...\n');

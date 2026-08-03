@@ -12,7 +12,37 @@
 // ⚠️ Premier import obligatoire (imports ESM hoistés — cf. victor/core.js)
 import 'dotenv/config';
 import pool, { query } from '../db/database.js';
-import { getFixturesOfDay } from './sources.js';
+import { getFixturesOfDay, fetchWithTimeout } from './sources.js';
+
+/**
+ * Vérifie que le modèle Groq configuré existe encore.
+ *
+ * Groq retire ses modèles sans préavis (llama-3.1-70b, mixtral-8x7b,
+ * gemma-7b l'ont déjà été). Le jour où le nôtre disparaît, le dernier
+ * moteur de la cascade meurt sur un 404. Ce contrôle prévient AVANT
+ * la panne au lieu de la constater après.
+ *
+ * @returns {Promise<{ok:boolean, message:string|null}>}
+ */
+export async function verifierModeleGroq() {
+  const cle    = process.env.GROQ_API_KEY;
+  const modele = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  if (!cle) return { ok: false, message: 'GROQ_API_KEY absente — plus aucun filet si Gemini tombe' };
+
+  try {
+    const resp = await fetchWithTimeout('https://api.groq.com/openai/v1/models',
+      { headers: { Authorization: `Bearer ${cle}` } }, 15_000);
+    if (!resp.ok) return { ok: false, message: `Groq injoignable (HTTP ${resp.status})` };
+
+    const ids = ((await resp.json()).data || []).map(m => m.id);
+    if (!ids.includes(modele)) {
+      return { ok: false, message: `Modèle Groq "${modele}" RETIRÉ — changer GROQ_MODEL (dispo : ${ids.filter(i => /llama|qwen|gpt/i.test(i)).slice(0, 4).join(', ')})` };
+    }
+    return { ok: true, message: null };
+  } catch (err) {
+    return { ok: false, message: `Contrôle Groq impossible : ${err.message}` };
+  }
+}
 
 /**
  * @returns {Promise<{date:string, pronosticsAujourdhui:number, dernierPronostic:string|null,
@@ -87,7 +117,19 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
     problemes.push('Aucune clé IA configurée (GEMINI_API_KEY / GROQ_API_KEY)');
   }
 
-  return { date: dateISO, pronosticsAujourdhui, dernierPronostic, jobs, jobsBloques, matchsDuJour, problemes };
+  // ── Moteur de secours ───────────────────────────────────────
+  let groq = { ok: true, message: null };
+  if (verifierSources) {
+    groq = await verifierModeleGroq();
+    if (!groq.ok) problemes.push(groq.message);
+  }
+
+  return {
+    date: dateISO, pronosticsAujourdhui, dernierPronostic,
+    jobs, jobsBloques, matchsDuJour,
+    groqOk: groq.ok,
+    problemes,
+  };
 }
 
 export default runHealthcheck;

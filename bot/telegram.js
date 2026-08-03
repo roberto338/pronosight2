@@ -240,6 +240,7 @@ export async function sendHeartbeat(diag) {
   text += `🎯 Pronostics aujourd'hui : ${diag.pronosticsAujourdhui}\n`;
   text += `📊 Dernier pronostic : ${esc(diag.dernierPronostic || 'jamais')}\n`;
   text += `⚙️ Jobs — en attente ${diag.jobs.pending} · en cours ${diag.jobs.running} · échoués ${diag.jobs.failed}\n`;
+  text += `🛟 Moteur de secours Groq : ${diag.groqOk ? 'OK' : '⚠️ INDISPONIBLE'}\n`;
 
   if (diag.jobsBloques > 0) text += `⛔ Jobs figés : ${diag.jobsBloques}\n`;
 

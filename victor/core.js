@@ -180,7 +180,11 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
 }
 
 // ── Appel Groq (3e moteur — indépendant du quota Google) ──────
-async function groqRequest(systemPrompt, userMessage, maxTokens = 8000) {
+//
+// ⚠️ Le mode JSON de Groq EXIGE le mot « json » quelque part dans les
+// messages, sinon HTTP 400. D'où le suffixe ajouté au system prompt.
+// (Vérifié : la casse n'a pas d'importance, « JSON » est accepté.)
+async function groqRequest(systemPrompt, userMessage, maxTokens = 8000, tentative = 1) {
   if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY manquante');
   const resp = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -196,6 +200,15 @@ async function groqRequest(systemPrompt, userMessage, maxTokens = 8000) {
       response_format: { type: 'json_object' },
     }),
   }, AI_TIMEOUT_MS);
+
+  // Limite de débit : Groq indique combien de temps attendre. Une seule
+  // relance — au-delà, mieux vaut échouer vite et laisser la file retenter.
+  if (resp.status === 429 && tentative === 1) {
+    const attente = Math.min(Number(resp.headers.get('retry-after') || 20), 60);
+    console.warn(`   ⏳ Groq limite de débit — nouvelle tentative dans ${attente}s`);
+    await new Promise(r => setTimeout(r, attente * 1000));
+    return groqRequest(systemPrompt, userMessage, maxTokens, 2);
+  }
 
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Groq HTTP ${resp.status}: ${t.slice(0, 200)}`); }
   const data = await resp.json();
@@ -557,9 +570,30 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     throw err;
   }
 
+  // ── Portillon de validation ──────────────────
+  // Un pronostic que evalPronostic() ne sait pas trancher ne pourra
+  // JAMAIS être noté : il polluerait le taux de réussite sans jamais le
+  // faire bouger. On le rejette ici plutôt que de le découvrir dans un
+  // audit six mois plus tard.
+  const moteur      = claudeResp?.source || 'inconnu';
+  const clesReelles = new Set(aVenir.map(f => `${normalizeTeam(f.home)}|${normalizeTeam(f.away)}`));
+  const bruts       = victorData.events || [];
+  const events      = [];
+  const rejets      = [];
+
+  for (const ev of bruts) {
+    const motifs = validerEvent(ev, clesReelles);
+    if (motifs.length === 0) events.push(ev);
+    else rejets.push({ match: ev?.match || '(sans nom)', motifs });
+  }
+
+  if (rejets.length > 0) {
+    console.warn(`\n🚫 ${rejets.length} pronostic(s) rejeté(s) :`);
+    rejets.forEach(r => console.warn(`   • ${r.match} — ${r.motifs.join(' ; ')}`));
+  }
+
   // ── Sauvegarde PostgreSQL ────────────────────
-  const events = victorData.events || [];
-  console.log(`\n💾 Sauvegarde de ${events.length} pronostic(s) en DB...`);
+  console.log(`\n💾 Sauvegarde de ${events.length} pronostic(s) en DB (moteur: ${moteur})...`);
 
   for (const ev of events) {
     try {
@@ -605,8 +639,21 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     }
   }
 
-  console.log(`\n✅ Victor a généré ${events.length} pronostic(s)\n`);
-  return victorData;
+  console.log(`\n✅ Victor a généré ${events.length} pronostic(s) exploitable(s)\n`);
+
+  // events = uniquement les pronostics validés : le broadcast Telegram
+  // et le compteur du job doivent refléter ce qui est réellement en base.
+  return {
+    ...victorData,
+    events,
+    moteur,
+    rejets,
+    raison: events.length === 0
+      ? (rejets.length > 0
+          ? `${rejets.length} pronostic(s) rejeté(s) au contrôle qualité`
+          : 'aucun pronostic produit par l\'IA')
+      : undefined,
+  };
 }
 
 // ══════════════════════════════════════════════
@@ -625,7 +672,12 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
 /**
  * Normalise un nom d'équipe pour la comparaison : minuscules, sans accents, sans ponctuation.
  */
-function normalizeTeam(name = '') {
+// ⚠️ NE PAS confondre avec normalizeTeam() de victor/sources.js, qui
+// retire en plus les suffixes de club (FC, de, of…). Celui-ci est
+// calibré pour TEAM_ALIASES et teamsMatch ci-dessous : le modifier
+// casserait la table d'alias. Tout ce qui compare des équipes DANS
+// core.js doit utiliser cette version-ci, exclusivement.
+export function normalizeTeam(name = '') {
   return name
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -765,6 +817,64 @@ export function evalPronostic(pronostic, homeGoals, awayGoals, homeName = '', aw
   if (/btts|les deux.*marquent|both.*score/.test(p)) return homeGoals > 0 && awayGoals > 0;
 
   return null; // cas non géré → fallback IA
+}
+
+/**
+ * Un pronostic est « notable » si evalPronostic() sait le trancher.
+ *
+ * On sonde avec deux scores opposés : si la fonction renvoie null dans
+ * les deux cas, le type de pari n'est pas supporté. Publier un tel pari
+ * serait une impasse — on ne pourrait JAMAIS le compter gagné ou perdu,
+ * et il diluerait le taux de réussite sans jamais le faire bouger.
+ *
+ * C'est l'invariant qui ferme la boucle génération ↔ notation.
+ */
+export function estNotable(ev) {
+  const p = ev?.pronostic_principal;
+  if (!p || typeof p !== 'string' || p.trim().length < 3) return false;
+  const a = evalPronostic(p, 3, 0, ev.equipe_a, ev.equipe_b);
+  const b = evalPronostic(p, 0, 3, ev.equipe_a, ev.equipe_b);
+  return a !== null || b !== null;
+}
+
+/**
+ * Contrôle qu'un event est publiable. Retourne la liste des motifs de
+ * rejet (vide = conforme). Empêche l'IA d'écrire n'importe quoi en base.
+ *
+ * @param {object} ev
+ * @param {Set<string>} clesReelles  clés "domicile|exterieur" des matchs des sources
+ */
+export function validerEvent(ev, clesReelles = null) {
+  const motifs = [];
+
+  if (!ev?.match || !ev.equipe_a || !ev.equipe_b) {
+    motifs.push('équipes ou match manquants');
+  }
+
+  // Refus explicite de parier : légitime de la part de Victor, mais ça
+  // n'a rien à faire dans la table des pronostics.
+  if (/^\s*(no bet|aucun pari|pas de pari|n\/a|aucun)\s*$/i.test(ev?.pronostic_principal || '')) {
+    motifs.push('pas de pari proposé');
+  } else if (!estNotable(ev)) {
+    motifs.push(`pronostic non évaluable automatiquement : "${(ev?.pronostic_principal || '').slice(0, 40)}"`);
+  }
+
+  // La cote doit rester dans le domaine du plausible
+  const cote = Number(ev?.cote_estimee);
+  if (ev?.cote_estimee != null && ev.cote_estimee !== '' && (!Number.isFinite(cote) || cote < 1.01 || cote > 51)) {
+    motifs.push(`cote implausible : ${ev.cote_estimee}`);
+  }
+
+  // Le match doit exister dans les sources — ceinture et bretelles :
+  // le prompt l'interdit déjà, mais on ne fait pas confiance à un LLM.
+  if (clesReelles && ev?.equipe_a && ev?.equipe_b) {
+    const a = normalizeTeam(ev.equipe_a), b = normalizeTeam(ev.equipe_b);
+    if (!clesReelles.has(`${a}|${b}`) && !clesReelles.has(`${b}|${a}`)) {
+      motifs.push('match absent des sources (inventé)');
+    }
+  }
+
+  return motifs;
 }
 
 /**

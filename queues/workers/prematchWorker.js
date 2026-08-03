@@ -22,7 +22,8 @@ export async function prematchProcessor(job) {
   await job.updateProgress(80);
 
   const nbPronostics = result?.events?.length || 0;
-  console.log(`   ✅ [prematch #${job.id}] ${nbPronostics} pronostic(s) générés`);
+  const nbRejets     = result?.rejets?.length || 0;
+  console.log(`   ✅ [prematch #${job.id}] ${nbPronostics} pronostic(s) retenus, ${nbRejets} rejeté(s) — moteur ${result?.moteur || '?'}`);
 
   // ── Broadcast Telegram ─────────────────────
   // Zéro pronostic n'est PAS un cas normal à passer sous silence :
@@ -44,6 +45,9 @@ export async function prematchProcessor(job) {
   return {
     date:          result?.date,
     nbPronostics,
+    nbRejets,
+    moteur:        result?.moteur ?? null,
+    rejets:        result?.rejets ?? [],
     telegramSent,
     raison:        result?.raison ?? null,
     generatedAt:   new Date().toISOString(),
