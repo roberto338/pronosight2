@@ -1046,17 +1046,26 @@ export async function updateVictorStats() {
          SUM(CASE WHEN pronostic_correct = true THEN 1 ELSE 0 END)            AS corrects,
          ROUND(100.0 * SUM(CASE WHEN pronostic_correct = true THEN 1 ELSE 0 END)
                / NULLIF(COUNT(*), 0), 2)                                      AS taux_global,
-         ROUND(100.0 * SUM(CASE WHEN pronostic_correct = true AND confiance = 'Élevé' THEN 1 ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN confiance = 'Élevé' THEN 1 ELSE 0 END), 0), 2)   AS taux_eleve,
-         ROUND(100.0 * SUM(CASE WHEN pronostic_correct = true AND confiance = 'Moyen' THEN 1 ELSE 0 END)
-               / NULLIF(SUM(CASE WHEN confiance = 'Moyen' THEN 1 ELSE 0 END), 0), 2)   AS taux_moyen,
+         -- ⚠️ Le libellé stocké est "Élevée"/"Très élevée"/"Moyenne" (accordé
+         -- au féminin). L'ancien filtre cherchait "Élevé"/"Moyen" : il ne
+         -- correspondait à AUCUNE ligne, donc ces deux taux valaient
+         -- toujours 0% — y compris dans le message Telegram quotidien.
+         ROUND(100.0 * SUM(CASE WHEN pronostic_correct = true AND confiance ILIKE '%élev%' THEN 1 ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN confiance ILIKE '%élev%' THEN 1 ELSE 0 END), 0), 2) AS taux_eleve,
+         ROUND(100.0 * SUM(CASE WHEN pronostic_correct = true AND confiance ILIKE 'moyen%' THEN 1 ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN confiance ILIKE 'moyen%' THEN 1 ELSE 0 END), 0), 2) AS taux_moyen,
          ROUND(100.0 * SUM(CASE WHEN value_bet_correct = true THEN 1 ELSE 0 END)
                / NULLIF(SUM(CASE WHEN value_bet IS NOT NULL THEN 1 ELSE 0 END), 0), 2) AS taux_value,
-         -- ROI simulé mise fixe 10€
+         -- ROI simulé, mise fixe 10€.
+         -- Calculé UNIQUEMENT sur les paris dont la cote est connue : sans
+         -- cote, un pari gagnant produisait NULL et disparaissait du SUM,
+         -- ce qui sous-estimait le ROI en ne gardant que les pertes.
          ROUND(SUM(CASE
-           WHEN pronostic_correct = true THEN (cote_estimee - 1) * 10
+           WHEN cote_estimee IS NULL          THEN 0
+           WHEN pronostic_correct = true      THEN (cote_estimee - 1) * 10
            ELSE -10
-         END), 2) AS roi
+         END), 2) AS roi,
+         SUM(CASE WHEN cote_estimee IS NOT NULL THEN 1 ELSE 0 END) AS roi_base
        FROM ps_pronostics
        WHERE date = $1
          AND pronostic_correct IS NOT NULL`,
@@ -1096,10 +1105,10 @@ export async function updateVictorStats() {
 
     console.log(`   📅 Date: ${dateISO}`);
     console.log(`   🎯 Taux global: ${s.taux_global}% (${s.corrects}/${s.total})`);
-    console.log(`   🔥 Confiance Élevé: ${s.taux_eleve || 'N/A'}%`);
-    console.log(`   📊 Confiance Moyen: ${s.taux_moyen || 'N/A'}%`);
-    console.log(`   💰 Value Bet: ${s.taux_value || 'N/A'}%`);
-    console.log(`   📈 ROI simulé: ${s.roi > 0 ? '+' : ''}${s.roi}€ (mise 10€/prono)`);
+    console.log(`   🔥 Confiance Élevée: ${s.taux_eleve ?? 'N/A'}%`);
+    console.log(`   📊 Confiance Moyenne: ${s.taux_moyen ?? 'N/A'}%`);
+    console.log(`   💰 Value Bet: ${s.taux_value ?? 'N/A'}%`);
+    console.log(`   📈 ROI simulé: ${s.roi > 0 ? '+' : ''}${s.roi}€ sur ${s.roi_base}/${s.total} pari(s) cotés`);
     console.log('\n✅ Stats sauvegardées\n');
 
   } catch (err) {
