@@ -10,9 +10,10 @@ import { query } from '../db/database.js';
 import { VICTOR_PROMPT } from './prompt.js';
 import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 import {
-  getFixturesOfDay, getResultsOfDay, buildFormIndex,
-  formatFixturesForPrompt, fetchWithTimeout,
+  getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
+  getScorers, formatFixturesForPrompt, fetchWithTimeout,
 } from './sources.js';
+import { getOdds, evaluerValue } from './odds.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL        = process.env.GEMINI_MODEL        || 'gemini-flash-latest';
@@ -422,42 +423,6 @@ export async function runVictor() {
   console.log('📋 Récupération du briefing...');
   const briefing = await getVictorBriefing();
 
-  // ── Patterns généraux du jour (tous sports) ──
-  // Victor découvrant lui-même les matchs via web_search,
-  // on injecte les patterns situationnels multi-sport
-  // (H2H génériques inclus — les équipes seront filtrées par Victor).
-  console.log('🧠 Chargement des patterns actifs...');
-  let patternsTexte = 'Aucun pattern historique significatif détecté.';
-  try {
-    // Patterns situationnels / psychologiques actifs (multi-sport)
-    const { rows: patternsActifs } = await query(
-      `SELECT nom, type, sport, equipe_a, equipe_b,
-              condition_trigger, pattern_observe,
-              taux_confirmation, pari_suggere, fiabilite
-       FROM ps_victor_patterns
-       WHERE actif = true
-         AND taux_confirmation >= 55
-       ORDER BY
-         CASE fiabilite WHEN 'Fort' THEN 1 WHEN 'Moyen' THEN 2 ELSE 3 END,
-         taux_confirmation DESC
-       LIMIT 20`
-    );
-
-    if (patternsActifs.length > 0) {
-      const result = {
-        h2h: patternsActifs.filter(p => p.type === 'H2H'),
-        situationnels: patternsActifs.filter(p => p.type !== 'H2H'),
-        signal_fort: patternsActifs.filter(p => parseFloat(p.taux_confirmation) >= 70),
-      };
-      patternsTexte = formatPatternsForVictor(result);
-      console.log(`   ✅ ${patternsActifs.length} pattern(s) chargés (${result.signal_fort.length} signal(s) fort(s))`);
-    } else {
-      console.log('   ℹ️  Aucun pattern actif');
-    }
-  } catch (err) {
-    console.warn('   ⚠️  Patterns non disponibles:', err.message);
-  }
-
   // ── Date du jour ─────────────────────────────
   const today = new Date();
   const dateStr = today.toLocaleDateString('fr-FR', {
@@ -483,9 +448,58 @@ export async function runVictor() {
     };
   }
 
-  console.log('📊 Construction de l\'indice de forme...');
-  const formIndex   = await buildFormIndex(20).catch(() => new Map());
-  const matchsReels = formatFixturesForPrompt(aVenir, formIndex);
+  // ── Contexte factuel : forme, classement, confrontations directes ──
+  // Trois sources structurées qui remplacent l'ancienne « étape 2 » par
+  // Google Search. Chaque chiffre est traçable, aucun n'est inventé.
+  console.log('📊 Construction du contexte (forme, classement, H2H)...');
+  const forme = await buildFormIndex(20).catch(() => new Map());
+
+  const codesCompet = [...new Set(aVenir.map(f => f.codeCompet).filter(Boolean))];
+  const classement  = await getStandings(codesCompet).catch(() => new Map());
+  const h2h         = await getH2H(aVenir, 8).catch(() => new Map());
+  const buteurs     = await getScorers(codesCompet).catch(() => new Map());
+  const cotes       = await getOdds(aVenir).catch(() => new Map());
+
+  const matchsReels = formatFixturesForPrompt(aVenir, { forme, classement, h2h, buteurs, cotes });
+
+  // ── Patterns, filtrés sur les matchs du jour ─────────────────
+  // Chargés APRÈS les matchs : injecter les patterns de la Bundesliga
+  // un soir où seul le Brésil joue n'apporte que du bruit.
+  console.log('🧠 Chargement des patterns pertinents...');
+  let patternsTexte = 'Aucun pattern historique significatif pour les matchs du jour.';
+  try {
+    const competitions = [...new Set(aVenir.map(f => `Match de ${f.competition}`))];
+    const equipes      = [...new Set(aVenir.flatMap(f => [f.home, f.away]).filter(Boolean))];
+
+    const { rows: patternsActifs } = await query(
+      `SELECT nom, type, sport, equipe_a, equipe_b,
+              condition_trigger, pattern_observe,
+              taux_confirmation, pari_suggere, fiabilite
+       FROM ps_victor_patterns
+       WHERE actif = true
+         AND taux_confirmation >= 55
+         AND (condition_trigger = ANY($1) OR equipe_a = ANY($2))
+       ORDER BY
+         CASE fiabilite WHEN 'Fort' THEN 1 WHEN 'Moyen' THEN 2 ELSE 3 END,
+         taux_confirmation DESC
+       LIMIT 20`,
+      [competitions, equipes]
+    );
+
+    if (patternsActifs.length > 0) {
+      const result = {
+        h2h: patternsActifs.filter(p => p.type === 'H2H'),
+        situationnels: patternsActifs.filter(p => p.type !== 'H2H'),
+        signal_fort: patternsActifs.filter(p => parseFloat(p.taux_confirmation) >= 70),
+      };
+      patternsTexte = formatPatternsForVictor(result);
+      console.log(`   ✅ ${patternsActifs.length} pattern(s) pertinent(s) (${result.signal_fort.length} signal(s) fort(s))`);
+    } else {
+      console.log('   ℹ️  Aucun pattern applicable aux matchs du jour');
+    }
+  } catch (err) {
+    console.warn('   ⚠️  Patterns non disponibles:', err.message);
+  }
 
   // ── Message utilisateur ──────────────────────
   const userMessage = `Nous sommes le ${dateStr}.
@@ -502,8 +516,9 @@ ${matchsReels}
 ⚠️ RÈGLES ABSOLUES :
 - N'analyse QUE des matchs de la liste ci-dessus. N'en invente AUCUN autre.
 - Reprends les noms d'équipes EXACTEMENT tels qu'écrits ci-dessus.
-- Si la forme d'une équipe n'est pas fournie, ne l'invente pas : dis-le et baisse ta confiance.
-- Sélectionne les ${Math.min(aVenir.length, 8)} matchs les plus intéressants (enjeu, value).
+- Si la forme d'une équipe n'est pas fournie, ne l'invente pas : n'inclus pas ce match.
+- Sélectionne AU MAXIMUM ${Math.min(aVenir.length, 4)} matchs — les plus solides uniquement.
+  Moins de paris de meilleure qualité vaut mieux qu'une liste complète.
 
 Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON :
 {
@@ -520,20 +535,15 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     "contexte": "",
     "forme_equipe_a": "",
     "forme_equipe_b": "",
-    "infirmerie": "",
     "stats_cles": [],
     "analyse_tactique": "",
     "pronostic_principal": "",
+    "probabilite": 0.00,
     "cote_estimee": 0.00,
-    "cote_estimee_min": 0.00,
-    "cote_estimee_max": 0.00,
     "confiance": "",
     "confiance_score": 0,
     "value_bet": "",
     "cote_value": 0.00,
-    "cote_value_min": 0.00,
-    "cote_value_max": 0.00,
-    "justification_value_bet": "",
     "pari_a_eviter": "",
     "score_predit": "",
     "impact_enjeu_motivation": 3,
@@ -583,8 +593,29 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
 
   for (const ev of bruts) {
     const motifs = validerEvent(ev, clesReelles);
-    if (motifs.length === 0) events.push(ev);
-    else rejets.push({ match: ev?.match || '(sans nom)', motifs });
+    if (motifs.length > 0) { rejets.push({ match: ev?.match || '(sans nom)', motifs }); continue; }
+
+    // ── Value calculée, pas déclarée ──────────────────────────
+    // Le modèle fournit une probabilité ; la cote vient du marché.
+    // value = p × cote − 1. Une value négative signifie que le pari
+    // est perdant sur la durée, même s'il a des chances de passer.
+    const fx = aVenir.find(f => normalizeTeam(f.home) === normalizeTeam(ev.equipe_a || '')
+                             || normalizeTeam(f.away) === normalizeTeam(ev.equipe_b || ''));
+    const vb = fx?.fixtureId ? evaluerValue(ev, cotes.get(fx.fixtureId)) : null;
+    if (vb) {
+      ev.cote_estimee = vb.cote;              // cote RÉELLE, plus une estimation
+      ev.value_calculee = vb.value;
+      ev.proba_marche   = vb.probaMarche;
+      if (vb.value <= 0) {
+        rejets.push({
+          match: ev.match,
+          motifs: [`value négative (${(vb.value * 100).toFixed(1)}% à la cote ${vb.cote})`],
+        });
+        continue;
+      }
+    }
+
+    events.push(ev);
   }
 
   if (rejets.length > 0) {

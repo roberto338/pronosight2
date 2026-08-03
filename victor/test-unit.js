@@ -196,7 +196,42 @@ verifie('accents et particules — pas de faux positif',
                  cote_estimee: 2.0 }, clesJour).length, 0);
 
 // ══════════════════════════════════════════════
-// 6. Sources de données (uniquement avec --live)
+// 6. Value bet — calculée, plus déclarée par le LLM
+// ══════════════════════════════════════════════
+const { calculerValue, probaImplicite, cleMarche, evaluerValue } = await import('./odds.js');
+
+// value = p × cote − 1
+verifie('value positive',        calculerValue(0.60, 2.00), 0.20);
+verifie('value nulle',           calculerValue(0.50, 2.00), 0);
+verifie('value négative',        calculerValue(0.40, 2.00), -0.20);
+verifie('value proba invalide',  calculerValue(1.5, 2.00),  null);
+verifie('value cote invalide',   calculerValue(0.60, 0.5),  null);
+verifie('value non numérique',   calculerValue('abc', 2),   null);
+
+verifie('proba implicite 2.00',  probaImplicite(2.00), 0.5);
+verifie('proba implicite 1.25',  probaImplicite(1.25), 0.8);
+
+// Association pronostic -> marché coté
+verifie('marché victoire dom.',  cleMarche('Victoire Palmeiras', 'Palmeiras', 'Santos'), '1X2:HOME');
+verifie('marché victoire ext.',  cleMarche('Victoire Santos', 'Palmeiras', 'Santos'),    '1X2:AWAY');
+verifie('marché nul',            cleMarche('Match nul', 'Palmeiras', 'Santos'),          '1X2:DRAW');
+verifie('marché over 2.5',       cleMarche('Over 2.5 buts', 'Palmeiras', 'Santos'),      'OU:OVER:2.5');
+verifie('marché under 3.5',      cleMarche('Under 3.5 buts', 'Palmeiras', 'Santos'),     'OU:UNDER:3.5');
+// Prudence assumée : pas de cote h2h pour ces marchés -> null plutôt qu'un mauvais rapprochement
+verifie('marché double chance non associé', cleMarche('Double chance : Santos ou nul', 'Palmeiras', 'Santos'), null);
+verifie('marché handicap non associé',      cleMarche('Palmeiras -1.5', 'Palmeiras', 'Santos'),                null);
+
+// Bout en bout : un pari sous-coté doit ressortir avec une value négative
+const cotesMatch = { marches: { '1X2:HOME': 1.40, '1X2:DRAW': 4.20, 'OU:OVER:2.5': 1.90 }, bookmakers: 7 };
+const evBon = { pronostic_principal: 'Victoire Palmeiras', equipe_a: 'Palmeiras', equipe_b: 'Santos', probabilite: 0.80 };
+const evMauvais = { ...evBon, probabilite: 0.60 };
+verifie('value bet retenu',   evaluerValue(evBon, cotesMatch).value > 0, true);
+verifie('cote réelle reprise', evaluerValue(evBon, cotesMatch).cote, 1.40);
+verifie('value bet rejeté',   evaluerValue(evMauvais, cotesMatch).value < 0, true);
+verifie('sans cote -> null',  evaluerValue({ ...evBon, pronostic_principal: 'BTTS' }, cotesMatch), null);
+
+// ══════════════════════════════════════════════
+// 7. Sources de données (uniquement avec --live)
 // ══════════════════════════════════════════════
 if (process.argv.includes('--live')) {
   console.log('\n🌐 Vérification des sources de données...\n');

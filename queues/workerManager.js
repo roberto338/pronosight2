@@ -15,6 +15,7 @@ import { valueProcessor }    from './workers/valueWorker.js';
 import { liveProcessor }     from './workers/liveWorker.js';
 import { checkResults, updateVictorStats, weeklyVictorReview } from '../victor/core.js';
 import { discoverNewPatterns } from '../victor/patterns.js';
+import { computePatterns }    from '../victor/patterns-compute.js';
 import { sendDailyStats, sendHeartbeat } from '../bot/telegram.js';
 import { runHealthcheck }    from '../victor/healthcheck.js';
 import { query }             from '../db/database.js';
@@ -102,12 +103,29 @@ async function processor(job) {
 
     case 'weekly-review': {
       console.log(`\n📊 [weekly-review #${job.id}] Review hebdomadaire...`);
-      await job.updateProgress(20);
+
+      // Recalcul des patterns depuis l'historique réel des matchs.
+      // Sans ce rafraîchissement, ils se périment et sont désactivés
+      // au bout de 30 jours — la table redeviendrait vide.
+      await job.updateProgress(15);
+      let patterns = { calcules: 0, ecrits: 0, matchs: 0 };
+      try {
+        patterns = await computePatterns({ jours: 120 });
+      } catch (err) {
+        console.warn('   ⚠️  Recalcul des patterns échoué:', err.message);
+      }
+
+      await job.updateProgress(45);
       await discoverNewPatterns();
-      await job.updateProgress(60);
+      await job.updateProgress(70);
       await weeklyVictorReview();
       await job.updateProgress(100);
-      return { done: true, week: new Date().toISOString().slice(0, 10) };
+      return {
+        done: true,
+        week: new Date().toISOString().slice(0, 10),
+        patternsEcrits: patterns.ecrits,
+        matchsAnalyses: patterns.matchs,
+      };
     }
 
     case 'heartbeat': {
