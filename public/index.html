@@ -6,7 +6,9 @@
 <title>PronoSight — IA Pronostics</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800;900&family=Barlow+Condensed:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/main.css">
+<link rel="stylesheet" href="/css/design.css">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -22,7 +24,7 @@
     <div class="logo-icon">🔮</div>
     <div>
       <div class="logo">PronoSight</div>
-      <div class="logo-sub">Intelligence artificielle · Pronostics sportifs</div>
+      <div class="logo-sub">Analyses sportives, chiffres à l'appui</div>
     </div>
   </div>
   <div class="header-right">
@@ -33,17 +35,17 @@
 </header>
 
 <div class="main-nav">
-  <button class="nav-btn active" id="nav-dash" onclick="switchNav('dash')">&#x1F3E0; Dashboard</button>
-  <button class="nav-btn" id="nav-prono" onclick="switchNav('prono')">&#x1F52E; Pronostics</button>
-  <button class="nav-btn" id="nav-quickpick" onclick="switchNav('quickpick')">&#x26A1; Quick Pick</button>
-  <button class="nav-btn" id="nav-bankroll" onclick="switchNav('bankroll')">&#x1F4B0; Bankroll</button>
-  <button class="nav-btn" id="nav-combo" onclick="switchNav('combo')">&#x1F3B2; Combinés</button>
-  <button class="nav-btn" id="nav-parlay" onclick="switchNav('parlay')">&#x1F3B0; Parlay manuel</button>
-  <button class="nav-btn" id="nav-alerts" onclick="switchNav('alerts')">&#x1F514; Alertes</button>
-  <button class="nav-btn" id="nav-live" onclick="switchNav('live')">&#x1F534; Live</button>
-  <button class="nav-btn" id="nav-today" onclick="switchNav('today')">&#x1F4C5; Aujourd'hui</button>
-  <button class="nav-btn" id="nav-victor" onclick="switchNav('victor')">&#x1F399;&#xFE0F; Victor</button>
-  <button class="nav-btn" id="nav-history" onclick="switchNav('history')">&#x1F4CB; Historique <span class="nav-badge" id="histBadge">0</span></button>
+  <button class="nav-btn active" id="nav-dash" onclick="switchNav('dash')">Tableau de bord</button>
+  <button class="nav-btn" id="nav-prono" onclick="switchNav('prono')">Pronostics</button>
+  <button class="nav-btn" id="nav-today" onclick="switchNav('today')">Aujourd'hui</button>
+  <button class="nav-btn" id="nav-victor" onclick="switchNav('victor')">Victor</button>
+  <button class="nav-btn" id="nav-live" onclick="switchNav('live')">Live</button>
+  <button class="nav-btn" id="nav-bankroll" onclick="switchNav('bankroll')">Bankroll</button>
+  <button class="nav-btn" id="nav-combo" onclick="switchNav('combo')">Combinés</button>
+  <button class="nav-btn" id="nav-parlay" onclick="switchNav('parlay')">Parlay</button>
+  <button class="nav-btn" id="nav-quickpick" onclick="switchNav('quickpick')">Quick Pick</button>
+  <button class="nav-btn" id="nav-alerts" onclick="switchNav('alerts')">Alertes</button>
+  <button class="nav-btn" id="nav-history" onclick="switchNav('history')">Historique <span class="nav-badge" id="histBadge">0</span></button>
 </div>
 <div class="combo-panel visible" id="dashView">
   <div class="card">

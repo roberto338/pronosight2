@@ -1261,9 +1261,20 @@ function renderDashboard() {
   const wr = total > 0 ? Math.round(wins / total * 100) : 0;
 
   const el1 = document.getElementById('dashBankroll'); if (el1) el1.textContent = br.toFixed(0) + '€';
-  const el2 = document.getElementById('dashWinrate'); if (el2) el2.textContent = wr + '%';
+
+  // Sans aucun pari résolu, afficher « 0% » laisse croire que rien ne
+  // fonctionne, alors qu'il n'y a simplement pas encore de données.
+  // Un tiret dit la vérité : la mesure n'a pas commencé.
+  const el2 = document.getElementById('dashWinrate');
+  if (el2) {
+    el2.textContent = total > 0 ? wr + '%' : '—';
+    el2.style.color = total > 0 ? '' : 'var(--muted)';
+  }
   const el3 = document.getElementById('dashPnl');
-  if (el3) { el3.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '€'; el3.style.color = pnl >= 0 ? '#00dd55' : '#ff3333'; }
+  if (el3) {
+    if (total === 0 && pnl === 0) { el3.textContent = '—'; el3.style.color = 'var(--muted)'; }
+    else { el3.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '€'; el3.style.color = pnl >= 0 ? 'var(--ev-pos)' : 'var(--ev-neg)'; }
+  }
 
   // Streak sur le dashboard
   const resolved = hist.filter(h => h.result === 'win' || h.result === 'lose');
@@ -1333,7 +1344,16 @@ function renderDashboard() {
       }).join('');
       rp.onclick = () => switchNav('history');
     } else {
-      rp.innerHTML = '<div class="dash-empty">Aucun pick encore<br><button class="dash-cta" onclick="switchNav(\'victor\')">🎙️ Voir Victor</button></div>';
+      // Un tableau de bord neuf n'affiche que des zéros : c'est la pire
+      // première impression possible. On explique ce qui va se passer
+      // plutôt que de constater le vide.
+      rp.innerHTML =
+        '<div class="etat-vide">' +
+          '<div class="etat-vide-icone">📊</div>' +
+          '<div class="etat-vide-titre">Les analyses arrivent chaque matin</div>' +
+          '<div class="etat-vide-texte">Victor étudie les matchs du jour à 7h et ne retient que ceux où les chiffres lui donnent un avantage réel. Certains jours, il ne propose rien — c\'est voulu.</div>' +
+          '<button class="dash-cta" onclick="switchNav(\'victor\')" style="margin-top:16px">Découvrir la méthode</button>' +
+        '</div>';
     }
   }
 
@@ -1341,7 +1361,13 @@ function renderDashboard() {
   if (fl) {
     const favs = getFavs();
     if (!favs.length) {
-      fl.innerHTML = '<div class="dash-empty" style="font-size:11px">Aucune ligue favorite<br><button class="dash-cta" onclick="switchNav(\'alerts\')">🔔 Choisir des ligues</button></div>';
+      fl.innerHTML =
+        '<div class="etat-vide">' +
+          '<div class="etat-vide-icone">⚽</div>' +
+          '<div class="etat-vide-titre">Suivez vos championnats</div>' +
+          '<div class="etat-vide-texte">Choisissez les compétitions qui vous intéressent : vous serez prévenu dès qu\'une analyse à forte confiance y apparaît.</div>' +
+          '<button class="dash-cta" onclick="switchNav(\'alerts\')" style="margin-top:16px">Choisir mes championnats</button>' +
+        '</div>';
     } else {
       fl.innerHTML = LEAGUES.filter(l => favs.includes(l.id)).slice(0, 6).map(l => {
         const lHist = hist.filter(h => h.league && h.league.includes(l.name));
