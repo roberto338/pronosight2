@@ -118,6 +118,78 @@ function resumer(marches) {
 }
 
 /**
+ * Liste des compétitions de football actives chez The Odds API.
+ * Cet appel ne consomme aucun crédit.
+ */
+async function sportsActifs() {
+  if (!ODDS_KEY) return [];
+  try {
+    const r = await fetchWithTimeout(`https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_KEY}`, {}, 20_000);
+    if (!r.ok) return [];
+    return (await r.json()).filter(s => s.key?.startsWith('soccer_') && s.active);
+  } catch { return []; }
+}
+
+/**
+ * Calendrier via The Odds API — 45 compétitions, **sans consommer de crédit**.
+ *
+ * Vérifié : /events laisse le compteur inchangé (498 → 498 sur 3 appels).
+ * Couvre MLS, Liga MX, championnats scandinaves, asiatiques, 2e divisions
+ * et coupes — soit 3,5× la couverture de football-data.
+ *
+ * ⚠️ Ces matchs n'ont ni classement ni forme : Victor les verra mais
+ * refusera de parier dessus tant qu'aucune statistique n'est disponible.
+ * Leur intérêt est la visibilité du programme et la présence de cotes.
+ *
+ * @returns {Promise<Fixture[]>}
+ */
+export async function getOddsEvents(dateISO) {
+  if (!ODDS_KEY) return [];
+  const sports = await sportsActifs();
+  if (sports.length === 0) return [];
+
+  const out = [];
+  const LOT = 5; // concurrence modérée : gratuit en crédits, pas en débit HTTP
+
+  for (let i = 0; i < sports.length; i += LOT) {
+    const lot = sports.slice(i, i + LOT);
+    const res = await Promise.all(lot.map(async (s) => {
+      try {
+        const r = await fetchWithTimeout(
+          `https://api.the-odds-api.com/v4/sports/${s.key}/events?apiKey=${ODDS_KEY}&dateFormat=iso`, {}, 20_000);
+        if (!r.ok) return [];
+        const evenements = await r.json();
+        return (Array.isArray(evenements) ? evenements : [])
+          .filter(e => (e.commence_time || '').slice(0, 10) === dateISO)
+          .map(e => ({
+            sport: 'Football',
+            competition: s.title || s.key,
+            codeCompet: '',
+            fixtureId: e.id ?? null,
+            homeId: null, awayId: null,   // pas d'identifiant commun avec football-data
+            match: `${e.home_team} vs ${e.away_team}`,
+            home: e.home_team || '',
+            away: e.away_team || '',
+            heure: e.commence_time
+              ? new Date(e.commence_time).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })
+              : '',
+            dateISO,
+            status: 'NS',
+            homeGoals: null, awayGoals: null,
+            venue: '',
+            source: 'odds-api',
+            sportKey: s.key,
+          }));
+      } catch { return []; }
+    }));
+    out.push(...res.flat());
+  }
+
+  console.log(`   🗓️  The Odds API: ${out.length} match(s) sur ${sports.length} compétition(s) (0 crédit)`);
+  return out;
+}
+
+/**
  * Récupère les cotes du marché pour les matchs du jour.
  * Silencieux et inoffensif si ODDS_API_KEY est absente.
  *

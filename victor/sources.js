@@ -261,7 +261,9 @@ export async function fetchApiFootball(dateISO, { status = 'FT' } = {}) {
 
 /** Déduplique sur (équipes normalisées), en gardant la source la plus fiable. */
 function dedupe(fixtures) {
-  const rang = { 'football-data': 0, 'api-football': 1, 'thesportsdb': 2 };
+  // Priorité aux sources qui portent des identifiants et des statistiques :
+  // en cas de doublon, on garde la version la plus exploitable.
+  const rang = { 'football-data': 0, 'api-football': 1, 'thesportsdb': 2, 'odds-api': 3 };
   const map  = new Map();
   for (const f of fixtures) {
     if (!f.home || !f.away) continue;
@@ -277,7 +279,7 @@ function dedupe(fixtures) {
  * @param {string} dateISO  YYYY-MM-DD
  * @returns {Promise<Fixture[]>}
  */
-export async function getFixturesOfDay(dateISO) {
+export async function getFixturesOfDay(dateISO, { extra = [] } = {}) {
   const [fd, ...tsdb] = await Promise.all([
     fdMatches({ date: dateISO }),
     ...TSDB_SPORTS.map(s => tsdbDay(dateISO, s)),
@@ -288,8 +290,10 @@ export async function getFixturesOfDay(dateISO) {
     console.warn(`   ⚠️  API-Football écartée: ${af.error}`);
   }
 
-  const tout = dedupe([...fd, ...af.fixtures, ...tsdb.flat()]);
-  console.log(`   📡 Sources: football-data=${fd.length} · api-football=${af.fixtures.length} · thesportsdb=${tsdb.flat().length} → ${tout.length} match(s) uniques`);
+  // `extra` : matchs fournis par l'appelant (The Odds API). Injectés ici
+  // plutôt qu'importés, pour éviter une dépendance circulaire avec odds.js.
+  const tout = dedupe([...fd, ...af.fixtures, ...tsdb.flat(), ...extra]);
+  console.log(`   📡 Sources: football-data=${fd.length} · api-football=${af.fixtures.length} · thesportsdb=${tsdb.flat().length} · odds-api=${extra.length} → ${tout.length} match(s) uniques`);
   return tout;
 }
 

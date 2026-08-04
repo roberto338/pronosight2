@@ -13,7 +13,7 @@ import {
   getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
   getScorers, formatFixturesForPrompt, fetchWithTimeout,
 } from './sources.js';
-import { getOdds, evaluerValue } from './odds.js';
+import { getOdds, getOddsEvents, evaluerValue } from './odds.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL        = process.env.GEMINI_MODEL        || 'gemini-flash-latest';
@@ -441,7 +441,10 @@ export async function runVictor() {
   // Remplace l'ancienne découverte par googleSearch : quota Gemini
   // épuisé, et surtout Victor inventait des matchs inexistants.
   console.log('📡 Récupération des matchs réels du jour...');
-  const fixtures = await getFixturesOfDay(dateISO);
+  // The Odds API couvre 45 compétitions (contre 13 pour football-data) et
+  // son endpoint /events ne consomme aucun crédit — vérifié.
+  const evenementsCotes = await getOddsEvents(dateISO).catch(() => []);
+  const fixtures = await getFixturesOfDay(dateISO, { extra: evenementsCotes });
   const aVenir   = fixtures.filter(f => f.status !== 'FT');
 
   if (aVenir.length === 0) {
