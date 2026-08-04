@@ -231,7 +231,25 @@ verifie('value bet rejeté',   evaluerValue(evMauvais, cotesMatch).value < 0, tr
 verifie('sans cote -> null',  evaluerValue({ ...evBon, pronostic_principal: 'BTTS' }, cotesMatch), null);
 
 // ══════════════════════════════════════════════
-// 7. Sources de données (uniquement avec --live)
+// 7. Fenêtre de rattrapage — décalage de date
+//
+// Régression couverte : le 03/08/2026, 4 pronostics sur 5 n'ont jamais été
+// notés parce que checkResults ne regardait que CURRENT_DATE à 23h30, alors
+// que les matchs WNBA/MLB commençaient à 01h00 heure de Paris.
+// ══════════════════════════════════════════════
+const { decalerJour } = await import('./core.js');
+
+verifie('lendemain simple',        decalerJour('2026-08-03', 1),  '2026-08-04');
+verifie('veille simple',           decalerJour('2026-08-03', -1), '2026-08-02');
+verifie('passage de mois',         decalerJour('2026-08-31', 1),  '2026-09-01');
+verifie('passage d\'année',        decalerJour('2026-12-31', 1),  '2027-01-01');
+verifie('fin de mois court',       decalerJour('2026-03-01', -1), '2026-02-28');
+verifie('recul de 3 jours',        decalerJour('2026-08-03', -3), '2026-07-31');
+// Midi UTC en pivot : garantit qu'aucun fuseau ne fait basculer le jour
+verifie('stable, aller-retour',    decalerJour(decalerJour('2026-08-03', 1), -1), '2026-08-03');
+
+// ══════════════════════════════════════════════
+// 8. Sources de données (uniquement avec --live)
 // ══════════════════════════════════════════════
 if (process.argv.includes('--live')) {
   console.log('\n🌐 Vérification des sources de données...\n');

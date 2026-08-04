@@ -152,14 +152,20 @@ export async function getVictorBriefing() {
 // ══════════════════════════════════════════════
 
 // ── Appel Gemini helper ───────────────────────
-async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false, model = null } = {}) {
+async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false, model = null, noThinking = false } = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
   const body = {
     contents,
     generationConfig: {
       maxOutputTokens: Math.min(maxTokens, 8192),
       temperature: 0.4,
-      ...(jsonMode ? { responseMimeType: 'application/json' } : {})
+      ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+      // Les modèles 2.5 « pensent » avant de répondre, et ces tokens de
+      // réflexion sont décomptés de maxOutputTokens. Mesuré sur l'arbitrage :
+      // 383 tokens de réflexion sur un budget de 400 → 1 token de réponse,
+      // finishReason=MAX_TOKENS, JSON tronqué. Sur une tâche de simple
+      // jugement, la réflexion n'apporte rien et nuit à la fiabilité.
+      ...(noThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
     },
   };
   if (search) body.tools = [{ googleSearch: {} }];
@@ -224,7 +230,7 @@ async function groqRequest(systemPrompt, userMessage, maxTokens = 8000, tentativ
 // épuisé + matchs hallucinés). Les faits arrivent déjà dans
 // `userMessage`, construits par victor/sources.js. L'IA ne fait
 // plus qu'analyser des données réelles.
-async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
+async function callAI(systemPrompt, userMessage, maxTokens = 8000, { noThinking = false } = {}) {
   const erreurs = [];
 
   // ── 1. Gemini en mode JSON strict (primaire) ──
@@ -232,7 +238,7 @@ async function callAI(systemPrompt, userMessage, maxTokens = 8000) {
     try {
       const data = await geminiRequest(
         [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }],
-        { maxTokens, jsonMode: true }
+        { maxTokens, jsonMode: true, noThinking }
       );
       console.log(`   🤖 Moteur : Gemini (${GEMINI_MODEL})`);
       return { source: 'gemini', data };
@@ -916,27 +922,58 @@ export function evalValueBet(valueBet, homeGoals, awayGoals, homeName = '', away
   return evalPronostic(valueBet, homeGoals, awayGoals, homeName, awayName);
 }
 
-export async function checkResults() {
-  console.log('\n🔎 Vérification des résultats du jour...\n');
+// Fenêtre de rattrapage : le job tourne à 23h30 Paris, mais beaucoup de
+// matchs finissent après (WNBA et MLB commencent vers 01h00 heure de Paris).
+// En ne regardant que CURRENT_DATE, ces pronostics restaient NULL À VIE et
+// disparaissaient silencieusement de l'échantillon — constaté le 04/08/2026 :
+// 4 pronostics sur 5 jamais notés pour cette seule raison.
+const CHECK_JOURS = Number(process.env.CHECK_RESULTS_JOURS || 3);
 
-  const dateISO = new Date().toISOString().slice(0, 10);
+/** Décale une date ISO de n jours. Midi UTC en pivot : aucun fuseau ne peut
+ *  faire basculer le jour au passage. */
+export function decalerJour(dateISO, n) {
+  const d = new Date(`${dateISO}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+export async function checkResults() {
+  console.log(`\n🔎 Vérification des résultats (fenêtre ${CHECK_JOURS} jours)...\n`);
+
+  const aujourdhui = new Date().toISOString().slice(0, 10);
 
   const { rows: pronostics } = await query(
-    `SELECT id, match, sport, pronostic_principal, value_bet
+    `SELECT id, to_char(date, 'YYYY-MM-DD') AS date_iso,
+            match, sport, pronostic_principal, value_bet
      FROM ps_pronostics
-     WHERE date = $1 AND resultat_reel IS NULL`,
-    [dateISO]
+     WHERE date >= CURRENT_DATE - $1::int
+       AND resultat_reel IS NULL
+     ORDER BY date DESC, id`,
+    [CHECK_JOURS]
   );
 
   if (pronostics.length === 0) {
-    console.log('ℹ️  Aucun pronostic à vérifier pour aujourd\'hui.');
+    console.log('ℹ️  Aucun pronostic en attente de résultat.');
     return;
   }
 
   console.log(`📋 ${pronostics.length} pronostic(s) à vérifier...`);
 
-  // ── Source primaire : APIs sportives (football-data / TSDB / API-Football) ──
-  const fixtures = await getResultsOfDay(dateISO);
+  // ── Résultats par date ───────────────────────────────────────
+  // On interroge chaque date concernée ET le lendemain : un match du
+  // soir bascule au jour suivant selon le fuseau de la source (un match
+  // à 23h00 Paris est daté du lendemain côté API américaine).
+  const datesUtiles = new Set();
+  for (const p of pronostics) {
+    datesUtiles.add(p.date_iso);
+    const lendemain = decalerJour(p.date_iso, 1);
+    if (lendemain <= aujourdhui) datesUtiles.add(lendemain);
+  }
+
+  const resultatsParDate = new Map();
+  for (const d of [...datesUtiles].sort()) {
+    resultatsParDate.set(d, await getResultsOfDay(d));
+  }
 
   for (const p of pronostics) {
     try {
@@ -944,7 +981,13 @@ export async function checkResults() {
       let source = 'ia';
 
       // ── Tentative sources factuelles ───────────
-      const fixture = matchFixture(p.match, fixtures);
+      // Sa propre date d'abord, puis le lendemain : en cas d'homonymie
+      // entre deux journées, on privilégie la bonne.
+      const candidats = [
+        ...(resultatsParDate.get(p.date_iso) || []),
+        ...(resultatsParDate.get(decalerJour(p.date_iso, 1)) || []),
+      ];
+      const fixture = matchFixture(p.match, candidats);
 
       if (fixture) {
         // Guard : match pas encore terminé (getResultsOfDay ne renvoie
@@ -968,7 +1011,35 @@ export async function checkResults() {
       // exactement l'hallucination qu'on cherche à éliminer. On laisse
       // le pronostic en attente : il sera repris au prochain passage.
       if (!fixture) {
-        console.log(`   ❔ ${p.match} — Absent des sources, laissé en attente`);
+        // Au-delà de la fenêtre, le pronostic ne sera plus jamais repris :
+        // on le signale explicitement plutôt que de le perdre en silence.
+        const age = Math.round((new Date(aujourdhui) - new Date(p.date_iso)) / 864e5);
+        if (age >= CHECK_JOURS) {
+          console.warn(`   ⚠️  ${p.match} (${p.date_iso}) — introuvable après ${age}j, DERNIER passage`);
+        } else {
+          console.log(`   ❔ ${p.match} (${p.date_iso}) — absent des sources, réessai demain`);
+        }
+        continue;
+      }
+
+      // ── Garde-fou : un non-pari ne se note pas ────────────────
+      // Constaté le 04/08/2026 : un pronostic "NO BET" est passé par
+      // l'arbitrage IA, qui l'a jugé GAGNANT — d'où un taux de réussite
+      // de 100% sur un pari qui n'existait pas. On enregistre le score
+      // (il est factuel et utile) mais on laisse pronostic_correct à NULL.
+      const notable = estNotable({
+        pronostic_principal: p.pronostic_principal,
+        equipe_a: fixture.home, equipe_b: fixture.away,
+      });
+      if (!notable) {
+        await query(
+          `UPDATE ps_pronostics
+           SET resultat_reel = $1, score_reel = $2,
+               pronostic_correct = NULL, value_bet_correct = NULL, updated_at = NOW()
+           WHERE id = $3`,
+          [resultatReel, scoreReel, p.id]
+        );
+        console.log(`   ⊘ [${source}] ${p.match} — ${scoreReel} | non-pari, score enregistré sans notation`);
         continue;
       }
 
@@ -989,10 +1060,13 @@ Détermine uniquement si chaque pari est gagné. Réponds UNIQUEMENT avec ce JSO
 Utilise null si un pari est impossible à trancher.`;
 
         try {
+          // noThinking : tâche de simple jugement, la réflexion interne
+          // dévorait tout le budget de tokens sans rien apporter.
           const resp   = await callAI(
             'Tu arbitres des paris sportifs à partir d\'un score fourni. Réponds uniquement en JSON.',
             userMsg,
-            400
+            600,
+            { noThinking: true }
           );
           const result = extractJSON(resp);
           pronosticCorrect = result.pronostic_correct ?? null;
@@ -1032,13 +1106,38 @@ Utilise null si un pari est impossible à trancher.`;
 // ══════════════════════════════════════════════
 
 /**
- * Calcule et sauvegarde les stats du jour dans ps_victor_stats.
+ * Recalcule les stats de toutes les dates ayant au moins un pronostic noté
+ * dans la fenêtre de rattrapage.
+ *
+ * Indispensable depuis l'ajout de cette fenêtre : un match du soir noté
+ * avec deux jours de retard appartient à SA date, pas à celle du jour où
+ * on l'a enfin trouvé. Ne recalculer que CURRENT_DATE laisserait les
+ * statistiques des jours précédents figées et fausses.
  */
-export async function updateVictorStats() {
-  console.log('\n📊 Calcul des stats du jour...\n');
+export async function updateVictorStats({ jours = CHECK_JOURS } = {}) {
+  console.log('\n📊 Calcul des stats...\n');
 
-  const dateISO = new Date().toISOString().slice(0, 10);
+  const { rows: dates } = await query(
+    `SELECT DISTINCT to_char(date, 'YYYY-MM-DD') AS d
+     FROM ps_pronostics
+     WHERE date >= CURRENT_DATE - $1::int
+       AND pronostic_correct IS NOT NULL
+     ORDER BY 1`,
+    [jours]
+  );
 
+  if (dates.length === 0) {
+    console.log('ℹ️  Aucun résultat vérifié sur la fenêtre.');
+    return;
+  }
+
+  for (const { d } of dates) {
+    await calculerStatsPour(d);
+  }
+}
+
+/** Calcule et sauvegarde les stats d'une date donnée. */
+async function calculerStatsPour(dateISO) {
   try {
     const { rows } = await query(
       `SELECT
