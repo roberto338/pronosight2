@@ -328,7 +328,15 @@ app.get('/api/status', (req, res) => {
     footballData: !!process.env.FOOTBALL_DATA_KEY,
     liveApi: !!process.env.LIVE_API_KEY,
     apifootball: !!process.env.RAPIDAPI_KEY,
-    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash'
+    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+
+    // Quelle version tourne réellement ? Sans ce repère, on en était
+    // réduit à deviner via l'uptime après chaque déploiement — et donc
+    // à ne jamais pouvoir affirmer que la prod exécute bien le dernier
+    // commit. Render renseigne RENDER_GIT_COMMIT automatiquement.
+    commit:  (process.env.RENDER_GIT_COMMIT || 'inconnu').slice(0, 7),
+    branche: process.env.RENDER_GIT_BRANCH || 'inconnue',
+    demarre: new Date(Date.now() - process.uptime() * 1000).toISOString(),
   });
 });
 
