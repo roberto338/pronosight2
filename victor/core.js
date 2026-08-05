@@ -89,34 +89,14 @@ export async function getVictorBriefing() {
     console.warn('⚠️ [Briefing] Stats sport non disponibles:', err.message);
   }
 
-  // ── Patterns actifs ──────────────────────────
-  try {
-    const { rows: patterns } = await query(`
-      SELECT nom, type, sport, equipe_a, equipe_b,
-             condition_trigger, pattern_observe,
-             taux_confirmation, pari_suggere, fiabilite
-      FROM ps_victor_patterns
-      WHERE actif = true
-      ORDER BY
-        CASE fiabilite WHEN 'Fort' THEN 1 WHEN 'Moyen' THEN 2 ELSE 3 END,
-        taux_confirmation DESC
-    `);
-
-    if (patterns.length > 0) {
-      lines.push('=== PATTERNS STATISTIQUES ACTIFS ===');
-      patterns.forEach(p => {
-        const badge = p.fiabilite === 'Fort' ? '🔥' : p.fiabilite === 'Moyen' ? '📊' : '🔍';
-        const equipes = (p.equipe_a || p.equipe_b)
-          ? ` [${[p.equipe_a, p.equipe_b].filter(Boolean).join(' / ')}]`
-          : '';
-        lines.push(`${badge} [${p.fiabilite} ${p.taux_confirmation}%] ${p.nom}${equipes}`);
-        lines.push(`   Trigger: ${p.condition_trigger}`);
-        lines.push(`   Pari: ${p.pari_suggere}\n`);
-      });
-    }
-  } catch (err) {
-    console.warn('⚠️ [Briefing] Patterns non disponibles:', err.message);
-  }
+  // ── Patterns : volontairement ABSENTS d'ici ──────────────────
+  // Ils étaient injectés ici SANS filtre ni limite : les 81 patterns
+  // actifs, soit 10 430 caractères, dont des taux à 50,6 % — un pile ou
+  // face présenté comme un signal. Et runVictor injecte déjà sa propre
+  // sélection, filtrée sur les compétitions du jour et limitée à 20.
+  // Les patterns arrivaient donc en double, la version d'ici noyant les
+  // vrais signaux (87 %) sous des dizaines de lignes sans valeur.
+  // Une seule source désormais : celle de runVictor.
 
   // ── Dernières règles Victor ──────────────────
   try {
