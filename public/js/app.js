@@ -1923,14 +1923,19 @@ function _renderPronoList() {
   if (!allPicks.length) {
     const h = new Date().getHours();
     const nextRun = h < 7 ? '07h00' : h < 13 ? '13h00' : '07h00 demain';
+    // Le bouton « Forcer l'analyse » est une commande d'administration :
+    // il déclenche un run complet (crédits IA + cotes). Réservé à l'admin.
+    const estAdmin = !!localStorage.getItem('ps_admin_key');
     container.innerHTML = `<div class="card">
-      <div style="text-align:center;padding:40px">
-        <div style="font-size:40px">🎙️</div>
-        <div style="margin-top:12px;font-size:16px;font-weight:800;color:var(--text1)">Victor analyse en cours...</div>
-        <div style="margin-top:6px;font-size:13px;color:var(--muted)">Prochaine analyse à ${nextRun}</div>
-        <button onclick="forceVictorRefresh()" style="margin-top:18px;background:var(--accent);color:#000;border:none;border-radius:10px;padding:10px 22px;font-weight:800;font-size:13px;cursor:pointer;font-family:'Exo 2',sans-serif;letter-spacing:1px">
-          ⚡ Forcer l'analyse
-        </button>
+      <div class="etat-vide">
+        <div class="etat-vide-icone">🎙️</div>
+        <div class="etat-vide-titre">Aucune analyse pour aujourd'hui</div>
+        <div class="etat-vide-texte">
+          Victor étudie les matchs chaque matin à 7h. Il ne publie un pronostic que
+          lorsque les chiffres lui donnent un avantage réel — les jours sans, il se tait.
+          <br><br>Prochaine analyse à <strong style="color:var(--text2)">${nextRun}</strong>.
+        </div>
+        ${estAdmin ? `<button class="dash-cta" style="margin-top:18px" onclick="forceVictorRefresh()">Forcer l'analyse</button>` : ''}
       </div>
     </div>`;
     return;
@@ -1950,12 +1955,12 @@ function _renderPronoList() {
     bySport[sportKey].picks.push(p);
   });
 
-  const headerHtml = `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0 12px;flex-wrap:wrap;gap:6px">
-    <div style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace">
-      🎙️ VICTOR · ${allPicks.length} PRONOSTIC${allPicks.length > 1 ? 'S' : ''}
-      ${updateTime ? `· <span style="opacity:.7">🔄 ${updateTime}</span>` : ''}
+  const headerHtml = `<div class="victor-tete">
+    <div class="victor-resume">
+      <strong>${allPicks.length}</strong> analyse${allPicks.length > 1 ? 's' : ''} retenue${allPicks.length > 1 ? 's' : ''} aujourd'hui
+      ${updateTime ? `<span class="victor-maj">mise à jour à ${updateTime}</span>` : ''}
     </div>
-    <button onclick="refreshPronoVictor()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:5px 12px;font-size:11px;cursor:pointer;font-family:'JetBrains Mono',monospace">🔄 Actualiser</button>
+    <button class="victor-actualiser" onclick="refreshPronoVictor()">Actualiser</button>
   </div>`;
 
   if (!filtered.length) {
@@ -1979,39 +1984,43 @@ function _renderPronoList() {
       const picksHtml = cPicks.map(p => {
         const confColor = _confColor(p.confiance);
         const confBg    = confColor === '#00dd55' ? 'rgba(0,221,85,.12)' : confColor === '#ffcc00' ? 'rgba(255,204,0,.12)' : 'rgba(255,102,68,.12)';
-        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px">
-          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap">
-            <div style="flex:1;min-width:0">
-              ${p.heure ? `<div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:4px">🕐 ${p.heure}</div>` : ''}
-              <div style="font-weight:800;font-size:15px;color:var(--text1);margin-bottom:6px">${p.equipe_a || ''} <span style="color:var(--muted);font-weight:400">vs</span> ${p.equipe_b || ''}</div>
-              <div style="background:var(--accent);color:#000;display:inline-block;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:800;margin-bottom:8px">
-                🎯 ${p.pronostic_principal || ''}${p.cote_estimee ? ` · @${parseFloat(p.cote_estimee).toFixed(2)}` : ''}
-              </div>
-              ${p.value_bet ? `<div style="font-size:11px;color:#00aaff;margin-bottom:4px">💡 Value : <strong>${p.value_bet}</strong>${p.cote_value ? ` @${parseFloat(p.cote_value).toFixed(2)}` : ''}</div>` : ''}
-              ${p.pari_a_eviter ? `<div style="font-size:11px;color:#ff6644;margin-bottom:4px">🚫 Éviter : ${p.pari_a_eviter}</div>` : ''}
-              ${p.score_predit ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px">🏟️ Score prédit : <strong style="color:var(--text2)">${p.score_predit}</strong></div>` : ''}
-              ${p.phrase_signature ? `<div style="font-size:11px;color:var(--muted);font-style:italic;border-top:1px solid var(--border);padding-top:8px;margin-top:6px">"${p.phrase_signature}"</div>` : ''}
+        // Niveau de confiance en classe plutôt qu'en couleur codée en dur :
+        // le thème clair peut ainsi adapter les teintes.
+        const nConf = _confNum(p.confiance);
+        const clsConf = nConf >= 80 ? 'haute' : nConf >= 50 ? 'moyenne' : 'basse';
+        return `<div class="pick">
+          <div class="pick-tete">
+            <div class="pick-affiche">
+              <div class="pick-equipes">${p.equipe_a || ''} <span class="pick-vs">contre</span> ${p.equipe_b || ''}</div>
+              ${p.heure ? `<div class="pick-heure">${p.heure}</div>` : ''}
             </div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:60px">
-              <div style="background:${confBg};border:1px solid ${confColor};color:${confColor};border-radius:8px;padding:4px 10px;font-size:11px;font-weight:800;white-space:nowrap">${p.confiance || ''}</div>
-              ${p.enjeu ? `<div style="font-size:9px;color:var(--muted);text-align:right;max-width:80px;line-height:1.3">${p.enjeu.slice(0,50)}</div>` : ''}
-            </div>
+            <div class="pick-conf ${clsConf}">${p.confiance || ''}</div>
           </div>
+
+          <div class="pick-pari">
+            <span class="pick-pari-libelle">${p.pronostic_principal || ''}</span>
+            ${p.cote_estimee ? `<span class="pick-cote">${parseFloat(p.cote_estimee).toFixed(2)}</span>` : ''}
+          </div>
+
+          <div class="pick-lignes">
+            ${p.value_bet && p.value_bet !== 'aucun' ? `<div class="pick-ligne value"><span>Value</span> ${p.value_bet}${p.cote_value ? ` · ${parseFloat(p.cote_value).toFixed(2)}` : ''}</div>` : ''}
+            ${p.score_predit ? `<div class="pick-ligne"><span>Score envisagé</span> ${p.score_predit}</div>` : ''}
+            ${p.enjeu ? `<div class="pick-ligne"><span>Enjeu</span> ${p.enjeu.slice(0, 90)}</div>` : ''}
+            ${p.pari_a_eviter ? `<div class="pick-ligne eviter"><span>À éviter</span> ${p.pari_a_eviter}</div>` : ''}
+          </div>
+
+          ${p.phrase_signature ? `<div class="pick-mot">${p.phrase_signature}</div>` : ''}
         </div>`;
       }).join('');
 
-      return `<div style="margin-bottom:8px">
-        <div style="font-size:10px;letter-spacing:2px;color:var(--muted);font-family:'JetBrains Mono',monospace;padding:8px 0 6px;border-bottom:1px solid var(--border);margin-bottom:10px">
-          📋 ${comp.toUpperCase()}
-        </div>
+      return `<div class="pick-groupe">
+        <div class="pick-compet">${comp}</div>
         ${picksHtml}
       </div>`;
     }).join('');
 
-    return `<div class="card" style="margin-bottom:12px">
-      <div style="font-size:13px;font-weight:800;letter-spacing:1px;color:var(--text1);margin-bottom:12px">
-        ${emoji} ${label.toUpperCase()} <span style="color:var(--muted);font-weight:400;font-size:11px">(${picks.length})</span>
-      </div>
+    return `<div class="card">
+      <div class="pick-sport">${emoji} ${label} <span>${picks.length}</span></div>
       ${compsHtml}
     </div>`;
   }).join('');
@@ -2020,7 +2029,16 @@ function _renderPronoList() {
 }
 
 async function forceVictorRefresh() {
-  const apiKey = 'd8828503422f052ab9a0aef79183a3f2da24080f48eff58da83a3cbc85c441ca';
+  // ⚠️ La clé était écrite en dur ici, donc servie à TOUS les visiteurs.
+  // Elle protège /api/victor/refresh, /admin/queues ET toute l'API Nexus
+  // (nexus/routes.js retombe sur VICTOR_API_KEY faute de NEXUS_API_KEY).
+  // Elle vit désormais dans le localStorage de l'administrateur uniquement :
+  //   localStorage.setItem('ps_admin_key', '<clé>')
+  const apiKey = localStorage.getItem('ps_admin_key');
+  if (!apiKey) {
+    alert("Action réservée à l'administration.");
+    return;
+  }
   const btn = document.querySelector('#pronoVictorContent button');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Analyse en cours...'; }
   try {

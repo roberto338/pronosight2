@@ -251,6 +251,114 @@ body.light-mode header{
 }
 body.light-mode .tab.active{ border-color:var(--accent); }
 
+/* ── 10 ter. CARTES DE PRONOSTIC ───────────── */
+/* Ces cartes étaient écrites en styles en ligne dans app.js, donc
+   impossibles à retoucher depuis une feuille de style. Passées en
+   classes : la présentation redevient modifiable sans toucher au JS. */
+
+.victor-tete{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; flex-wrap:wrap; padding:2px 2px 16px;
+}
+.victor-resume{ font-size:14px; color:var(--text2); }
+.victor-resume strong{ color:var(--text); font-weight:800; }
+.victor-maj{ color:var(--muted); font-size:12.5px; margin-left:8px; }
+.victor-actualiser{
+  background:transparent; border:1px solid var(--border);
+  color:var(--text2); border-radius:9px; padding:7px 14px;
+  font-size:13px; font-weight:600; cursor:pointer; font-family:var(--ui);
+}
+.victor-actualiser:hover{ border-color:var(--border2); color:var(--text); }
+
+.pick-sport{
+  font-size:16px; font-weight:800; color:var(--text);
+  letter-spacing:-.02em; margin-bottom:4px;
+}
+.pick-sport span{
+  color:var(--muted); font-weight:600; font-size:13px; margin-left:4px;
+}
+.pick-groupe{ margin-top:18px; }
+.pick-compet{
+  font-size:12.5px; font-weight:700; color:var(--muted);
+  padding-bottom:8px; margin-bottom:12px;
+  border-bottom:1px solid var(--border);
+}
+
+/* Une carte = un pari. Hiérarchie : l'affiche, puis le pari, puis le détail. */
+.pick{
+  background:var(--surface2);
+  border:1px solid var(--border);
+  border-radius:13px; padding:16px 18px; margin-bottom:10px;
+}
+.pick-tete{
+  display:flex; align-items:flex-start; justify-content:space-between;
+  gap:12px; margin-bottom:12px;
+}
+.pick-affiche{ min-width:0; }
+.pick-equipes{
+  font-size:15.5px; font-weight:700; color:var(--text);
+  letter-spacing:-.02em; line-height:1.35;
+}
+.pick-vs{ color:var(--muted); font-weight:500; }
+.pick-heure{ font-size:12.5px; color:var(--muted); margin-top:3px; }
+
+/* Le niveau de confiance porte une classe : le thème clair peut adapter
+   les teintes, ce qu'une couleur codée en dur interdisait. */
+.pick-conf{
+  flex-shrink:0; border-radius:8px; padding:5px 11px;
+  font-size:12px; font-weight:700; white-space:nowrap;
+  border:1px solid transparent;
+}
+.pick-conf.haute  { background:rgba(62,207,142,.13); border-color:rgba(62,207,142,.34); color:#3ecf8e; }
+.pick-conf.moyenne{ background:rgba(232,179,60,.13); border-color:rgba(232,179,60,.34); color:#e8b33c; }
+.pick-conf.basse  { background:rgba(240,97,109,.12); border-color:rgba(240,97,109,.3);  color:#f0616d; }
+body.light-mode .pick-conf.haute  { color:#1a8f5f; }
+body.light-mode .pick-conf.moyenne{ color:#976c07; }
+body.light-mode .pick-conf.basse  { color:#c0303c; }
+
+/* Le pari recommandé : l'information principale, mise en évidence. */
+.pick-pari{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:10px; padding:11px 14px; margin-bottom:12px;
+}
+.pick-pari-libelle{
+  font-size:14.5px; font-weight:700; color:var(--text); letter-spacing:-.015em;
+}
+.pick-cote{
+  font-size:15px; font-weight:800; color:var(--accent);
+  font-variant-numeric:tabular-nums; flex-shrink:0;
+}
+
+.pick-lignes{ display:flex; flex-direction:column; gap:6px; }
+.pick-ligne{ font-size:13px; color:var(--text2); line-height:1.5; }
+.pick-ligne span{
+  color:var(--muted); font-weight:600; margin-right:6px;
+}
+.pick-ligne.value{ color:var(--accent3); }
+.pick-ligne.value span{ color:var(--accent3); opacity:.75; }
+.pick-ligne.eviter{ color:var(--ev-neg); }
+.pick-ligne.eviter span{ color:var(--ev-neg); opacity:.75; }
+body.light-mode .pick-ligne.value { color:#1a8f5f; }
+body.light-mode .pick-ligne.eviter{ color:#c0303c; }
+
+/* La phrase de Victor : c'est la voix humaine du produit, on la traite
+   comme une citation et non comme une donnée de plus. */
+.pick-mot{
+  margin-top:13px; padding-top:12px;
+  border-top:1px solid var(--border);
+  font-size:13.5px; font-style:italic; color:var(--text2);
+  line-height:1.6;
+}
+.pick-mot::before{ content:'« '; color:var(--muted); }
+.pick-mot::after { content:' »'; color:var(--muted); }
+
+@media (max-width:640px){
+  .pick{ padding:14px 15px; }
+  .pick-equipes{ font-size:14.5px; }
+  .pick-pari{ flex-wrap:wrap; }
+}
+
 /* ── 11. NEUTRALISATION DES HALOS ──────────── */
 /* Les box-shadow colorés de main.css donnaient l'effet « néon ». */
 .card, .tab, .nav-btn, .dash-stat, .league-card, .btn{

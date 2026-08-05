@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aperçu design — PronoSight</title>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800;900&family=Barlow+Condensed:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/main.css">
+<link rel="stylesheet" href="/css/design.css">
+</head>
+<body>
+<div class="container">
+
+<header>
+  <div class="logo-wrap">
+    <div class="logo-icon">🔮</div>
+    <div>
+      <div class="logo">PronoSight</div>
+      <div class="logo-sub">Analyses sportives, chiffres à l'appui</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <button class="theme-btn" onclick="document.body.classList.toggle('light-mode')">🌙</button>
+    <div class="version-badge">v4.1</div>
+    <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+  </div>
+</header>
+
+<div class="main-nav">
+  <button class="nav-btn active">Tableau de bord</button>
+  <button class="nav-btn">Pronostics</button>
+  <button class="nav-btn">Aujourd'hui</button>
+  <button class="nav-btn">Bankroll</button>
+  <button class="nav-btn">Combinés</button>
+  <button class="nav-btn">Alertes</button>
+  <button class="nav-btn">Victor</button>
+  <button class="nav-btn">Historique <span class="nav-badge">0</span></button>
+</div>
+
+<div class="card">
+  <div class="dash-grid">
+    <div class="dash-stat"><div class="dash-stat-val" style="color:var(--accent3)">1 000 €</div><div class="dash-stat-lbl">Bankroll</div></div>
+    <div class="dash-stat"><div class="dash-stat-val" style="color:var(--muted)">—</div><div class="dash-stat-lbl">Taux de réussite</div></div>
+    <div class="dash-stat"><div class="dash-stat-val" style="color:var(--muted)">—</div><div class="dash-stat-lbl">Résultat net</div></div>
+    <div class="dash-stat"><div class="dash-stat-val" style="color:var(--muted)">—</div><div class="dash-stat-lbl">Série en cours</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Derniers pronostics</div>
+  <div class="etat-vide">
+    <div class="etat-vide-icone">🎙️</div>
+    <div class="etat-vide-titre">Le suivi commence à votre premier pari</div>
+    <div class="etat-vide-texte">Taux de réussite, résultat net et série apparaîtront ici dès que Victor aura publié une analyse et que le match sera joué.</div>
+  </div>
+</div>
+
+<div class="victor-tete">
+  <div class="victor-resume"><strong>3</strong> analyses retenues aujourd'hui<span class="victor-maj">mise à jour à 07:02</span></div>
+  <button class="victor-actualiser">Actualiser</button>
+</div>
+
+<div class="card">
+  <div class="pick-sport">⚽ Football <span>3</span></div>
+
+  <div class="pick-groupe">
+    <div class="pick-compet">Eredivisie</div>
+
+    <div class="pick">
+      <div class="pick-tete">
+        <div class="pick-affiche">
+          <div class="pick-equipes">PSV <span class="pick-vs">contre</span> Fortuna Sittard</div>
+          <div class="pick-heure">20:00</div>
+        </div>
+        <div class="pick-conf haute">Très élevée</div>
+      </div>
+      <div class="pick-pari">
+        <span class="pick-pari-libelle">Victoire PSV</span>
+        <span class="pick-cote">1.17</span>
+      </div>
+      <div class="pick-lignes">
+        <div class="pick-ligne value"><span>Value</span> Plus de 2.5 buts · 1.22</div>
+        <div class="pick-ligne"><span>Score envisagé</span> 3 – 0</div>
+        <div class="pick-ligne"><span>Enjeu</span> Première journée, PSV lance sa saison à domicile</div>
+        <div class="pick-ligne eviter"><span>À éviter</span> Score exact</div>
+      </div>
+      <div class="pick-mot">Sittard n'a pas gagné à Eindhoven depuis onze ans. Le marché le sait, la cote aussi.</div>
+    </div>
+
+    <div class="pick">
+      <div class="pick-tete">
+        <div class="pick-affiche">
+          <div class="pick-equipes">Go Ahead Eagles <span class="pick-vs">contre</span> Willem II</div>
+          <div class="pick-heure">18:45</div>
+        </div>
+        <div class="pick-conf moyenne">Élevée</div>
+      </div>
+      <div class="pick-pari">
+        <span class="pick-pari-libelle">Plus de 1.5 buts</span>
+        <span class="pick-cote">1.28</span>
+      </div>
+      <div class="pick-lignes">
+        <div class="pick-ligne"><span>Score envisagé</span> 2 – 1</div>
+        <div class="pick-ligne"><span>Enjeu</span> Deux promus offensifs, aucune raison de fermer le jeu</div>
+      </div>
+      <div class="pick-mot">88 % des matchs d'Eredivisie ont dépassé 1.5 but cette saison.</div>
+    </div>
+  </div>
+
+  <div class="pick-groupe">
+    <div class="pick-compet">Primeira Liga</div>
+    <div class="pick">
+      <div class="pick-tete">
+        <div class="pick-affiche">
+          <div class="pick-equipes">Marítimo <span class="pick-vs">contre</span> Casa Pia</div>
+          <div class="pick-heure">16:30</div>
+        </div>
+        <div class="pick-conf basse">Moyenne</div>
+      </div>
+      <div class="pick-pari">
+        <span class="pick-pari-libelle">Double chance : Marítimo ou nul</span>
+        <span class="pick-cote">1.42</span>
+      </div>
+      <div class="pick-lignes">
+        <div class="pick-ligne"><span>Enjeu</span> Reprise, forme inconnue des deux côtés</div>
+        <div class="pick-ligne eviter"><span>À éviter</span> Victoire sèche à l'extérieur</div>
+      </div>
+      <div class="pick-mot">Sans historique de forme, je reste prudent : la cote ne paie pas le risque.</div>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>
