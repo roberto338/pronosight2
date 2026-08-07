@@ -651,6 +651,34 @@ app.listen(PORT, () => {
   } catch (nexusErr) {
     console.warn('⚠️  Nexus non démarré:', nexusErr.message);
   }
+  // ── Maintien en éveil ─────────────────────────
+  // La route /api/ping existait avec le commentaire « évite le sleep
+  // Render free tier »… mais rien ne l'appelait. Le service s'endormait
+  // donc après ~15 min sans trafic, et le worker avec lui.
+  //
+  // Constaté le 07/08/2026 : le job prematch de 7h00 est resté 40 minutes
+  // en file avant d'être pris, puis a été interrompu trois fois de suite.
+  // Les temps d'exécution réels sont pourtant de 13 à 39 secondes : le
+  // problème n'a jamais été la lenteur, mais l'endormissement.
+  //
+  // Une requête sur l'URL publique compte comme trafic entrant côté
+  // Render : c'est ce qui empêche la mise en veille.
+  const urlPublique = process.env.RENDER_EXTERNAL_URL;
+  if (urlPublique) {
+    const PERIODE_MS = 10 * 60 * 1000; // < 15 min, le seuil de Render
+    setInterval(async () => {
+      try {
+        const r = await fetch(`${urlPublique}/api/ping`, { signal: AbortSignal.timeout(15_000) });
+        if (!r.ok) console.warn(`⚠️  Maintien en éveil: HTTP ${r.status}`);
+      } catch (err) {
+        console.warn('⚠️  Maintien en éveil échoué:', err.name === 'TimeoutError' ? 'timeout' : err.message);
+      }
+    }, PERIODE_MS).unref(); // n'empêche pas un arrêt propre du process
+    console.log(`    Maintien éveil: ✅ ping toutes les 10 min sur ${urlPublique}`);
+  } else {
+    console.log('    Maintien éveil: ⚠️  RENDER_EXTERNAL_URL absente (normal en local)');
+  }
+
   console.log('    File de jobs:   ✅ PostgreSQL (victor_jobs) — zéro Redis');
   console.log('🎙️  PronoSight v4.1 — Victor opérationnel\n');
 });

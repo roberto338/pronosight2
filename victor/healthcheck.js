@@ -91,7 +91,23 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
     jobsBloques = bloques[0]?.n ?? 0;
 
     if (jobsBloques > 0) problemes.push(`${jobsBloques} job(s) figé(s) en 'running'`);
-    if (jobs.failed > 3)  problemes.push(`${jobs.failed} job(s) en échec`);
+
+    // Un échec RÉCENT est actionnable ; un échec de juillet est une
+    // scorie en attente de purge. Les mélanger noyait le signal utile :
+    // le 07/08, le heartbeat annonçait « 9 job(s) en échec » alors que
+    // le fait marquant était l'échec du prematch du matin même.
+    const { rows: recents } = await query(
+      `SELECT name, attempts, max_attempts, left(coalesce(error,''), 80) AS motif
+       FROM victor_jobs
+       WHERE status = 'failed' AND created_at > NOW() - INTERVAL '36 hours'
+       ORDER BY created_at DESC`
+    );
+    for (const r of recents) {
+      problemes.push(`job "${r.name}" abandonné après ${r.attempts}/${r.max_attempts} essais — ${r.motif}`);
+    }
+
+    const anciens = jobs.failed - recents.length;
+    if (anciens > 5) problemes.push(`${anciens} ancien(s) job(s) en échec (purge automatique sous 14 j)`);
   } catch (err) {
     problemes.push(`File inaccessible : ${err.message}`);
   }
