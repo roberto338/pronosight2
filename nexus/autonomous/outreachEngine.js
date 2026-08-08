@@ -7,7 +7,7 @@
 import { runResearch } from '../agents/researchAgent.js';
 import { runWrite    } from '../agents/writeAgent.js';
 import { query }       from '../../db/database.js';
-import fetch           from 'node-fetch';
+import { fetchWithTimeout as fetch } from '../lib/http.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 

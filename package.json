@@ -10,9 +10,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch --env-file=.env server.js",
-    "test": "node victor/test-unit.js",
+    "test": "node victor/test-unit.js && node nexus/test-unit.js",
     "test:live": "node victor/test-unit.js --live",
-    "health": "node victor/healthcheck.js"
+    "health": "node victor/healthcheck.js",
+    "test:nexus": "node nexus/test-unit.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -24,7 +25,6 @@
     "helmet": "^8.0.0",
     "jszip": "^3.10.1",
     "node-cron": "^3.0.3",
-    "node-fetch": "^3.3.2",
     "pg": "^8.13.0"
   }
 }

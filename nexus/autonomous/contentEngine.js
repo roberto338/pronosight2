@@ -6,7 +6,7 @@
 
 import { runWrite } from '../agents/writeAgent.js';
 import { query }    from '../../db/database.js';
-import fetch        from 'node-fetch';
+import { fetchWithTimeout as fetch } from '../lib/http.js';
 
 const PROJECTS = ['PronoSight', 'MÉTAFICTION', 'NutriPlan AI', 'Nexus', 'Fruity Arena'];
 

@@ -13,7 +13,7 @@
 // Fallback: returns null gracefully if key missing
 // ══════════════════════════════════════════════
 
-import fetch from 'node-fetch';
+import { fetchWithTimeout as fetch } from '../http.js';
 
 const BASE_URL    = 'https://api.brevo.com/v3';
 const DELAYS_DAYS = [0, 2, 4, 7, 14]; // J+0, J+2, J+4, J+7, J+14

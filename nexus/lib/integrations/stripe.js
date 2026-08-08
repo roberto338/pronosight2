@@ -14,7 +14,7 @@
 // Fallback: returns null gracefully if key missing
 // ══════════════════════════════════════════════
 
-import fetch from 'node-fetch';
+import { fetchWithTimeout as fetch } from '../http.js';
 
 const STRIPE_BASE = 'https://api.stripe.com/v1';
 

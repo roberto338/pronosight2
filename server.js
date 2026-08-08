@@ -41,6 +41,13 @@ app.use(helmet({
   }
 }));
 app.use(cors({ origin: false }));
+
+// Le chat Nexus annonce « max 10 MB » (nexus/chat.html) et envoie les fichiers
+// en base64, soit ~13,4 MB de JSON. Le plafond global de 1 MB les rejetait tous
+// au-delà de ~750 Ko. Parser dédié AVANT le global : body-parser marque req._body
+// et le second parser passe son tour. Le plafond large reste confiné à /nexus,
+// derrière Basic Auth — l'élargir globalement exposerait les routes publiques.
+app.use('/nexus', express.json({ limit: '15mb' }));
 app.use(express.json({ limit: '1mb' }));
 
 // ── Rate Limiting ──

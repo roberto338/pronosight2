@@ -14,10 +14,10 @@
 // ══════════════════════════════════════════════
 
 import JSZip     from 'jszip';
-import fetch     from 'node-fetch';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, dirname }    from 'path';
 import { fileURLToPath }    from 'url';
+import { fetchWithTimeout as fetch } from '../http.js';
 
 const BASE_URL = 'https://api.netlify.com/api/v1';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -75,6 +75,7 @@ async function buildZip(htmlContent) {
  */
 async function deployZip(siteId, zipBuffer) {
   const token = process.env.NETLIFY_TOKEN;
+  // Upload binaire : plafond plus large que les appels JSON (30s par défaut)
   const resp = await fetch(`${BASE_URL}/sites/${siteId}/deploys`, {
     method:  'POST',
     headers: {
@@ -82,7 +83,7 @@ async function deployZip(siteId, zipBuffer) {
       'Content-Type': 'application/zip',
     },
     body: zipBuffer,
-  });
+  }, 120_000);
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
     throw new Error(`Netlify deploy failed (${resp.status}): ${err.message || resp.statusText}`);

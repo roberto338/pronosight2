@@ -22,10 +22,10 @@ import { createStripeProduct } from '../lib/integrations/stripe.js';
 import { createBrevoSequence } from '../lib/integrations/brevo.js';
 import { remember }            from '../lib/longTermMemory.js';
 import { query  }              from '../../db/database.js';
-import fetch                   from 'node-fetch';
 import { writeFile, mkdir }    from 'fs/promises';
 import { join, dirname }       from 'path';
 import { fileURLToPath }       from 'url';
+import { fetchWithTimeout as fetch } from '../lib/http.js';
 
 const __dirname  = dirname(fileURLToPath(import.meta.url));
 const OUTPUTS    = join(__dirname, '..', '..', 'nexus', 'outputs');

@@ -5,7 +5,7 @@
 
 import { query }   from '../../db/database.js';
 import { remember } from '../lib/longTermMemory.js';
-import fetch        from 'node-fetch';
+import { fetchWithTimeout as fetch } from '../lib/http.js';
 
 // ── Stripe helper ────────────────────────────────
 
