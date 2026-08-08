@@ -445,7 +445,10 @@ export async function runVictor() {
 
   const codesCompet = [...new Set(aVenir.map(f => f.codeCompet).filter(Boolean))];
   const classement  = await getStandings(codesCompet).catch(() => new Map());
-  const h2h         = await getH2H(aVenir, 8).catch(() => new Map());
+  // 4 et non 8 : chaque H2H coûte une requête football-data, et le
+  // plafond de 10/min déclenchait une pause de ~54 s en pleine analyse.
+  // Moins de temps passé dans le job = moins d'exposition à ce qui le tue.
+  const h2h         = await getH2H(aVenir, 4).catch(() => new Map());
   const buteurs     = await getScorers(codesCompet).catch(() => new Map());
   const cotes       = await getOdds(aVenir).catch(() => new Map());
 

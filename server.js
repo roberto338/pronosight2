@@ -9,6 +9,7 @@ import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
 import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
+import { installerSurveillanceProcess } from './victor/mortalite.js';
 import { victorQueue, addLiveJob, getQueueCounts } from './queues/victorQueue.js';
 import { setupQueueDashboard }      from './admin/queueDashboard.js';
 import { nexusRouter, startNexusWorker, startNexusCron, startTelegramHandler } from './nexus/index.js';
@@ -655,6 +656,15 @@ app.listen(PORT, () => {
   console.log(`    API-Football:   ${process.env.RAPIDAPI_KEY      ? '✅' : '⚠️  optionnelle'}`);
   console.log(`    PostgreSQL:     ${process.env.DATABASE_URL      ? '✅' : '❌ manquante'}`);
   console.log(`    Telegram:       ${process.env.TELEGRAM_BOT_TOKEN ? '✅' : '⚠️  optionnelle'}\n`);
+
+  // ── Surveillance du process ───────────────────
+  // À installer AVANT le worker : c'est pendant les jobs lourds que le
+  // process meurt, et jusqu'ici sans laisser la moindre trace.
+  try {
+    installerSurveillanceProcess();
+  } catch (survErr) {
+    console.warn('⚠️  Surveillance process non installée:', survErr.message);
+  }
 
   // ── Démarrage Worker Victor (poller PostgreSQL) ──
   try {
