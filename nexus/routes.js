@@ -528,6 +528,10 @@ router.post('/chat/stream', requireChatAuth, async (req, res) => {
         stream:     true,
         messages:   [{ role: 'user', content: userContent }],
       }),
+      // Plafond sur l'établissement du flux. Une fois le stream ouvert, c'est la
+      // boucle reader.read() ci-dessous qui gouverne — undici applique son
+      // bodyTimeout d'inactivité (5 min) sur un flux qui se tairait.
+      signal: AbortSignal.timeout(Number(process.env.AI_TIMEOUT_MS || 90_000)),
     });
 
     if (!claudeResp.ok) {
@@ -571,7 +575,9 @@ router.post('/chat/stream', requireChatAuth, async (req, res) => {
     setImmediate(async () => {
       try {
         await saveMessage(chatId, 'assistant', fullText, resolvedType);
-        extractAndSave('chat', promptText, fullText);
+        // Signature : (taskId, agentType, input, output). La voie streaming n'a
+        // pas de nexus_tasks associée → taskId null (source_task_id est nullable).
+        await extractAndSave(null, resolvedType, promptText, fullText);
       } catch (err) {
         console.error('[Chat/stream] Post-save error:', err.message);
       }
@@ -796,7 +802,7 @@ GOOGLE_REDIRECT_URI=https://pronosight2.onrender.com/nexus/google/callback</pre>
       `);
     }
     const { getAuthUrl } = await import('./lib/googleAuth.js');
-    res.redirect(getAuthUrl());
+    res.redirect(await getAuthUrl());
   } catch (err) {
     res.status(500).send(`Erreur: ${err.message}`);
   }
@@ -804,8 +810,12 @@ GOOGLE_REDIRECT_URI=https://pronosight2.onrender.com/nexus/google/callback</pre>
 
 // ── GET /nexus/google/callback ──────────────────
 // Receives the code from Google, saves tokens, redirects to chat
+// Route nécessairement publique : c'est Google qui l'appelle, pas un navigateur
+// authentifié. La protection est le `state` émis par /google/auth (lui, derrière
+// requireChatAuth) — sans cette vérification, n'importe qui peut lier son propre
+// compte Google à cette instance.
 router.get('/google/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
   if (error) {
     return res.redirect(`/nexus/chat?google=error&reason=${encodeURIComponent(error)}`);
   }
@@ -813,7 +823,8 @@ router.get('/google/callback', async (req, res) => {
     return res.redirect('/nexus/chat?google=error&reason=no_code');
   }
   try {
-    const { exchangeCode } = await import('./lib/googleAuth.js');
+    const { exchangeCode, consumeState } = await import('./lib/googleAuth.js');
+    await consumeState(state);   // lève avant tout échange si le state ne colle pas
     await exchangeCode(code);
     console.log('[Google OAuth] Tokens saved successfully');
     res.redirect('/nexus/chat?google=connected');

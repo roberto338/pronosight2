@@ -65,6 +65,8 @@ export async function runVision({ input, meta = {} }) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
+    // Vision traite des PDF entiers : plafond plus large que les autres agents
+    signal: AbortSignal.timeout(Number(process.env.AI_TIMEOUT_MS || 90_000) * 2),
   });
 
   if (!resp.ok) {

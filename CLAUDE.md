@@ -12,7 +12,12 @@ obligatoirement ce processus, dans un seul et même changement (commit) :
 
 **Ne JAMAIS éditer `db/schema_neon.sql` à la main.** Ce fichier est la source
 de vérité de l'état de la base : il reflète la prod, il ne la précède pas.
-Dernière régénération : 10/07/2026 (18 tables — 4 ps_* + 14 nexus_*).
+Dernière régénération : 07/08/2026, après la migration 009
+(19 tables — 4 ps_* + 14 nexus_* + victor_jobs).
+
+L'étape 3 se fait avec **`node db/introspect.js`** (dump complet) ou
+`node db/introspect.js <table>` (une seule table). C'est cet outil qui rend
+la règle applicable — ne pas revenir à une mise à jour manuelle.
 
 ---
 

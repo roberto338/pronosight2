@@ -4,9 +4,19 @@
 // ══════════════════════════════════════════════
 
 import { google }  from 'googleapis';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { query }   from '../../db/database.js';
 
-const LTM_KEY = 'google_oauth_tokens';
+const LTM_KEY   = 'google_oauth_tokens';
+const STATE_KEY = 'google_oauth_state';
+
+// Ces deux clés vivent dans nexus_ltm faute d'autre magasin persistant, mais
+// sous la catégorie 'system' : getRelevantMemories() l'exclut explicitement
+// pour qu'un token ne parte jamais dans un prompt IA.
+const SYSTEM_CATEGORY = 'system';
+
+// Un state non consommé au bout de ce délai est périmé.
+const STATE_TTL_MS = 10 * 60 * 1000;
 
 export function createOAuthClient() {
   return new google.auth.OAuth2(
@@ -51,10 +61,10 @@ export async function getAuthClient() {
 export async function saveTokens(tokens) {
   await query(`
     INSERT INTO nexus_ltm (category, key, value, confidence, last_seen)
-    VALUES ('fact', $1, $2, 1.0, NOW())
+    VALUES ($3, $1, $2, 1.0, NOW())
     ON CONFLICT (key) DO UPDATE
-      SET value = EXCLUDED.value, last_seen = NOW()
-  `, [LTM_KEY, JSON.stringify(tokens)]);
+      SET value = EXCLUDED.value, category = EXCLUDED.category, last_seen = NOW()
+  `, [LTM_KEY, JSON.stringify(tokens), SYSTEM_CATEGORY]);
 }
 
 /**
@@ -71,11 +81,25 @@ export async function isGoogleConnected() {
  * Build the Google OAuth consent URL.
  * Scopes: Gmail read/send, Calendar, Drive.
  */
-export function getAuthUrl() {
+export async function getAuthUrl() {
   const client = createOAuthClient();
+
+  // Anti-CSRF : /nexus/google/callback est nécessairement public (c'est Google
+  // qui l'appelle). Sans state, n'importe qui peut y poster un `code` et lier
+  // SON compte Google à cette instance — avec les scopes gmail.send et drive
+  // ci-dessous. Le state lie le retour à une session authentifiée.
+  const state = randomBytes(32).toString('hex');
+  await query(`
+    INSERT INTO nexus_ltm (category, key, value, confidence, last_seen)
+    VALUES ($2, $1, $3, 1.0, NOW())
+    ON CONFLICT (key) DO UPDATE
+      SET value = EXCLUDED.value, category = EXCLUDED.category, last_seen = NOW()
+  `, [STATE_KEY, SYSTEM_CATEGORY, state]);
+
   return client.generateAuthUrl({
     access_type:  'offline',
     prompt:       'consent',
+    state,
     scope: [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
@@ -85,6 +109,35 @@ export function getAuthUrl() {
       'https://www.googleapis.com/auth/drive.file',
     ],
   });
+}
+
+/**
+ * Vérifie le state renvoyé par Google, puis le consomme (usage unique).
+ * Lève si le state est absent, inconnu ou périmé — l'échange de code
+ * ne doit alors pas avoir lieu.
+ *
+ * @param {string} state  valeur reçue dans req.query.state
+ */
+export async function consumeState(state) {
+  if (!state) throw new Error('state manquant');
+
+  const { rows } = await query(
+    `SELECT value, last_seen FROM nexus_ltm WHERE key = $1 AND category = $2 LIMIT 1`,
+    [STATE_KEY, SYSTEM_CATEGORY]
+  );
+  if (!rows.length) throw new Error('aucune demande d\'autorisation en cours');
+
+  const expected = rows[0].value;
+  const fresh    = Date.now() - new Date(rows[0].last_seen).getTime() < STATE_TTL_MS;
+
+  // Consommation systématique : un state rejoué ou expiré est brûlé aussi,
+  // sinon un attaquant pourrait réessayer indéfiniment.
+  await query(`DELETE FROM nexus_ltm WHERE key = $1`, [STATE_KEY]);
+
+  const a = Buffer.from(String(state));
+  const b = Buffer.from(String(expected));
+  if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error('state invalide');
+  if (!fresh) throw new Error('state expiré — relance la connexion');
 }
 
 /**

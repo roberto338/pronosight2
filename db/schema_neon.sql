@@ -1,11 +1,12 @@
 -- ══════════════════════════════════════════════════════════════
 -- PronoSight v4.1 — Schéma PostgreSQL complet (SOURCE DE VÉRITÉ)
--- Généré depuis l'introspection de la base Neon de prod le 10/07/2026
--- (mis à jour après migration 008 — victor_jobs)
+-- Généré depuis l'introspection de la base Neon de prod le 07/08/2026
+-- (mis à jour après migration 009 — attempts/max_attempts + index de claim)
+-- Régénérer avec : node db/introspect.js
 -- Compatible Neon.tech / tout PostgreSQL ≥ 13 (gen_random_uuid)
 -- Idempotent : exécutable sur une base vide ou existante
 -- 19 tables : 4 ps_* (Victor) + 14 nexus_* (Nexus) + victor_jobs (file)
--- Les migrations nexus/migrations/001→008 restent l'historique ;
+-- Les migrations nexus/migrations/001→009 restent l'historique ;
 -- ce fichier est l'état de référence pour recréer une base neuve.
 -- ══════════════════════════════════════════════════════════════
 
@@ -122,12 +123,17 @@ CREATE TABLE IF NOT EXISTS nexus_tasks (
   started_at    TIMESTAMPTZ,
   completed_at  TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- migration 009 : reprise des tâches orphelines et retry avec backoff
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  max_attempts  INTEGER NOT NULL DEFAULT 3
 );
 
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_agent_type ON nexus_tasks(agent_type);
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_created_at ON nexus_tasks(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_status     ON nexus_tasks(status);
+-- Index de claim du worker (FOR UPDATE SKIP LOCKED) — pendant de idx_victor_jobs_claim
+CREATE INDEX IF NOT EXISTS idx_nexus_tasks_claim      ON nexus_tasks(status, created_at);
 
 -- ── 2.2 Résultats produits par les tâches ──────────────────────
 CREATE TABLE IF NOT EXISTS nexus_outputs (

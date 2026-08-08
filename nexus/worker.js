@@ -47,10 +47,48 @@ const AGENT_MAP = {
 
 const POLL_INTERVAL_MS = 15_000; // 15 seconds between polls
 const CONCURRENCY      = 4;      // max simultaneous jobs
+const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
+const STALE_AFTER_MIN  = Number(process.env.JOB_STALE_MINUTES || 20);
+const RETRY_WINDOW_H   = Number(process.env.JOB_RETRY_WINDOW_HOURS || 2);
 
 let _activeJobs = 0;
 let _running    = false;
 let _timer      = null;
+
+// ── Reprise des jobs orphelins ──────────────────────────────────
+// Même filet que queues/workerManager.js : une tâche passée en 'running' dont
+// le process meurt (redéploiement Render, OOM) n'est plus jamais reprise —
+// claimNextJob() ne regarde que 'pending'. C'est la panne qui a figé 26 jobs
+// Victor pendant 3 semaines ; nexus_tasks avait exactement le même trou.
+async function requeueStaleTasks() {
+  try {
+    // Une tâche récente mérite un retry (redémarrage passager). Une tâche
+    // ancienne porterait un contexte périmé et repartirait en masse au premier
+    // déploiement → abandon direct au-delà de RETRY_WINDOW_H.
+    const { rows } = await query(`
+      UPDATE nexus_tasks
+      SET    status = CASE
+                        WHEN attempts < max_attempts
+                         AND started_at > NOW() - ($2 || ' hours')::interval
+                        THEN 'pending' ELSE 'failed'
+                      END,
+             error  = COALESCE(error, 'Tâche orpheline — process interrompu en cours de traitement'),
+             updated_at = NOW()
+      WHERE  status = 'running'
+        AND  started_at < NOW() - ($1 || ' minutes')::interval
+      RETURNING id, status
+    `, [String(STALE_AFTER_MIN), String(RETRY_WINDOW_H)]);
+
+    if (rows.length > 0) {
+      const requeues = rows.filter(r => r.status === 'pending').length;
+      console.warn(`♻️  [NexusWorker] ${rows.length} tâche(s) orpheline(s) — ${requeues} requeuée(s), ${rows.length - requeues} abandonnée(s)`);
+    }
+    return rows.length;
+  } catch (err) {
+    console.error('❌ [NexusWorker] Balayage des orphelines impossible:', err.message);
+    return 0;
+  }
+}
 
 // ── Claim the next available pending job ─────────
 async function claimNextJob() {
@@ -58,7 +96,8 @@ async function claimNextJob() {
     UPDATE nexus_tasks
     SET    status     = 'running',
            started_at = NOW(),
-           updated_at = NOW()
+           updated_at = NOW(),
+           attempts   = attempts + 1
     WHERE  id = (
       SELECT id
       FROM   nexus_tasks
@@ -71,7 +110,9 @@ async function claimNextJob() {
     RETURNING id,
               agent_type AS "agentType",
               input,
-              meta
+              meta,
+              attempts,
+              max_attempts AS "maxAttempts"
   `);
   return rows[0] || null;
 }
@@ -143,9 +184,26 @@ async function processJob(job) {
       }
     }
   } catch (err) {
-    console.error(`[NexusWorker] ❌ Tâche #${taskId} échouée:`, err.message);
-    await updateTaskStatus(taskId, 'failed', err.message);
-    if (meta?.chatId && /^\d+$/.test(String(meta.chatId))) {
+    // Un échec transitoire (429 Anthropic, 503 Gemini, timeout réseau) ne doit
+    // pas tuer la tâche définitivement : on la replanifie avec un backoff.
+    const attempts   = job.attempts    ?? 1;
+    const maxAttempts = job.maxAttempts ?? 1;
+    const willRetry  = attempts < maxAttempts;
+    const backoffMs  = BACKOFF_BASE_MS * 2 ** (attempts - 1);
+
+    console.error(`[NexusWorker] ❌ Tâche #${taskId} échouée (tentative ${attempts}/${maxAttempts}):`, err.message);
+
+    await query(
+      `UPDATE nexus_tasks
+       SET status = $1, error = $2,
+           scheduled_for = CASE WHEN $1 = 'pending' THEN NOW() + ($3 || ' milliseconds')::interval ELSE scheduled_for END,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [willRetry ? 'pending' : 'failed', err.message, String(backoffMs), taskId]
+    );
+
+    // Ne prévenir Roberto qu'à l'abandon définitif — pas à chaque tentative.
+    if (!willRetry && meta?.chatId && /^\d+$/.test(String(meta.chatId))) {
       await replyToTelegram(meta.chatId, `❌ Erreur agent ${agentType}: ${err.message}`, agentType, taskId);
     }
   }
@@ -155,6 +213,8 @@ async function processJob(job) {
 async function tick() {
   if (!_running) return;
   try {
+    await requeueStaleTasks();   // avant tout claim : libère les zombies
+
     // Claim as many jobs as concurrency slots allow
     while (_activeJobs < CONCURRENCY) {
       const job = await claimNextJob();

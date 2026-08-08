@@ -65,6 +65,29 @@ const generalLimiter = rateLimit({
   message: { error: 'Rate limit' }
 });
 
+// /nexus est protégé par mot de passe (Basic Auth) et par clé API, mais sans
+// plafond de tentatives le mot de passe reste brute-forçable, et /chat/stream
+// consomme des crédits Anthropic à chaque appel. 60/min laisse largement passer
+// un usage humain, y compris le polling du chat.
+const nexusLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  validate: { xForwardedForHeader: false },
+  message: { error: '⏳ Trop de requêtes Nexus — attends 1 minute' }
+});
+
+// Plafond serré sur l'authentification elle-même : 10 échecs / 15 min.
+// requestWasSuccessful est redéfini pour ne compter QUE les 401 — sinon les 404
+// légitimes du polling (/nexus/chat/poll/:id) videraient le quota d'un usage normal.
+const nexusAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (req, res) => res.statusCode !== 401,
+  validate: { xForwardedForHeader: false },
+  message: 'Trop de tentatives d\'authentification — réessaie dans 15 minutes'
+});
+
 // ── Cache mémoire analyses (2h TTL) ──
 const analysisCache = new Map();
 const CACHE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -602,7 +625,7 @@ app.get('/api/victor/status', async (req, res) => {
 });
 
 // ── Nexus multi-agent system ──────────────────
-app.use('/nexus', nexusRouter);
+app.use('/nexus', nexusAuthLimiter, nexusLimiter, nexusRouter);
 
 // ── Static files (après toutes les routes API) ──
 app.use(express.static(join(__dirname, 'public')));

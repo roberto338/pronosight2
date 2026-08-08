@@ -3,6 +3,12 @@
 // Supports Claude (Anthropic) and Gemini (Google)
 // ══════════════════════════════════════════════
 
+// Sans plafond explicite, un appel IA qui traîne immobilise un des 4 slots de
+// concurrence du worker (nexus/worker.js) pendant les 5 min de timeout undici
+// par défaut. Même variable que Victor (victor/core.js) pour n'avoir qu'un
+// seul bouton à tourner.
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 90_000);
+
 /**
  * Call Claude via Anthropic API (direct fetch, no SDK)
  * @param {string} systemPrompt
@@ -35,6 +41,7 @@ export async function callClaude(systemPrompt, userMessage, options = {}) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
 
   if (!resp.ok) {
@@ -90,6 +97,7 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(AI_TIMEOUT_MS),
       });
 
       if (resp.status === 503 || resp.status === 429) {
@@ -152,6 +160,7 @@ export async function callGroq(systemPrompt, userMessage, options = {}) {
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.7 }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
 
   if (!resp.ok) {

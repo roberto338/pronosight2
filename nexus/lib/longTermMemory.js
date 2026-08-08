@@ -142,10 +142,15 @@ export async function getRelevantMemories(agentType, input = '', limit = 10) {
       .map((c, i) => `WHEN category = '${c}' THEN ${i}`)
       .join(' ');
 
+    // La catégorie 'system' porte des secrets techniques (tokens OAuth Google,
+    // état CSRF) stockés dans la même table faute d'autre magasin. Elle ne doit
+    // JAMAIS remonter ici : ces lignes finiraient recopiées mot pour mot dans un
+    // system prompt envoyé à Anthropic / Google / Groq.
     const { rows } = await query(
       `SELECT category, key, value, times_confirmed, last_seen
        FROM nexus_ltm
        WHERE confidence > 0
+         AND category <> 'system'
        ORDER BY
          CASE ${caseWhen} ELSE ${cats.length} END,
          times_confirmed DESC,
@@ -234,9 +239,13 @@ export async function listMemories(category = null) {
           [category]
         )
       : await query(
+          // 'system' exclue du listing global : c'est ce qui alimente le
+          // dashboard HTML et GET /nexus/memory, et la catégorie contient les
+          // tokens OAuth. Reste accessible en la demandant explicitement.
           `SELECT id, category, key, value, times_confirmed, last_seen
            FROM nexus_ltm
            WHERE confidence > 0
+             AND category <> 'system'
            ORDER BY category, times_confirmed DESC, last_seen DESC`
         );
     return rows;
@@ -287,10 +296,15 @@ export async function consolidate() {
     const { rowCount: forgotten } = await query(
       `DELETE FROM nexus_ltm WHERE confidence = 0`
     );
+    // La catégorie 'system' est exclue de la purge : les tokens OAuth Google
+    // ont times_confirmed = 1 et un last_seen qui ne bouge qu'au refresh.
+    // Sans cette clause, 90 jours sans usage de l'agent Google suffisaient à
+    // faire supprimer la connexion par le cron hebdomadaire, en silence.
     const { rowCount: stale } = await query(
       `DELETE FROM nexus_ltm
        WHERE last_seen < NOW() - INTERVAL '90 days'
-         AND times_confirmed = 1`
+         AND times_confirmed = 1
+         AND category <> 'system'`
     );
     const total = (forgotten || 0) + (stale || 0);
     console.log(`[LTM] Consolidation: ${forgotten} oubliées + ${stale} obsolètes = ${total} supprimées`);
