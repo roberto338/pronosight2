@@ -221,6 +221,12 @@ function verifie(libelle, obtenu, attendu) {
     verifie(`${f} est monté par routes/index.js`,
       index.includes(`./${f}`), true);
   }
+
+  // Le filet 404 doit rester APRÈS tous les montages, sinon il intercepte tout.
+  const dernierMontage = Math.max(...modules.map((f) => index.indexOf(`./${f}`)));
+  verifie('un filet 404 existe', /res\.status\(404\)/.test(index), true);
+  verifie('le filet 404 est déclaré après les montages',
+    index.indexOf('res.status(404)') > dernierMontage, true);
 }
 
 // ══════════════════════════════════════════════

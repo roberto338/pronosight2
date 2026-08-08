@@ -29,4 +29,12 @@ router.use(chatRoutes);
 router.use(autonomousRoutes);
 router.use(googleRoutes);
 
+// Filet 404 — doit rester en dernier.
+// Sans lui, un chemin /nexus inconnu traverse le router et tombe sur le
+// catch-all SPA de server.js : le client reçoit la page d'accueil PronoSight
+// en HTTP 200 et ne peut pas distinguer une route disparue d'un succès.
+router.use((req, res) => {
+  res.status(404).json({ error: `Route Nexus inconnue : ${req.method} ${req.originalUrl}` });
+});
+
 export default router;
