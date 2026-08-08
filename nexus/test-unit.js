@@ -22,7 +22,7 @@
 // ══════════════════════════════════════════════
 
 import 'dotenv/config';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -49,7 +49,7 @@ function verifie(libelle, obtenu, attendu) {
 // module avale l'erreur. Panne totalement muette.
 {
   const ltm    = lire('lib/longTermMemory.js');
-  const routes = lire('routes.js');
+  const routes = lire('routes/chat.js');
   const worker = lire('worker.js');
 
   const signature = ltm.match(/export async function extractAndSave\(([^)]*)\)/);
@@ -58,7 +58,7 @@ function verifie(libelle, obtenu, attendu) {
 
   // Tous les sites d'appel doivent passer 4 arguments (parenthèses simples ici :
   // aucun appel du dépôt n'imbrique d'appel dans ses arguments).
-  for (const [nom, src] of [['routes.js', routes], ['worker.js', worker]]) {
+  for (const [nom, src] of [['routes/chat.js', routes], ['worker.js', worker]]) {
     const appels = [...src.matchAll(/[^.\w]extractAndSave\(([^)]*)\)/g)];
     verifie(`${nom} — au moins un appel à extractAndSave`, appels.length > 0, true);
     for (const [i, a] of appels.entries()) {
@@ -102,7 +102,7 @@ function verifie(libelle, obtenu, attendu) {
 // ══════════════════════════════════════════════
 {
   const auth   = lire('lib/googleAuth.js');
-  const routes = lire('routes.js');
+  const routes = lire('routes/google.js');
 
   verifie('getAuthUrl émet un state', /state,?\s*$|state,/m.test(auth) && /randomBytes/.test(auth), true);
   verifie('consumeState est exporté', /export async function consumeState/.test(auth), true);
@@ -163,7 +163,7 @@ function verifie(libelle, obtenu, attendu) {
 // pendant les 5 min de timeout undici par défaut, sans un seul log.
 {
   const fichiers = [
-    'lib/ai.js', 'agents/visionAgent.js', 'routes.js',
+    'lib/ai.js', 'agents/visionAgent.js', 'routes/chat.js',
     'lib/integrations/brevo.js', 'lib/integrations/netlify.js',
     'lib/integrations/stripe.js', 'autonomous/contentEngine.js',
     'autonomous/outreachEngine.js', 'autonomous/problemSolver.js',
@@ -185,21 +185,83 @@ function verifie(libelle, obtenu, attendu) {
 // ══════════════════════════════════════════════
 // Deux exceptions assumées : /status (ping de monitoring, sans détail) et
 // /google/callback (appelé par Google, protégé par le state).
+// Le balayage porte sur TOUS les modules de routes/ découverts sur disque,
+// pas sur une liste en dur : un nouveau fichier de routes est couvert d'office.
 {
-  const routes = lire('routes.js');
   const PUBLIQUES_ASSUMEES = ['/status', '/google/callback'];
+  const NON_ROUTES = ['index.js', 'middleware.js'];
 
-  const declarations = [...routes.matchAll(
-    /^router\.(get|post|put|patch|delete)\(\s*'([^']+)'\s*,\s*([A-Za-z_]+)?/gm
-  )];
+  const modules = readdirSync(join(__dirname, 'routes'))
+    .filter((f) => f.endsWith('.js') && !NON_ROUTES.includes(f));
 
-  verifie('les routes sont détectées', declarations.length > 20, true);
+  verifie('les modules de routes sont trouvés', modules.length >= 6, true);
 
-  for (const [, methode, chemin, middleware] of declarations) {
-    if (PUBLIQUES_ASSUMEES.includes(chemin)) continue;
-    const protegee = middleware === 'requireApiKey' || middleware === 'requireChatAuth';
-    verifie(`${methode.toUpperCase()} ${chemin} est protégée`, protegee, true);
+  let total = 0;
+  for (const f of modules) {
+    const src = lire(join('routes', f));
+    const declarations = [...src.matchAll(
+      /^router\.(get|post|put|patch|delete)\(\s*'([^']+)'\s*,\s*([A-Za-z_]+)?/gm
+    )];
+    total += declarations.length;
+
+    for (const [, methode, chemin, middleware] of declarations) {
+      if (PUBLIQUES_ASSUMEES.includes(chemin)) continue;
+      const protegee = middleware === 'requireApiKey' || middleware === 'requireChatAuth';
+      verifie(`${f} — ${methode.toUpperCase()} ${chemin} est protégée`, protegee, true);
+    }
   }
+
+  // Garde-fou de la découpe : 36 routes avant, 36 après. Si ce compte bouge
+  // sans intention, c'est qu'un module a cessé d'être monté ou dupliqué.
+  verifie('le total de routes est inchangé depuis la découpe', total, 36);
+
+  // Chaque module de routes doit effectivement être monté par index.js.
+  const index = lire('routes/index.js');
+  for (const f of modules) {
+    verifie(`${f} est monté par routes/index.js`,
+      index.includes(`./${f}`), true);
+  }
+}
+
+// ══════════════════════════════════════════════
+// 8. Les middlewares d'auth comparent en temps constant
+// ══════════════════════════════════════════════
+// Le rate limiter borne le brute-force, mais la comparaison elle-même ne doit
+// pas fuiter le secret caractère par caractère.
+{
+  const mw = lire('routes/middleware.js');
+
+  verifie('timingSafeEqual est utilisé', /timingSafeEqual/.test(mw), true);
+  verifie('requireApiKey exporté',   /export function requireApiKey/.test(mw), true);
+  verifie('requireChatAuth exporté', /export function requireChatAuth/.test(mw), true);
+
+  // Un `||` court-circuiterait : l'échec sur l'utilisateur répondrait plus
+  // vite que l'échec sur le mot de passe, ce qui est mesurable.
+  verifie('pas de court-circuit entre user et pass',
+    /const userOk[\s\S]{0,120}const passOk/.test(mw), true);
+
+  // Refus explicite si le mot de passe n'est pas configuré : sinon une
+  // instance sans NEXUS_CHAT_PASSWORD serait ouverte à tous.
+  verifie('refus si NEXUS_CHAT_PASSWORD absent',
+    /if \(!expected\)[\s\S]{0,120}503/.test(mw), true);
+}
+
+// ══════════════════════════════════════════════
+// 9. server.js doit charger .env avant tout autre import
+// ══════════════════════════════════════════════
+// Les imports ESM sont hoistés : un dotenv.config() dans le corps du fichier
+// s'exécute après l'évaluation de db/database.js et consorts, qui ont déjà lu
+// un process.env vide. Règle facile à casser en réordonnant les imports.
+{
+  const server = readFileSync(join(__dirname, '..', 'server.js'), 'utf8');
+  const imports = [...server.matchAll(/^import\s+.*?from\s+'([^']+)'|^import\s+'([^']+)'/gm)]
+    .map((m) => m[1] || m[2]);
+
+  verifie('server.js importe config/env.js en premier',
+    imports[0], './config/env.js');
+
+  verifie('plus de dotenv.config() dans le corps de server.js',
+    /^dotenv\.config\(/m.test(server), false);
 }
 
 // ══════════════════════════════════════════════

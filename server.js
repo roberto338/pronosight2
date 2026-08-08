@@ -2,8 +2,11 @@
 // PronoSight v4.1 — Backend Proxy + Victor IA
 // ══════════════════════════════════════════════════════════════
 
-import dotenv from 'dotenv';
-dotenv.config({ override: true });
+// DOIT rester le premier import : charge .env avant que le moindre module
+// ne lise process.env. Les imports ESM sont hoistés — un dotenv.config()
+// placé dans le corps du fichier s'exécuterait trop tard. Voir config/env.js.
+import './config/env.js';
+
 import { startScheduler }          from './cron/scheduler.js';
 import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';

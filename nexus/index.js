@@ -8,7 +8,7 @@
 //   startTelegramHandler();
 // ══════════════════════════════════════════════
 
-export { default as nexusRouter }  from './routes.js';
+export { default as nexusRouter }  from './routes/index.js';
 export { startNexusWorker, stopNexusWorker } from './worker.js';
 export { startNexusCron }          from './nexusCron.js';
 export { dispatchTask }            from './orchestrator.js';
