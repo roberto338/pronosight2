@@ -12,6 +12,7 @@ import { detectPatterns, formatPatternsForVictor } from './patterns.js';
 import {
   getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
   getScorers, formatFixturesForPrompt, fetchWithTimeout,
+  demarrerBudgetSources, arreterBudgetSources,
 } from './sources.js';
 import { getOdds, getOddsEvents, evaluerValue } from './odds.js';
 
@@ -441,6 +442,9 @@ export async function runVictor() {
   // Trois sources structurées qui remplacent l'ancienne « étape 2 » par
   // Google Search. Chaque chiffre est traçable, aucun n'est inventé.
   console.log('📊 Construction du contexte (forme, classement, H2H)...');
+  // Fenêtre de temps stricte : au-delà, on renonce aux données
+  // secondaires plutôt que d'attendre indéfiniment le quota football-data.
+  demarrerBudgetSources(Number(process.env.BUDGET_SOURCES_MS || 90_000));
   const forme = await buildFormIndex(20).catch(() => new Map());
 
   const codesCompet = [...new Set(aVenir.map(f => f.codeCompet).filter(Boolean))];
@@ -452,6 +456,7 @@ export async function runVictor() {
   const buteurs     = await getScorers(codesCompet).catch(() => new Map());
   const cotes       = await getOdds(aVenir).catch(() => new Map());
 
+  arreterBudgetSources();
   const matchsReels = formatFixturesForPrompt(aVenir, { forme, classement, h2h, buteurs, cotes });
 
   // ── Patterns, filtrés sur les matchs du jour ─────────────────

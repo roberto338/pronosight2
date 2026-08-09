@@ -23,6 +23,11 @@ import { pruneOldJobs }      from './victorQueue.js';
 
 const POLL_INTERVAL_MS = 10_000; // 1 claim max par tick → max 1 job / 10s (ex-limiter BullMQ)
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
+
+// Doit rester INFÉRIEUR au seuil de requeue du balayage (20 min), sinon
+// un job lent est repris pendant qu'il tourne encore et consomme ses
+// tentatives pour rien. Un échec explicite vaut mieux qu'un job fantôme.
+const JOB_TIMEOUT_MS   = Number(process.env.JOB_TIMEOUT_MS || 12 * 60 * 1000);
 const STALE_AFTER_MIN  = Number(process.env.JOB_STALE_MINUTES || 20);
 const RETRY_WINDOW_H   = Number(process.env.JOB_RETRY_WINDOW_HOURS || 2);
 
@@ -44,7 +49,13 @@ async function requeueStaleJobs() {
                          AND started_at > NOW() - ($2 || ' hours')::interval
                         THEN 'pending' ELSE 'failed'
                       END,
-             error  = COALESCE(error, 'Job orphelin — process interrompu en cours de traitement'),
+             -- Message prudent : le process PEUT être mort, mais il peut
+             -- aussi être vivant et le job simplement trop lent. Les 07,
+             -- 08 et 09/08, ce libellé affirmait « process interrompu »
+             -- alors que le service tournait depuis 34 h sans coupure —
+             -- il attendait le quota football-data. Un diagnostic faux
+             -- coûte plus cher qu'une absence de diagnostic.
+             error  = COALESCE(error, 'Repris : toujours en cours après ' || $1 || ' min sans aboutir'),
              updated_at = NOW()
       WHERE  status = 'running'
         AND  started_at < NOW() - ($1 || ' minutes')::interval
@@ -180,7 +191,18 @@ async function processClaimedJob(row) {
   };
 
   try {
-    const result = await processor(job);
+    // Plafond de durée : un job ne doit JAMAIS dépasser la fenêtre de
+    // requeue du balayage (20 min), sinon il est repris alors qu'il
+    // tourne encore, jusqu'à épuiser ses tentatives — ce qui s'est
+    // produit les 07, 08 et 09/08 en affichant « process interrompu »
+    // alors que le process était parfaitement vivant (34 h d'uptime).
+    const result = await Promise.race([
+      processor(job),
+      new Promise((_, rejeter) =>
+        setTimeout(() => rejeter(new Error(`Délai dépassé (${JOB_TIMEOUT_MS / 1000}s) — job interrompu par sécurité`)),
+          JOB_TIMEOUT_MS).unref()
+      ),
+    ]);
     await query(
       `UPDATE victor_jobs
        SET status = 'done', result = $1, error = NULL, completed_at = NOW(), updated_at = NOW()

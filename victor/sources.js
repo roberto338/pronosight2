@@ -122,33 +122,68 @@ function fromTsdb(e) {
 const FD_MAX_PAR_MIN = 9;
 let _fdAppels = [];
 
+// ── Budget de temps pour la collecte ─────────────────────────
+// Le 09/08, les jobs prematch et value sont restés bloqués plus de
+// 20 minutes dans cette couche : chaque 429 déclenchait une attente de
+// 60 s, et ces attentes se cumulaient sur classement + H2H + buteurs.
+// Le process ne plantait jamais — il attendait. Le balayage des jobs
+// figés le requeuait alors toutes les 20 min, jusqu'à épuisement des
+// 3 tentatives, en affichant « process interrompu ». Message faux.
+//
+// Règle : l'enrichissement est OPTIONNEL, l'analyse ne l'est pas.
+// Passé le budget, on renonce aux données secondaires et on analyse
+// avec ce qu'on a. Une analyse un peu moins riche vaut infiniment
+// mieux qu'aucune analyse.
+let _echeance = null;
+
+/** Ouvre une fenêtre de temps pour la collecte. */
+export function demarrerBudgetSources(ms = 90_000) {
+  _echeance = Date.now() + ms;
+}
+/** Referme la fenêtre : les appels suivants ne sont plus contraints. */
+export function arreterBudgetSources() {
+  _echeance = null;
+}
+const tempsRestant = () => _echeance === null ? Infinity : _echeance - Date.now();
+
+/** @returns {Promise<boolean>} false si le budget interdit d'attendre. */
 async function fdThrottle() {
   const maintenant = Date.now();
   _fdAppels = _fdAppels.filter(t => maintenant - t < 60_000);
+
   if (_fdAppels.length >= FD_MAX_PAR_MIN) {
     const attente = 60_000 - (maintenant - _fdAppels[0]) + 250;
+    if (attente > tempsRestant()) {
+      console.warn(`   ⏭️  football-data: budget épuisé, enrichissement abandonné`);
+      return false;
+    }
     console.log(`   ⏳ football-data: pause ${Math.ceil(attente / 1000)}s (limite 10 req/min)`);
     await new Promise(r => setTimeout(r, attente));
     return fdThrottle();
   }
   _fdAppels.push(Date.now());
+  return true;
 }
 
 /** Appel générique football-data, throttlé. Retourne null en cas d'échec. */
 async function fdGet(chemin, tentative = 1) {
   if (!FD_KEY) return null;
-  await fdThrottle();
+  if (!await fdThrottle()) return null;
   try {
     const resp = await fetchWithTimeout(`https://api.football-data.org/v4/${chemin}`,
       { headers: { 'X-Auth-Token': FD_KEY } });
 
     // Le compteur local peut diverger du compteur serveur (exécutions
-    // concurrentes, fenêtre glissante). On laisse passer la minute et on
-    // réessaie une fois plutôt que de perdre la donnée en silence.
+    // concurrentes, fenêtre glissante). On réessaie une fois — mais
+    // jamais au-delà du budget imparti.
     if (resp.status === 429 && tentative === 1) {
-      const attente = Math.min(Number(resp.headers.get('retry-after') || 60), 65);
-      console.warn(`   ⏳ football-data 429 — reprise dans ${attente}s`);
-      await new Promise(r => setTimeout(r, attente * 1000));
+      const attente = Math.min(Number(resp.headers.get('retry-after') || 60), 65) * 1000;
+      if (attente > tempsRestant()) {
+        console.warn(`   ⏭️  football-data 429 — budget épuisé, on renonce`);
+        return null;
+      }
+      console.warn(`   ⏳ football-data 429 — reprise dans ${Math.round(attente / 1000)}s`);
+      await new Promise(r => setTimeout(r, attente));
       _fdAppels = [];
       return fdGet(chemin, 2);
     }
@@ -166,7 +201,7 @@ async function fdGet(chemin, tentative = 1) {
 async function fdMatches(params) {
   if (!FD_KEY) return [];
   try {
-    await fdThrottle();
+    if (!await fdThrottle()) return [];
     const url  = `https://api.football-data.org/v4/matches?${new URLSearchParams(params)}`;
     const resp = await fetchWithTimeout(url, { headers: { 'X-Auth-Token': FD_KEY } });
     if (resp.status === 429) {
