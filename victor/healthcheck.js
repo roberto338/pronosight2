@@ -99,7 +99,11 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
     const { rows: recents } = await query(
       `SELECT name, attempts, max_attempts, left(coalesce(error,''), 80) AS motif
        FROM victor_jobs
-       WHERE status = 'failed' AND created_at > NOW() - INTERVAL '36 hours'
+       -- 24 h et non 36 : le heartbeat tourne une fois par jour, une
+       -- fenêtre plus large lui fait re-signaler un échec déjà rapporté
+       -- la veille. Le 10/08, il annonçait deux jobs abandonnés qui
+       -- dataient de l'avant-veille et étaient déjà résolus.
+       WHERE status = 'failed' AND created_at > NOW() - INTERVAL '24 hours'
        ORDER BY created_at DESC`
     );
     for (const r of recents) {

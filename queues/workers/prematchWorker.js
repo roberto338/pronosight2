@@ -17,7 +17,9 @@ export async function prematchProcessor(job) {
   await job.updateProgress(10);
 
   // ── Analyse Victor complète ────────────────
-  const result = await runVictor();
+  // onEtape fait remonter l'avancement réel dans victor_jobs.progress :
+  // un job bloqué indique désormais l'étape exacte où il coince.
+  const result = await runVictor({ onEtape: (pct) => job.updateProgress(pct) });
 
   await job.updateProgress(80);
 

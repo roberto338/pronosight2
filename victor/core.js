@@ -403,8 +403,24 @@ export function repairTruncatedJSON(s) {
  * recherche web → JSON → sauvegarde DB.
  * @returns {Object} Données JSON parsées
  */
-export async function runVictor() {
+/**
+ * Analyse complète du jour.
+ *
+ * @param {{onEtape?: (pourcentage:number, libelle:string) => Promise<void>}} [options]
+ *   onEtape est appelé à chaque étape du pipeline. La valeur atterrit dans
+ *   victor_jobs.progress : un job bloqué indique alors PRÉCISÉMENT où il
+ *   coince. Jusqu'ici la colonne restait à 10 — « quelque part dans
+ *   runVictor » — ce qui a coûté quatre diagnostics erronés cette semaine.
+ */
+export async function runVictor({ onEtape } = {}) {
   console.log('\n🎙️  Victor démarre l\'analyse...\n');
+
+  // Jamais bloquant : une étape de suivi ne doit pas faire échouer l'analyse.
+  const etape = async (pct, libelle) => {
+    console.log(`   ▸ [${String(pct).padStart(3)}%] ${libelle}`);
+    if (onEtape) { try { await onEtape(pct, libelle); } catch { /* cosmétique */ } }
+  };
+  await etape(12, 'briefing');
 
   // ── Briefing contextuel ──────────────────────
   console.log('📋 Récupération du briefing...');
@@ -422,9 +438,11 @@ export async function runVictor() {
   // Remplace l'ancienne découverte par googleSearch : quota Gemini
   // épuisé, et surtout Victor inventait des matchs inexistants.
   console.log('📡 Récupération des matchs réels du jour...');
+  await etape(18, 'calendrier Odds API');
   // The Odds API couvre 45 compétitions (contre 13 pour football-data) et
   // son endpoint /events ne consomme aucun crédit — vérifié.
   const evenementsCotes = await getOddsEvents(dateISO).catch(() => []);
+  await etape(22, 'matchs du jour (toutes sources)');
   const fixtures = await getFixturesOfDay(dateISO, { extra: evenementsCotes });
   const aVenir   = fixtures.filter(f => f.status !== 'FT');
 
@@ -445,24 +463,32 @@ export async function runVictor() {
   // Fenêtre de temps stricte : au-delà, on renonce aux données
   // secondaires plutôt que d'attendre indéfiniment le quota football-data.
   demarrerBudgetSources(Number(process.env.BUDGET_SOURCES_MS || 90_000));
+
+  await etape(30, 'indice de forme');
   const forme = await buildFormIndex(20).catch(() => new Map());
 
   const codesCompet = [...new Set(aVenir.map(f => f.codeCompet).filter(Boolean))];
+  await etape(38, 'classement');
   const classement  = await getStandings(codesCompet).catch(() => new Map());
   // 4 et non 8 : chaque H2H coûte une requête football-data, et le
   // plafond de 10/min déclenchait une pause de ~54 s en pleine analyse.
   // Moins de temps passé dans le job = moins d'exposition à ce qui le tue.
+  await etape(44, 'confrontations directes');
   const h2h         = await getH2H(aVenir, 4).catch(() => new Map());
+  await etape(50, 'buteurs');
   const buteurs     = await getScorers(codesCompet).catch(() => new Map());
+  await etape(56, 'cotes du marché');
   const cotes       = await getOdds(aVenir).catch(() => new Map());
 
   arreterBudgetSources();
+  await etape(62, 'mise en forme du contexte');
   const matchsReels = formatFixturesForPrompt(aVenir, { forme, classement, h2h, buteurs, cotes });
 
   // ── Patterns, filtrés sur les matchs du jour ─────────────────
   // Chargés APRÈS les matchs : injecter les patterns de la Bundesliga
   // un soir où seul le Brésil joue n'apporte que du bruit.
   console.log('🧠 Chargement des patterns pertinents...');
+  await etape(68, 'patterns');
   let patternsTexte = 'Aucun pattern historique significatif pour les matchs du jour.';
   try {
     const competitions = [...new Set(aVenir.map(f => `Match de ${f.competition}`))];
@@ -558,6 +584,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
 
   // ── Appel Claude ─────────────────────────────
   console.log(`🤖 Analyse IA de ${aVenir.length} match(s) réel(s)...`);
+  await etape(75, `appel IA (${aVenir.length} matchs)`);
   let claudeResp;
   try {
     claudeResp = await callAI(VICTOR_PROMPT, userMessage, 8000);
@@ -565,6 +592,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     console.error('❌ Erreur IA API:', err.message);
     throw err;
   }
+  await etape(88, 'contrôle qualité des pronostics');
 
   // ── Parse JSON ───────────────────────────────
   console.log('🔍 Extraction du JSON...');
@@ -621,6 +649,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   }
 
   // ── Sauvegarde PostgreSQL ────────────────────
+  await etape(94, `sauvegarde de ${events.length} pronostic(s)`);
   console.log(`\n💾 Sauvegarde de ${events.length} pronostic(s) en DB (moteur: ${moteur})...`);
 
   for (const ev of events) {

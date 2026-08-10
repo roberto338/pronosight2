@@ -17,7 +17,7 @@ export async function valueProcessor(job) {
   await job.updateProgress(10);
 
   // ── Analyse Victor (même pipeline, contexte soir) ──
-  const result = await runVictor();
+  const result = await runVictor({ onEtape: (pct) => job.updateProgress(pct) });
 
   await job.updateProgress(90);
 

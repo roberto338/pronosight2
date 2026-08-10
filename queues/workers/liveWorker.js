@@ -19,7 +19,7 @@ export async function liveProcessor(job) {
   await job.updateProgress(10);
 
   // ── Analyse Victor ─────────────────────────
-  const result = await runVictor();
+  const result = await runVictor({ onEtape: (pct) => job.updateProgress(pct) });
 
   await job.updateProgress(80);
 
