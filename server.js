@@ -10,6 +10,8 @@ import './config/env.js';
 import { startScheduler }          from './cron/scheduler.js';
 import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
+import { getFixturesOfDay }         from './victor/sources.js';
+import { getOddsEvents }            from './victor/odds.js';
 import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
 import { installerSurveillanceProcess } from './victor/mortalite.js';
@@ -557,6 +559,69 @@ app.get('/api/victor/health', generalLimiter, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════
+// ROUTE: matchs du jour — source unique de vérité
+//
+// Le front maintenait sa propre table d'identifiants TheSportsDB
+// (TSDB_LEAGUE_MAP). 14 correspondances sur 38 étaient fausses :
+// « Coupe du Monde » renvoyait la WWE, « League Cup » l'UFC,
+// « Conference League » l'EliteXC. Les identifiants 4395-4399 se
+// suivaient et désignaient cinq compétitions sans rapport — devinés
+// en séquence, jamais vérifiés.
+//
+// Cette route expose les mêmes matchs normalisés que Victor consomme.
+// Le front cesse de deviner : il lit ce qui se joue réellement.
+// ══════════════════════════════════════════════
+const _cacheMatchs = new Map();          // dateISO -> { ts, charge }
+const CACHE_MATCHS_MS = 5 * 60 * 1000;   // les calendriers bougent peu
+
+app.get('/api/matchs', generalLimiter, async (req, res) => {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '')
+    ? req.query.date
+    : new Date().toISOString().slice(0, 10);
+
+  const enCache = _cacheMatchs.get(date);
+  if (enCache && Date.now() - enCache.ts < CACHE_MATCHS_MS) {
+    return res.json({ ...enCache.charge, cache: true });
+  }
+
+  try {
+    const extra    = await getOddsEvents(date).catch(() => []);
+    const fixtures = await getFixturesOfDay(date, { extra });
+
+    // Regroupement par compétition, tel que le front l'affichera
+    const parCompet = new Map();
+    for (const f of fixtures) {
+      const cle = `${f.sport} — ${f.competition}`;
+      if (!parCompet.has(cle)) {
+        parCompet.set(cle, { sport: f.sport, competition: f.competition, nbMatchs: 0, aVenir: 0 });
+      }
+      const c = parCompet.get(cle);
+      c.nbMatchs++;
+      if (f.status !== 'FT') c.aVenir++;
+    }
+
+    const charge = {
+      date,
+      total:   fixtures.length,
+      aVenir:  fixtures.filter(f => f.status !== 'FT').length,
+      competitions: [...parCompet.values()].sort((a, b) => b.aVenir - a.aVenir || b.nbMatchs - a.nbMatchs),
+      matchs: fixtures.map(f => ({
+        sport: f.sport, competition: f.competition, match: f.match,
+        equipe_a: f.home, equipe_b: f.away, heure: f.heure,
+        statut: f.status, score: f.homeGoals != null ? `${f.homeGoals}-${f.awayGoals}` : null,
+        source: f.source,
+      })),
+    };
+
+    _cacheMatchs.set(date, { ts: Date.now(), charge });
+    res.json({ ...charge, cache: false });
+  } catch (err) {
+    console.error('[/api/matchs]', err.message);
+    res.status(500).json({ error: 'Calendrier indisponible', detail: err.message });
   }
 });
 

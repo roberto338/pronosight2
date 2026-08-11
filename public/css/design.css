@@ -359,6 +359,20 @@ body.light-mode .pick-ligne.eviter{ color:#c0303c; }
   .pick-pari{ flex-wrap:wrap; }
 }
 
+/* ── 10 quater. COMPÉTITIONS DISPONIBLES ───── */
+/* Quand la compétition choisie n'a aucun match, on montre ce qui se
+   joue vraiment plutôt qu'un message vide : c'est l'info utile. */
+.compet-dispo{
+  display:flex; flex-wrap:wrap; gap:7px;
+  justify-content:center; margin-top:14px;
+}
+.compet-puce{
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:20px; padding:5px 12px;
+  font-size:12.5px; color:var(--text2); white-space:nowrap;
+}
+.compet-puce b{ color:var(--accent); font-weight:700; margin-left:3px; }
+
 /* ── 11. NEUTRALISATION DES HALOS ──────────── */
 /* Les box-shadow colorés de main.css donnaient l'effet « néon ». */
 .card, .tab, .nav-btn, .dash-stat, .league-card, .btn{

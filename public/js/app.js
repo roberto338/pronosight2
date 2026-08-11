@@ -228,48 +228,61 @@ async function loadMatches() {
     return; 
   }
 
-  // ── SOURCE 1 : Football-data.org (primaire pour Top 5 + coupes) ──
-  const fdCompId = FD_COMP_MAP[state.selectedLeague.id];
-  if (fdCompId && state.apiStatus?.footballData) {
-    try {
-      const todayISO = new Date().toISOString().slice(0, 10);
-      const in14days = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-      const data = await fdFetch(`competitions/${fdCompId}/matches?dateFrom=${todayISO}&dateTo=${in14days}`);
-      if (data?.matches?.length) {
-        const leagueMeta = { name: state.selectedLeague.name, flag: state.selectedLeague.flag, id: state.selectedLeague.id };
-        const formatted = data.matches.slice(0, 20).map(m => fdToMatch(m, leagueMeta));
-        MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
-        renderMatches(formatted, false);
-        return;
-      }
-    } catch (e) {
-      console.log('football-data.org indisponible:', e.message);
-    }
+  // ── SOURCE UNIQUE : /api/matchs (le backend de Victor) ──────────
+  // Le front maintenait sa propre table d'identifiants TheSportsDB.
+  // 14 des 38 étaient fausses : « Coupe du Monde » renvoyait la WWE,
+  // « League Cup » l'UFC, « Conference League » l'EliteXC. On ne
+  // devine plus : on lit ce que le backend a réellement collecté.
+  let jour = null;
+  try {
+    const rep = await fetch(`/api/matchs?date=${new Date().toISOString().slice(0, 10)}`);
+    if (rep.ok) jour = await rep.json();
+  } catch (e) {
+    console.log('/api/matchs indisponible:', e.message);
   }
 
-  // ── SOURCE 2 : TheSportsDB (fallback pour toutes les autres ligues) ──
-  const tsdbId = TSDB_LEAGUE_MAP[state.selectedLeague.id];
-  if (tsdbId) {
-    try {
-      const events = await getLeagueEvents(tsdbId);
-      if (events && events.length > 0) {
-        const formatted = events.map(tsdbToMatch);
-        MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
-        renderMatches(formatted, false);
-        return;
-      }
-    } catch (e) {
-      console.log('TheSportsDB indisponible:', e.message);
+  if (jour?.matchs?.length) {
+    const cherche = normaliserNom(state.selectedLeague.name);
+    const pourLaLigue = jour.matchs.filter(m => {
+      const c = normaliserNom(m.competition);
+      return c.includes(cherche) || cherche.includes(c);
+    });
+
+    if (pourLaLigue.length) {
+      const meta = { name: state.selectedLeague.name, flag: state.selectedLeague.flag, id: state.selectedLeague.id };
+      const formatted = pourLaLigue.map(m => apiToMatch(m, meta));
+      MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
+      renderMatches(formatted, false);
+      return;
     }
+
+    // Rien pour cette compétition : plutôt qu'un message vide, on montre
+    // ce qui se joue vraiment. C'est l'information utile.
+    const dispo = jour.competitions.filter(c => c.aVenir > 0).slice(0, 12);
+    container.innerHTML = `
+      <div class="etat-vide">
+        <div class="etat-vide-icone">🗓️</div>
+        <div class="etat-vide-titre">Aucun match en ${state.selectedLeague.name} aujourd'hui</div>
+        <div class="etat-vide-texte">
+          ${dispo.length
+            ? `${jour.aVenir} match${jour.aVenir > 1 ? 's' : ''} à venir dans d'autres compétitions :`
+            : 'Aucun match à venir aujourd\'hui, toutes compétitions confondues.'}
+        </div>
+        ${dispo.length ? `<div class="compet-dispo">${dispo.map(c =>
+          `<span class="compet-puce">${c.competition} <b>${c.aVenir}</b></span>`).join('')}</div>` : ''}
+        <div class="etat-vide-texte" style="margin-top:14px">
+          Vous pouvez aussi saisir deux équipes à la main ci-dessous.
+        </div>
+      </div>`;
+    return;
   }
 
-  // Pas de matchs trouvés → trêve ou données indisponibles
-  // On n'utilise PAS Gemini ici : il retourne des matchs incorrects en période de trêve
   container.innerHTML = `
-    <div class="match-loading" style="color:var(--muted);line-height:1.8">
-      🗓️ <strong style="color:var(--text2)">Aucun match programmé</strong><br>
-      <span style="font-size:11px">Trêve internationale ou calendrier indisponible pour cette ligue.</span><br>
-      <span style="color:var(--accent);font-size:12px">↓ Saisissez les équipes manuellement pour obtenir une analyse</span>
+    <div class="etat-vide">
+      <div class="etat-vide-icone">🗓️</div>
+      <div class="etat-vide-titre">Calendrier indisponible</div>
+      <div class="etat-vide-texte">Les sources sportives ne répondent pas pour l'instant.
+      Saisissez deux équipes ci-dessous pour lancer une analyse.</div>
     </div>`;
 
   // Pré-remplir les placeholders selon la ligue
@@ -285,6 +298,36 @@ async function loadMatches() {
     document.getElementById('team1').placeholder = ex.team1;
     document.getElementById('team2').placeholder = ex.team2;
   }
+}
+
+/**
+ * Normalise un nom de compétition pour le rapprochement.
+ * « Coupe du Monde 2026 » et « FIFA World Cup » ne se rejoindront pas —
+ * c'est voulu : mieux vaut afficher « aucun match » que les mauvais.
+ */
+function normaliserNom(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\b(championnat|ligue|league|liga|serie|division|primera|coupe|cup|de|du|des|la|le|les|of|the)\b/g, ' ')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+/** Convertit un match de /api/matchs vers la forme attendue par renderMatches(). */
+function apiToMatch(m, meta) {
+  const enCours = m.statut === 'LIVE';
+  const [s1, s2] = (m.score || '').split('-');
+  return {
+    team1: m.equipe_a || '?', team2: m.equipe_b || '?',
+    date: "Aujourd'hui", time: m.heure || 'TBD', live: enCours,
+    score1: s1 ?? null, score2: s2 ?? null,
+    status: m.statut || 'NS',
+    league: m.competition || meta?.name || '',
+    leagueName: meta?.name, leagueFlag: meta?.flag, leagueId: meta?.id,
+    source: m.source,
+    tsdb_id: null, home_team_id: null, away_team_id: null,
+  };
 }
 
 function clearMatchCache() {
