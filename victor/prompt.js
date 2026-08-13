@@ -187,9 +187,26 @@ Moins de paris, mais de meilleure qualité.
 Répondre UNIQUEMENT avec un objet JSON valide. Aucun texte avant ou après. Aucun markdown. Aucun bloc de code.
 
 Chaque event représente un match POUR LEQUEL TU PROPOSES UN PARI.
-- "pronostic_principal" : le pari recommandé, formulé de façon non ambiguë
-  (ex : "Victoire Palmeiras", "Over 2.5 buts", "Double chance : Bahia ou nul",
-  "Palmeiras -1.5"). N'utilise jamais d'abréviation obscure.
+
+- "pari_code" : OBLIGATOIRE. Le pari, exprimé dans ce vocabulaire fermé.
+  Tout autre valeur fait rejeter le pronostic.
+
+    1X2:HOME | 1X2:DRAW | 1X2:AWAY      résultat sec
+    DC:1X | DC:X2 | DC:12               double chance
+                                        (1X = dom ou nul, X2 = nul ou ext,
+                                         12 = pas de nul)
+    OU:OVER:2.5 | OU:UNDER:3.5          total de buts du MATCH
+    BTTS:YES | BTTS:NO                  les deux équipes marquent
+    AH:HOME:-1.5 | AH:AWAY:+2.5         handicap asiatique
+    TT:HOME:OVER:0.5                    total d'UNE équipe
+
+  Le seuil peut être n'importe quel nombre (0.5, 1.5, 2.5, 3.5…).
+  N'invente aucune autre famille. Si le pari que tu envisages n'entre dans
+  aucune de ces cases, choisis-en un autre ou ne propose pas ce match.
+  Un pari combiné ("gagne ET plus de 1.5") n'est PAS exprimable : évite-le.
+
+- "pronostic_principal" : le même pari en français lisible, pour l'affichage.
+  C'est "pari_code" qui fait foi pour la notation.
 - "value_bet" : pari secondaire à meilleure cote, ou "aucun".
 - "pari_a_eviter" : ce qu'il ne faut surtout pas jouer sur ce match.
 - "probabilite" : ta probabilité estimée pour le pronostic principal (0 à 1).

@@ -247,11 +247,13 @@ CREATE TABLE IF NOT EXISTS ps_pronostics (
   value_bet_correct BOOLEAN,
   patterns_appliques JSONB,
   created_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
-  updated_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT now()
+  updated_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+  pari_code        VARCHAR(40)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_confiance ON public.ps_pronostics USING btree (confiance);
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_date ON public.ps_pronostics USING btree (date DESC);
+CREATE INDEX IF NOT EXISTS idx_ps_pronostics_sans_code ON public.ps_pronostics USING btree (date) WHERE (pari_code IS NULL);
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_sport ON public.ps_pronostics USING btree (sport);
 CREATE UNIQUE INDEX idx_ps_pronostics_unique_jour ON public.ps_pronostics USING btree (date, lower(regexp_replace((match)::text, '\s+'::text, ' '::text, 'g'::text)));
 

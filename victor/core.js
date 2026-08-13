@@ -15,6 +15,7 @@ import {
   demarrerBudgetSources, arreterBudgetSources,
 } from './sources.js';
 import { getOdds, getOddsEvents, evaluerValue } from './odds.js';
+import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL        = process.env.GEMINI_MODEL        || 'gemini-flash-latest';
@@ -560,6 +561,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     "forme_equipe_b": "",
     "stats_cles": [],
     "analyse_tactique": "",
+    "pari_code": "",
     "pronostic_principal": "",
     "probabilite": 0.00,
     "cote_estimee": 0.00,
@@ -616,7 +618,10 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   const events      = [];
   const rejets      = [];
 
-  for (const ev of bruts) {
+  for (const brut of bruts) {
+    // Le code fait foi ; le libellé en est dérivé. Si le modèle a répondu
+    // en texte libre, on tente la traduction avant de valider.
+    const ev = normaliserPari(brut);
     const motifs = validerEvent(ev, clesReelles);
     if (motifs.length > 0) { rejets.push({ match: ev?.match || '(sans nom)', motifs }); continue; }
 
@@ -660,9 +665,9 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            enjeu, contexte, forme_equipe_a, forme_equipe_b, infirmerie,
            stats_cles, analyse_tactique, pronostic_principal, cote_estimee,
            confiance, value_bet, cote_value, pari_a_eviter, score_predit,
-           confiance_score, analyse_courte, phrase_signature)
+           confiance_score, analyse_courte, phrase_signature, pari_code)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-                 $17,$18,$19,$20,$21,$22,$23,$24)
+                 $17,$18,$19,$20,$21,$22,$23,$24,$25)
          -- Un seul pronostic par match et par jour (migration 010).
          -- Les jobs de 7h et de 13h analysent tous deux la journée : sans
          -- cette clause, le second insérait un doublon et un pari gagnant
@@ -687,6 +692,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            analyse_courte      = EXCLUDED.analyse_courte,
            analyse_tactique    = EXCLUDED.analyse_tactique,
            phrase_signature    = EXCLUDED.phrase_signature,
+           pari_code           = EXCLUDED.pari_code,
            updated_at          = NOW()
          WHERE ps_pronostics.resultat_reel IS NULL` : ''}`,
         [
@@ -714,6 +720,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
           ev.confiance_score     || null,
           ev.analyse_courte      || null,
           ev.phrase_signature    || null,
+          ev.pari_code           || null,
         ]
       );
       console.log(`   ✅ ${ev.match} — ${ev.pronostic_principal} (${ev.confiance})`);
@@ -854,6 +861,12 @@ export function matchFixture(pronoMatch, fixtures) {
  * @returns {boolean|null}            null = cas non géré → fallback IA
  */
 export function evalPronostic(pronostic, homeGoals, awayGoals, homeName = '', awayName = '') {
+  // ── Vocabulaire fermé : la voie normale depuis la migration 011 ──
+  // Si le libellé EST un code, on l'évalue par fonction pure. Aucune
+  // interprétation, donc aucune des trois erreurs de notation qui ont
+  // émaillé août (handicap, double chance, négation).
+  if (codeValide(pronostic)) return evaluerCode(pronostic, homeGoals, awayGoals);
+
   const p = String(pronostic || '').toLowerCase().replace(',', '.');
   if (!p) return null;
 
@@ -940,11 +953,34 @@ export function evalPronostic(pronostic, homeGoals, awayGoals, homeName = '', aw
  * C'est l'invariant qui ferme la boucle génération ↔ notation.
  */
 export function estNotable(ev) {
+  // Depuis la migration 011, un code valide suffit : il est évaluable
+  // par construction. C'est la voie normale.
+  if (codeValide(ev?.pari_code)) return true;
+
   const p = ev?.pronostic_principal;
   if (!p || typeof p !== 'string' || p.trim().length < 3) return false;
   const a = evalPronostic(p, 3, 0, ev.equipe_a, ev.equipe_b);
   const b = evalPronostic(p, 0, 3, ev.equipe_a, ev.equipe_b);
   return a !== null || b !== null;
+}
+
+/**
+ * Assure qu'un event porte un code de pari valide.
+ * Si le modèle a renvoyé une phrase malgré la consigne, on tente la
+ * traduction ; en cas d'échec le pari sera rejeté par le portillon.
+ * Le libellé est TOUJOURS redérivé du code : une seule source de vérité.
+ */
+export function normaliserPari(ev) {
+  let code = String(ev?.pari_code || '').trim().toUpperCase();
+  if (!codeValide(code)) {
+    code = codeDepuisTexte(ev?.pronostic_principal, ev?.equipe_a, ev?.equipe_b) || '';
+  }
+  if (!codeValide(code)) return { ...ev, pari_code: null };
+  return {
+    ...ev,
+    pari_code: code,
+    pronostic_principal: libelleCode(code, ev?.equipe_a || 'Domicile', ev?.equipe_b || 'Extérieur'),
+  };
 }
 
 /**
@@ -959,6 +995,12 @@ export function validerEvent(ev, clesReelles = null) {
 
   if (!ev?.match || !ev.equipe_a || !ev.equipe_b) {
     motifs.push('équipes ou match manquants');
+  }
+
+  // Sans code valide, le pari n'est pas notable de façon fiable.
+  // C'est la garantie qui remplace dix jours de correctifs par regex.
+  if (!codeValide(ev?.pari_code)) {
+    motifs.push(`pari sans code exploitable : "${(ev?.pronostic_principal || '').slice(0, 40)}"`);
   }
 
   // Refus explicite de parier : légitime de la part de Victor, mais ça
@@ -1017,7 +1059,7 @@ export async function checkResults() {
 
   const { rows: pronostics } = await query(
     `SELECT id, to_char(date, 'YYYY-MM-DD') AS date_iso,
-            match, sport, pronostic_principal, value_bet
+            match, sport, pronostic_principal, value_bet, pari_code
      FROM ps_pronostics
      WHERE date >= CURRENT_DATE - $1::int
        AND resultat_reel IS NULL
@@ -1074,7 +1116,11 @@ export async function checkResults() {
         const ag = fixture.awayGoals ?? 0;
         scoreReel = `${hg}-${ag}`;
         resultatReel = `${fixture.home} ${hg}-${ag} ${fixture.away}`;
-        pronosticCorrect = evalPronostic(p.pronostic_principal, hg, ag, fixture.home, fixture.away);
+        // Le CODE fait foi. Le libellé n'est qu'un repli pour les
+        // pronostics antérieurs à la migration 011.
+        pronosticCorrect = codeValide(p.pari_code)
+          ? evaluerCode(p.pari_code, hg, ag)
+          : evalPronostic(p.pronostic_principal, hg, ag, fixture.home, fixture.away);
         valueBetCorrect  = evalValueBet(p.value_bet, hg, ag, fixture.home, fixture.away);
         source = fixture.source;
       }

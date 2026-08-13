@@ -138,33 +138,45 @@ verifie('JSON complet préservé', t4?.verdict_journee, 'ok');
 // "NO BET" / vides. Impossibles à noter, elles auraient dilué le taux
 // de réussite sans jamais le faire bouger.
 // ══════════════════════════════════════════════
-const evBase = { match: 'Portugal vs Luxembourg', equipe_a: 'Portugal', equipe_b: 'Luxembourg', cote_estimee: 1.8 };
+// Depuis la migration 011, un event valide porte un pari_code.
+const evBase = { match: 'Portugal vs Luxembourg', equipe_a: 'Portugal', equipe_b: 'Luxembourg',
+                 cote_estimee: 1.8, pari_code: '1X2:HOME' };
 const ev = (extra) => ({ ...evBase, ...extra });
 
-// estNotable
-verifie('notable — victoire',   estNotable(ev({ pronostic_principal: 'Victoire Portugal' })), true);
-verifie('notable — handicap',   estNotable(ev({ pronostic_principal: 'Portugal -2.5' })),     true);
-verifie('notable — over',       estNotable(ev({ pronostic_principal: 'Over 2.5 buts' })),     true);
-verifie('non notable — NO BET', estNotable(ev({ pronostic_principal: 'NO BET' })),            false);
-verifie('non notable — vide',   estNotable(ev({ pronostic_principal: '' })),                  false);
-verifie('non notable — absent', estNotable(ev({})),                                           false);
-verifie('non notable — exotique', estNotable(ev({ pronostic_principal: 'Score exact 2-1' })), false);
+// estNotable — avec un code valide, le libellé n'a plus d'importance
+verifie('notable — code valide suffit', estNotable(ev({ pronostic_principal: 'peu importe' })), true);
+verifie('notable — code de handicap',   estNotable(ev({ pari_code: 'AH:HOME:-2.5' })),          true);
+
+// Sans code : repli sur l'ancienne analyse du libellé (pronostics d'avant la 011)
+const sansCode = (extra) => { const e = ev(extra); delete e.pari_code; return e; };
+verifie('legacy notable — victoire',    estNotable(sansCode({ pronostic_principal: 'Victoire Portugal' })), true);
+verifie('legacy notable — over',        estNotable(sansCode({ pronostic_principal: 'Over 2.5 buts' })),     true);
+verifie('legacy non notable — NO BET',  estNotable(sansCode({ pronostic_principal: 'NO BET' })),            false);
+verifie('legacy non notable — vide',    estNotable(sansCode({ pronostic_principal: '' })),                  false);
+verifie('legacy non notable — exotique',estNotable(sansCode({ pronostic_principal: 'Score exact 2-1' })),   false);
+verifie('code invalide non notable',    estNotable(ev({ pari_code: 'DC:99', pronostic_principal: 'Score exact 2-1' })), false);
 
 // validerEvent : 0 motif = publiable
 const cles = new Set(['portugal|luxembourg']);
 verifie('valide — cas nominal',
   validerEvent(ev({ pronostic_principal: 'Victoire Portugal' }), cles).length, 0);
-verifie('rejet — NO BET',
-  validerEvent(ev({ pronostic_principal: 'NO BET' }), cles).length, 1);
-verifie('rejet — pronostic vide',
-  validerEvent(ev({ pronostic_principal: '' }), cles).length, 1);
+// Sans code exploitable, le pari est rejeté quel que soit son libellé —
+// c'est la garantie qui remplace les correctifs par expressions régulières.
+// On vérifie le REJET, pas le nombre de motifs : plusieurs peuvent
+// s'appliquer en même temps, et compter les raisons rend le test fragile.
+verifie('rejet — NO BET sans code',
+  validerEvent(sansCode({ pronostic_principal: 'NO BET' }), cles).length > 0, true);
+verifie('rejet — pronostic vide sans code',
+  validerEvent(sansCode({ pronostic_principal: '' }), cles).length > 0, true);
+verifie('rejet — code invalide',
+  validerEvent(ev({ pari_code: 'SCORE:2-1' }), cles).length > 0, true);
 verifie('rejet — cote implausible',
   validerEvent(ev({ pronostic_principal: 'Victoire Portugal', cote_estimee: 0.4 }), cles).length, 1);
 verifie('rejet — cote absurde',
   validerEvent(ev({ pronostic_principal: 'Victoire Portugal', cote_estimee: 120 }), cles).length, 1);
 // Match cohérent en lui-même, mais absent des sources → inventé
 const evInvente = { match: 'Real Madrid vs Barcelona', equipe_a: 'Real Madrid', equipe_b: 'Barcelona',
-                    cote_estimee: 2.1, pronostic_principal: 'Victoire Real Madrid' };
+                    cote_estimee: 2.1, pronostic_principal: 'Victoire Real Madrid', pari_code: '1X2:HOME' };
 verifie('rejet — match inventé', validerEvent(evInvente, cles).length, 1);
 verifie('rejet — équipes manquantes',
   validerEvent({ pronostic_principal: 'Victoire Portugal' }, cles).length > 0, true);
@@ -193,7 +205,7 @@ verifie('prod 03/08 — NO BET rejeté',
 verifie('accents et particules — pas de faux positif',
   validerEvent({ match: 'Platense vs Talleres de Córdoba', equipe_a: 'Platense',
                  equipe_b: 'Talleres de Córdoba', pronostic_principal: 'Victoire Platense',
-                 cote_estimee: 2.0 }, clesJour).length, 0);
+                 pari_code: '1X2:HOME', cote_estimee: 2.0 }, clesJour).length, 0);
 
 // ══════════════════════════════════════════════
 // 6. Value bet — calculée, plus déclarée par le LLM
@@ -229,6 +241,49 @@ verifie('value bet retenu',   evaluerValue(evBon, cotesMatch).value > 0, true);
 verifie('cote réelle reprise', evaluerValue(evBon, cotesMatch).cote, 1.40);
 verifie('value bet rejeté',   evaluerValue(evMauvais, cotesMatch).value < 0, true);
 verifie('sans cote -> null',  evaluerValue({ ...evBon, pronostic_principal: 'BTTS' }, cotesMatch), null);
+
+// ══════════════════════════════════════════════
+// 5 bis. VOCABULAIRE FERMÉ — la fin des regex sur les paris
+//
+// Trois faux résultats en dix jours, tous dus à l'interprétation d'un
+// libellé en texte libre. Un pari est désormais un CODE, évalué par une
+// fonction pure. Ces tests rejouent les trois incidents réels.
+// ══════════════════════════════════════════════
+const { evaluerCode, codeValide, libelleCode, codeDepuisTexte } = await import('./paris.js');
+
+// Les trois bugs historiques, exprimés en codes
+verifie('DC:12 sur un nul (bug du 12/08)',    evaluerCode('DC:12', 1, 1), false);
+verifie('DC:12 sur une victoire',             evaluerCode('DC:12', 2, 0), true);
+verifie('AH:HOME:-2.5 gagne par 4 (03/08)',   evaluerCode('AH:HOME:-2.5', 4, 0), true);
+verifie('AH:HOME:-2.5 gagne par 2',           evaluerCode('AH:HOME:-2.5', 2, 0), false);
+verifie('DC:X2 sur victoire ext (05/08)',     evaluerCode('DC:X2', 0, 1), true);
+verifie('DC:X2 sur victoire dom',             evaluerCode('DC:X2', 2, 0), false);
+
+// Familles restantes
+verifie('1X2:HOME',        evaluerCode('1X2:HOME', 2, 0), true);
+verifie('1X2:DRAW',        evaluerCode('1X2:DRAW', 1, 1), true);
+verifie('OU:UNDER:2.5',    evaluerCode('OU:UNDER:2.5', 1, 1), true);
+verifie('BTTS:NO sur 2-0', evaluerCode('BTTS:NO', 2, 0), true);
+verifie('TT:AWAY:OVER:0.5 ext marque', evaluerCode('TT:AWAY:OVER:0.5', 0, 1), true);
+verifie('TT:AWAY:OVER:0.5 ext muet',   evaluerCode('TT:AWAY:OVER:0.5', 3, 0), false);
+
+// Un code inconnu est REJETÉ, jamais deviné
+verifie('code inconnu rejeté',   evaluerCode('DC:99', 1, 1), null);
+verifie('famille inconnue',      evaluerCode('SCORE:2-1', 2, 1), null);
+verifie('code vide',             evaluerCode('', 1, 1), null);
+verifie('codeValide insensible à la casse', codeValide('dc:12'), true);
+
+// Libellé dérivé du code, jamais l'inverse
+verifie('libellé DC:12',    libelleCode('DC:12', 'Palmeiras', 'Cerro'), 'Pas de match nul');
+verifie('libellé 1X2:AWAY', libelleCode('1X2:AWAY', 'PSV', 'Sittard'), 'Victoire Sittard');
+
+// Traduction de secours — pièges relevés sur l'historique réel
+verifie('texte « Sunderland ou Nul »',  codeDepuisTexte('Sunderland ou Nul', 'Sunderland', 'Forest'), 'DC:1X');
+verifie('texte « Pas de match nul »',   codeDepuisTexte('Pas de match nul', 'A', 'B'), 'DC:12');
+verifie('texte « Portugal -2.5 »',      codeDepuisTexte('Portugal -2.5', 'Portugal', 'Luxembourg'), 'AH:HOME:-2.5');
+verifie('texte team total',             codeDepuisTexte('Braga marque (Team Total Over 0.5)', 'Braga', 'Fribourg'), 'TT:HOME:OVER:0.5');
+verifie('pari combiné refusé',          codeDepuisTexte('Lille gagne et Over 1.5 buts', 'Lille', 'Le Havre'), null);
+verifie('libellé inconnu refusé',       codeDepuisTexte('Score exact 2-1', 'A', 'B'), null);
 
 // ══════════════════════════════════════════════
 // 6 bis. NÉGATION — la classe de bug la plus coûteuse
