@@ -884,20 +884,47 @@ export function evalPronostic(pronostic, homeGoals, awayGoals, homeName = '', aw
     return estOver ? total > seuil : total < seuil;
   }
 
-  // ── 3. Match nul ─────────────────────────────────────────────
+  // ── 3. NÉGATION ──────────────────────────────────────────────
+  // « Pas de match nul » était évalué comme « Match nul » : réponse
+  // exactement inversée. Constaté le 12/08/2026 sur Palmeiras 1-1
+  // Cerro Porteño — pari publié PERDU, enregistré GAGNÉ.
+  const nie = /\b(pas de|pas d'|sans|aucun|aucune)\b/.test(p)
+           || /\bnon\s*$/.test(p)
+           || /\bne\b.*\bpas\b/.test(p);
+
+  // ── 4. Double chance ─────────────────────────────────────────
+  // Deux issues sur trois. DOIT passer avant le nul simple, sinon le
+  // mot « nul » de « pas de nul » déclenche la mauvaise branche.
+  const estDC = /double chance/.test(p) || /\b(1x|x2|12)\b/.test(p);
+  if (estDC || (nie && /\bnul\b|\bdraw\b/.test(p))) {
+    if (/\b1x\b/.test(p)) return diff >= 0;   // domicile ou nul
+    if (/\bx2\b/.test(p)) return diff <= 0;   // nul ou extérieur
+    if (/\b12\b/.test(p)) return diff !== 0;  // pas de nul
+    if (nie && /\bnul\b|\bdraw\b/.test(p)) return diff !== 0;
+    if (viseDom && !viseExt) return diff >= 0;
+    if (viseExt && !viseDom) return diff <= 0;
+    return null; // double chance non identifiable → arbitrage IA
+  }
+
+  // ── 5. Match nul simple ──────────────────────────────────────
   // "X" seul = nul, mais pas le "X" d'un pari combiné type "1/X"
   // (mi-temps/fin de match), qui doit partir en arbitrage IA.
-  if (/\bnul\b|\bdraw\b/.test(p) || /^[xn]$/.test(p.trim())) return diff === 0;
+  if (/\bnul\b|\bdraw\b/.test(p) || /^[xn]$/.test(p.trim())) {
+    return nie ? diff !== 0 : diff === 0;
+  }
 
-  // ── 4. 1N2, y compris désigné par le nom de l'équipe ─────────
+  // ── 6. 1N2, y compris désigné par le nom de l'équipe ─────────
   const estVictoire = /victoire|win|gagne|vainqueur/.test(p);
-  if (estVictoire && viseDom && !viseExt) return diff > 0;
-  if (estVictoire && viseExt && !viseDom) return diff < 0;
+  if (estVictoire && viseDom && !viseExt) return nie ? diff <= 0 : diff > 0;
+  if (estVictoire && viseExt && !viseDom) return nie ? diff >= 0 : diff < 0;
   if (/victoire.*(dom|home|équipe a|team a|\b1\b)|home win/.test(p)) return diff > 0;
   if (/victoire.*(ext|away|équipe b|team b|\b2\b)|away win/.test(p)) return diff < 0;
 
-  // ── 5. Les deux équipes marquent ─────────────────────────────
-  if (/btts|les deux.*marquent|both.*score/.test(p)) return homeGoals > 0 && awayGoals > 0;
+  // ── 7. Les deux équipes marquent ─────────────────────────────
+  if (/btts|les deux.*marquent|both.*score/.test(p)) {
+    const lesDeux = homeGoals > 0 && awayGoals > 0;
+    return nie ? !lesDeux : lesDeux;
+  }
 
   return null; // cas non géré → fallback IA
 }

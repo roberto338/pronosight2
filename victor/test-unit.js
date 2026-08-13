@@ -231,6 +231,39 @@ verifie('value bet rejeté',   evaluerValue(evMauvais, cotesMatch).value < 0, tr
 verifie('sans cote -> null',  evaluerValue({ ...evBon, pronostic_principal: 'BTTS' }, cotesMatch), null);
 
 // ══════════════════════════════════════════════
+// 6 bis. NÉGATION — la classe de bug la plus coûteuse
+//
+// Régression réelle du 12/08/2026 : Victor publie « Pas de match nul
+// (Double chance 12) » sur Palmeiras – Cerro Porteño. Le match finit 1-1,
+// donc NUL, donc le pari est PERDU. evalPronostic voyait le mot « nul »,
+// déclenchait la branche du match nul et répondait GAGNÉ.
+// Un taux de réussite affiché à 100% sur un pari perdu.
+// ══════════════════════════════════════════════
+const PAL = 'Palmeiras', CER = 'Cerro Porteño';
+
+verifie('négation — pas de nul, match nul',       evalPronostic('Pas de match nul (Double chance 12)', 1, 1, PAL, CER), false);
+verifie('négation — pas de nul, victoire dom',    evalPronostic('Pas de match nul (Double chance 12)', 2, 0, PAL, CER), true);
+verifie('négation — pas de nul, victoire ext',    evalPronostic('Pas de match nul (Double chance 12)', 0, 3, PAL, CER), true);
+verifie('négation — formulation courte',          evalPronostic('Pas de match nul', 1, 1, PAL, CER),                    false);
+verifie('négation — double chance : pas de nul',  evalPronostic('Double chance : pas de nul', 1, 1, PAL, CER),          false);
+verifie('sans négation — match nul reste correct',evalPronostic('Match nul', 1, 1, PAL, CER),                           true);
+verifie('sans négation — match nul, non nul',     evalPronostic('Match nul', 2, 1, PAL, CER),                           false);
+verifie('négation — BTTS Non sur 1-1',            evalPronostic('BTTS Non', 1, 1, PAL, CER),                            false);
+verifie('négation — BTTS Non sur 1-0',            evalPronostic('BTTS Non', 1, 0, PAL, CER),                            true);
+
+// Codes de double chance
+verifie('double chance 1X — victoire dom',  evalPronostic('Double chance 1X', 2, 0, PAL, CER), true);
+verifie('double chance 1X — nul',           evalPronostic('Double chance 1X', 1, 1, PAL, CER), true);
+verifie('double chance 1X — défaite dom',   evalPronostic('Double chance 1X', 0, 2, PAL, CER), false);
+verifie('double chance X2 — nul',           evalPronostic('Double chance X2', 1, 1, PAL, CER), true);
+verifie('double chance X2 — victoire dom',  evalPronostic('Double chance X2', 2, 0, PAL, CER), false);
+verifie('double chance 12 — nul',           evalPronostic('Double chance 12', 1, 1, PAL, CER), false);
+verifie('double chance 12 — victoire',      evalPronostic('Double chance 12', 2, 1, PAL, CER), true);
+// Par nom d'équipe
+verifie('double chance équipe dom — nul',   evalPronostic('Double chance : Palmeiras ou nul', 1, 1, PAL, CER), true);
+verifie('double chance équipe dom — perdu', evalPronostic('Double chance : Palmeiras ou nul', 0, 2, PAL, CER), false);
+
+// ══════════════════════════════════════════════
 // 7. Fenêtre de rattrapage — décalage de date
 //
 // Régression couverte : le 03/08/2026, 4 pronostics sur 5 n'ont jamais été
