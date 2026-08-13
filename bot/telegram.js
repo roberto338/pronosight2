@@ -38,6 +38,17 @@ async function send(chatId, text, opts = {}) {
 // Caractères spéciaux à échapper en Markdown v1
 // ══════════════════════════════════════════════
 
+/**
+ * Un champ que le modèle n'a pas pu remplir. Il répond « donnée
+ * indisponible » ou « aucun » — ce qui est honnête, mais n'a rien à
+ * faire dans un message destiné à des abonnés. Mieux vaut une ligne
+ * absente qu'une ligne qui affiche son propre vide.
+ */
+function estIndisponible(v) {
+  return /^\s*(aucun|aucune|n\/?a|non disponible|donn[ée]e[s]? indisponible[s]?|indisponible|-{1,2}|—)\s*$/i
+    .test(String(v || '')) || /donn[ée]e[s]? indisponible/i.test(String(v || ''));
+}
+
 function esc(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -84,7 +95,10 @@ export async function broadcastDaily(victorData) {
   try {
     const events   = victorData.events || [];
     const date     = victorData.date      || new Date().toISOString().slice(0, 10);
-    const genAt    = victorData.generated_at || '--:--';
+    // L'heure vient de NOTRE horloge, jamais du modèle : il n'en a pas.
+    // Il renvoyait « 00:00 », affiché tel quel dans le message du 13/08.
+    const genAt    = new Date().toLocaleTimeString('fr-FR',
+      { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
     const combine  = victorData.combine_victor;
     const verdict  = victorData.verdict_journee || '';
 
@@ -103,14 +117,18 @@ export async function broadcastDaily(victorData) {
       msgEvents += `🎯 *Pronostic :* ${esc(ev.pronostic_principal)}\n`;
       msgEvents += `💰 *Cote :* ~${esc(ev.cote_estimee)} | ${esc(ev.confiance)}\n`;
 
-      if (ev.value_bet) {
-        msgEvents += `💎 *Value bet :* ${esc(ev.value_bet)} \\(~${esc(ev.cote_value)}\\)\n`;
+      // ⚠️ Ne JAMAIS échapper les parenthèses : en Markdown v1 Telegram
+      // elles ne sont pas spéciales, et « \( » s'affiche littéralement.
+      // Le message du 13/08 montrait « aucun \(~0\) » aux abonnés.
+      if (ev.value_bet && !estIndisponible(ev.value_bet)) {
+        const coteVb = ev.cote_value ? ` (~${esc(ev.cote_value)})` : '';
+        msgEvents += `💎 *Value bet :* ${esc(ev.value_bet)}${coteVb}\n`;
       }
-      if (ev.pari_a_eviter) {
+      if (ev.pari_a_eviter && !estIndisponible(ev.pari_a_eviter)) {
         msgEvents += `⚠️ *Éviter :* ${esc(ev.pari_a_eviter)}\n`;
       }
-      if (ev.score_predit) {
-        msgEvents += `📊 *Score prédit :* ${esc(ev.score_predit)} \\(${esc(confScore)}\\)\n`;
+      if (ev.score_predit && !estIndisponible(ev.score_predit)) {
+        msgEvents += `📊 *Score prédit :* ${esc(ev.score_predit)} (${esc(confScore)})\n`;
       }
       if (ev.phrase_signature) {
         msgEvents += `💬 _${esc(ev.phrase_signature)}_\n`;

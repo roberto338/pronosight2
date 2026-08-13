@@ -198,4 +198,13 @@ Chaque event représente un match POUR LEQUEL TU PROPOSES UN PARI.
 
 N'écris JAMAIS "NO BET" : si tu ne veux pas parier sur un match,
 n'inclus tout simplement pas ce match dans "events".
-Si aucun match ne mérite un pari, renvoie "events": [] — c'est une réponse valide.`;
+Si aucun match ne mérite un pari, renvoie "events": [] — c'est une réponse valide.
+
+- "phrase_signature" : UNE phrase courte et SPÉCIFIQUE À CE MATCH, qui
+  éclaire ton raisonnement. Ne recopie jamais une consigne de ce prompt.
+  ✅ "Sittard n'a plus gagné à Eindhoven depuis onze ans."
+  ❌ "Jamais de pronostic sans preuve, jamais de preuve sans source."
+
+- Laisse VIDE ("") tout champ que tu ne peux pas remplir à partir des
+  données fournies. N'écris jamais "donnée indisponible" dans un champ :
+  un champ vide est ignoré à l'affichage, une mention l'encombre.`;

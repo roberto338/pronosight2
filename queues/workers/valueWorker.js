@@ -17,7 +17,13 @@ export async function valueProcessor(job) {
   await job.updateProgress(10);
 
   // ── Analyse Victor (même pipeline, contexte soir) ──
-  const result = await runVictor({ onEtape: (pct) => job.updateProgress(pct) });
+  // majExistants:false — le pronostic du matin a déjà été diffusé sur
+  // Telegram. Le job du soir peut AJOUTER des matchs (rencontres tardives),
+  // jamais réécrire ce que les abonnés ont déjà reçu.
+  const result = await runVictor({
+    onEtape: (pct) => job.updateProgress(pct),
+    majExistants: false,
+  });
 
   await job.updateProgress(90);
 

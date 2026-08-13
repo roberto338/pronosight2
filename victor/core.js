@@ -412,7 +412,7 @@ export function repairTruncatedJSON(s) {
  *   coince. Jusqu'ici la colonne restait à 10 — « quelque part dans
  *   runVictor » — ce qui a coûté quatre diagnostics erronés cette semaine.
  */
-export async function runVictor({ onEtape } = {}) {
+export async function runVictor({ onEtape, majExistants = true } = {}) {
   console.log('\n🎙️  Victor démarre l\'analyse...\n');
 
   // Jamais bloquant : une étape de suivi ne doit pas faire échouer l'analyse.
@@ -666,11 +666,16 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
          -- Un seul pronostic par match et par jour (migration 010).
          -- Les jobs de 7h et de 13h analysent tous deux la journée : sans
          -- cette clause, le second insérait un doublon et un pari gagnant
-         -- comptait DEUX victoires. La réanalyse met à jour la ligne
-         -- existante — cotes plus fraîches, analyse plus récente — mais
-         -- n'écrase jamais un résultat déjà constaté.
+         -- comptait DEUX victoires.
+         --
+         -- majExistants=false pour le job de 13h : le pronostic du matin a
+         -- déjà été DIFFUSÉ sur Telegram. Le réécrire ferait diverger ce
+         -- que l'abonné a reçu de ce qui sera noté. Constaté le 13/08 :
+         -- message « cote 1.23, pas de value bet », base « cote 1.42,
+         -- value bet Victoire Mirassol ». Ce qui est publié fait foi.
          ON CONFLICT (date, lower(regexp_replace(match, '\\s+', ' ', 'g')))
-         DO UPDATE SET
+         ${majExistants ? 'DO UPDATE SET' : 'DO NOTHING'}
+         ${majExistants ? `
            pronostic_principal = EXCLUDED.pronostic_principal,
            cote_estimee        = EXCLUDED.cote_estimee,
            confiance           = EXCLUDED.confiance,
@@ -683,7 +688,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            analyse_tactique    = EXCLUDED.analyse_tactique,
            phrase_signature    = EXCLUDED.phrase_signature,
            updated_at          = NOW()
-         WHERE ps_pronostics.resultat_reel IS NULL`,
+         WHERE ps_pronostics.resultat_reel IS NULL` : ''}`,
         [
           dateISO,
           ev.sport        || null,
