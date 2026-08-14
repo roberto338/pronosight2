@@ -224,4 +224,8 @@ Si aucun match ne mérite un pari, renvoie "events": [] — c'est une réponse v
 
 - Laisse VIDE ("") tout champ que tu ne peux pas remplir à partir des
   données fournies. N'écris jamais "donnée indisponible" dans un champ :
-  un champ vide est ignoré à l'affichage, une mention l'encombre.`;
+  un champ vide est ignoré à l'affichage, une mention l'encombre.
+
+- "combine_victor.selections" : un tableau de CHAÎNES de caractères, jamais
+  d'objets. Format : "Équipe A vs Équipe B : pari". Laisse le tableau vide
+  s'il n'y a pas de combiné pertinent.`;

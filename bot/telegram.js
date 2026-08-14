@@ -49,6 +49,28 @@ function estIndisponible(v) {
     .test(String(v || '')) || /donn[ée]e[s]? indisponible/i.test(String(v || ''));
 }
 
+/**
+ * Rend lisible une sélection de combiné.
+ *
+ * Le modèle renvoie tantôt une chaîne, tantôt un objet ({match, pari}…).
+ * Le 14/08, les abonnés ont lu « [object Object] ➕ [object Object] » :
+ * le code appliquait esc() directement à l'objet.
+ *
+ * On accepte les deux formes, et on écarte ce qui reste illisible plutôt
+ * que d'afficher une valeur technique.
+ */
+function selectionLisible(sel) {
+  if (typeof sel === 'string') return esc(sel.trim()) || null;
+  if (!sel || typeof sel !== 'object') return null;
+
+  const match = sel.match || sel.rencontre || sel.affiche
+             || [sel.equipe_a, sel.equipe_b].filter(Boolean).join(' vs ');
+  const pari  = sel.pari || sel.pronostic || sel.pronostic_principal || sel.libelle || sel.selection;
+
+  if (match && pari) return `${esc(match)} : ${esc(pari)}`;
+  return esc(pari || match) || null;
+}
+
 function esc(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -140,13 +162,14 @@ export async function broadcastDaily(victorData) {
     let msgVerdict = '';
 
     if (combine?.selections?.length > 0) {
-      msgVerdict += `🎲 *COMBINÉ VICTOR*\n`;
-      msgVerdict += `${combine.selections.map(esc).join(' ➕ ')}\n`;
-      msgVerdict += `💰 Cote combinée : ~${esc(combine.cote_combinee)}\n`;
-      if (combine.risque) {
-        msgVerdict += `⚡ Risque : ${esc(combine.risque)}\n`;
+      const lignes = combine.selections.map(selectionLisible).filter(Boolean);
+      if (lignes.length > 0) {
+        msgVerdict += `🎲 *COMBINÉ VICTOR*\n`;
+        msgVerdict += `${lignes.join(' ➕ ')}\n`;
+        if (combine.cote_combinee) msgVerdict += `💰 Cote combinée : ~${esc(combine.cote_combinee)}\n`;
+        if (combine.risque)        msgVerdict += `⚡ Risque : ${esc(combine.risque)}\n`;
+        msgVerdict += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
       }
-      msgVerdict += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
     }
 
     if (verdict) {

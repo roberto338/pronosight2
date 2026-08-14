@@ -576,7 +576,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     "phrase_signature": ""
   }],
   "combine_victor": {
-    "selections": [],
+    "selections": ["Telstar vs Sparta : Plus de 2.5 buts", "Wolves vs Blackburn : Plus de 2.5 buts"],
     "cote_combinee": 0.00,
     "justification": "",
     "risque": ""
