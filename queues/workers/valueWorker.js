@@ -4,6 +4,7 @@
 // ══════════════════════════════════════════════
 
 import { runVictor } from '../../victor/core.js';
+import { broadcastDaily } from '../../bot/telegram.js';
 
 /**
  * Processeur du job 'value'.
@@ -28,16 +29,28 @@ export async function valueProcessor(job) {
   await job.updateProgress(90);
 
   const nbPronostics = result?.events?.length || 0;
-  console.log(`   ✅ [value #${job.id}] ${nbPronostics} pronostic(s) value générés`);
+  const nouveaux     = result?.nouveaux || [];
+  console.log(`   ✅ [value #${job.id}] ${nbPronostics} retenu(s), dont ${nouveaux.length} nouveau(x)`);
 
-  // Pas de broadcast Telegram pour le refresh du soir
-  // (évite le spam — le broadcast principal est fait le matin)
+  // ── Diffusion des SEULS ajouts ────────────────────────────────
+  // Ce job ne rediffusait rien, « pour éviter le spam ». Le raisonnement
+  // valait quand il réanalysait toute la journée. Depuis majExistants,
+  // il ne peut plus qu'AJOUTER — et ces ajouts n'étaient jamais annoncés.
+  // Le 14/08, Sporting CP a été ajouté à 13h20 sans que personne le sache.
+  let telegramSent = false;
+  if (nouveaux.length > 0) {
+    await broadcastDaily({ ...result, events: nouveaux, complement: true });
+    telegramSent = true;
+    console.log(`   📱 [value #${job.id}] ${nouveaux.length} ajout(s) diffusé(s)`);
+  }
 
   await job.updateProgress(100);
 
   return {
     date:        result?.date,
     nbPronostics,
+    nbNouveaux:  nouveaux.length,
+    telegramSent,
     generatedAt: new Date().toISOString(),
   };
 }

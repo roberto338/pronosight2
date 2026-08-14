@@ -125,8 +125,11 @@ export async function broadcastDaily(victorData) {
     const verdict  = victorData.verdict_journee || '';
 
     // ── Partie 1 : En-tête + events ──────────────
-    let msgEvents = `🎙️ *VICTOR — Analyse du ${esc(date)}*\n`;
-    msgEvents    += `_Généré à ${esc(genAt)}_\n`;
+    // Le job de 13h diffuse ses AJOUTS. L'en-tête doit le dire, sinon
+    // l'abonné croit à une seconde analyse complète de la journée.
+    let msgEvents = victorData.complement
+      ? `🎙️ *VICTOR — Ajout du ${esc(date)}*\n_${events.length} opportunité${events.length > 1 ? 's' : ''} supplémentaire${events.length > 1 ? 's' : ''} · ${esc(genAt)}_\n`
+      : `🎙️ *VICTOR — Analyse du ${esc(date)}*\n_Généré à ${esc(genAt)}_\n`;
     msgEvents    += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     const eventsToShow = events.slice(0, 6);

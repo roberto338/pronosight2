@@ -657,9 +657,16 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   await etape(94, `sauvegarde de ${events.length} pronostic(s)`);
   console.log(`\n💾 Sauvegarde de ${events.length} pronostic(s) en DB (moteur: ${moteur})...`);
 
+  // Distingue ce qui est réellement ÉCRIT de ce qui existait déjà.
+  // Le job du soir n'a pas à rediffuser les pronostics du matin, mais
+  // il doit annoncer ceux qu'il ajoute — sans quoi un abonné ne les
+  // reçoit jamais (constaté le 14/08 : Sporting CP ajouté à 13h20,
+  // jamais communiqué).
+  const nouveaux = [];
+
   for (const ev of events) {
     try {
-      await query(
+      const { rows: ecrit } = await query(
         `INSERT INTO ps_pronostics
           (date, sport, competition, match, equipe_a, equipe_b, heure,
            enjeu, contexte, forme_equipe_a, forme_equipe_b, infirmerie,
@@ -694,7 +701,8 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            phrase_signature    = EXCLUDED.phrase_signature,
            pari_code           = EXCLUDED.pari_code,
            updated_at          = NOW()
-         WHERE ps_pronostics.resultat_reel IS NULL` : ''}`,
+         WHERE ps_pronostics.resultat_reel IS NULL` : ''}
+         RETURNING id`,
         [
           dateISO,
           ev.sport        || null,
@@ -723,7 +731,14 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
           ev.pari_code           || null,
         ]
       );
-      console.log(`   ✅ ${ev.match} — ${ev.pronostic_principal} (${ev.confiance})`);
+      // Aucune ligne renvoyée = ON CONFLICT DO NOTHING, le pronostic
+      // existait déjà et a été publié plus tôt.
+      if (ecrit.length > 0) {
+        nouveaux.push(ev);
+        console.log(`   ✅ ${ev.match} — ${ev.pronostic_principal} (${ev.confiance})`);
+      } else {
+        console.log(`   ↩️  ${ev.match} — déjà publié ce matin, inchangé`);
+      }
     } catch (err) {
       console.error(`   ❌ Erreur sauvegarde "${ev.match}":`, err.message);
     }
@@ -736,6 +751,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   return {
     ...victorData,
     events,
+    nouveaux,   // réellement écrits : c'est ce que le job du soir diffuse
     moteur,
     rejets,
     raison: events.length === 0
