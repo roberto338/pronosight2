@@ -29,14 +29,18 @@ const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
 // tentatives pour rien. Un échec explicite vaut mieux qu'un job fantôme.
 const JOB_TIMEOUT_MS   = Number(process.env.JOB_TIMEOUT_MS || 12 * 60 * 1000);
 const STALE_AFTER_MIN  = Number(process.env.JOB_STALE_MINUTES || 20);
-const RETRY_WINDOW_H   = Number(process.env.JOB_RETRY_WINDOW_HOURS || 2);
+// 6 h et non 2 : un job de 7h ou de 13h reste pertinent le soir même, et
+// une indisponibilité de Render dépasse facilement deux heures. Le 15/08,
+// le job de 13h a été abandonné après un seul essai pour cette raison.
+// Au-delà de 6 h on renonce : le contexte du jour n'a plus de sens.
+const RETRY_WINDOW_H   = Number(process.env.JOB_RETRY_WINDOW_HOURS || 6);
 
 // ── Reprise des jobs orphelins ──────────────────────────────────
 // Un job passé en 'running' dont le process meurt (redéploiement Render,
 // spin-down du free tier, OOM) n'est plus jamais repris : claimNextJob()
 // ne regarde que 'pending'. 26 jobs sont ainsi restés figés du 15/07 au
 // 03/08/2026 — panne invisible de 3 semaines. Ce balayage est le filet.
-async function requeueStaleJobs() {
+async function requeueStaleJobs(seuilMin = STALE_AFTER_MIN) {
   try {
     // Un job récent mérite un retry (redémarrage Render passager).
     // Un job ancien ne doit PAS être rejoué : il porterait un contexte
@@ -60,7 +64,7 @@ async function requeueStaleJobs() {
       WHERE  status = 'running'
         AND  started_at < NOW() - ($1 || ' minutes')::interval
       RETURNING id, name, status
-    `, [String(STALE_AFTER_MIN), String(RETRY_WINDOW_H)]);
+    `, [String(seuilMin), String(RETRY_WINDOW_H)]);
 
     if (rows.length > 0) {
       const requeues = rows.filter(r => r.status === 'pending').length;
@@ -257,6 +261,21 @@ export function startWorker() {
     return true;
   }
   _running = true;
+
+  // ── Reprise immédiate au démarrage ────────────────────────────
+  // Une seule instance, un seul worker, concurrency 1 : au boot, un job
+  // encore en 'running' appartenait forcément au process précédent. Il
+  // est orphelin par définition — inutile d'attendre les 20 minutes du
+  // balayage périodique.
+  //
+  // Le 15/08, le job value de 13h a été tué par un SIGTERM de Render à
+  // 75% d'avancement. Il est resté 'running', et quand le balayage l'a
+  // enfin vu, la fenêtre de rejeu de 2 h avait expiré : abandonné après
+  // un seul essai, alors que deux tentatives restaient disponibles.
+  requeueStaleJobs(0)
+    .then(n => { if (n > 0) console.warn(`♻️  [Worker] ${n} job(s) repris au démarrage`); })
+    .catch(() => { /* le balayage périodique prendra le relais */ });
+
   _timer   = setTimeout(tick, 2_000);
   console.log('⚙️  Worker Victor démarré — poller PostgreSQL (victor_jobs, 1 job / 10s max)');
   return true;
