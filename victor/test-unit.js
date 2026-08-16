@@ -15,7 +15,7 @@
 
 import 'dotenv/config'; // doit précéder tout import qui lit process.env
 import {
-  evalPronostic, evalValueBet, matchFixture, repairTruncatedJSON,
+  evalPronostic, evalValueBet, matchFixture, repairTruncatedJSON, extractJSON,
   estNotable, validerEvent, normalizeTeam,
 } from './core.js';
 
@@ -130,6 +130,34 @@ verifie('tronqué sur clé nue', t3?.events?.length, 1);
 // JSON déjà valide : doit rester intact
 const t4 = repare('{"events":[{"match":"A vs B"}],"verdict_journee":"ok"}');
 verifie('JSON complet préservé', t4?.verdict_journee, 'ok');
+
+// ══════════════════════════════════════════════
+// 4 bis. extractJSON — enveloppe des moteurs + réponses coupées
+// ══════════════════════════════════════════════
+// Régression du 16/08 : Gemini a épuisé son plafond de tokens en
+// réflexion et rendu un JSON coupé AVANT sa première accolade fermante.
+// extractJSON levait « Aucun JSON trouvé » sans jamais atteindre sa
+// propre réparation — trois tentatives perdues, zéro pronostic du jour.
+const enveloppe = (txt) => ({ source: 'gemini', data: { candidates: [{ content: { parts: [{ text: txt }] } }] } });
+
+const e1 = extractJSON(enveloppe('{"date":"2026-08-16","events":[{"match":"A vs B","pari_code":"1X2:HOME"},{"match":"C vs D","contexte":"deux équipes ayant perdu leur pre'));
+verifie('coupé avant toute accolade fermante', e1?.events?.length, 1);
+verifie('coupé — event exploitable', e1?.events?.[0]?.pari_code, '1X2:HOME');
+
+// Coupé sans la moindre accolade fermante ET sans event complet :
+// il n'y a rien à sauver, mais ça doit lever proprement, pas boucler.
+let leve = false;
+try { extractJSON(enveloppe('{"date":"2026-08-16","events":[{"match":"A vs')); } catch { leve = true; }
+verifie('coupé trop tôt → erreur propre', leve, true);
+
+// Réponse complète : le chemin nominal ne doit pas régresser
+const e2 = extractJSON(enveloppe('```json\n{"events":[{"match":"A vs B"}],"verdict_journee":"ok"}\n```'));
+verifie('markdown + JSON complet', e2?.verdict_journee, 'ok');
+
+// Réponse vraiment vide : toujours refusée
+let vide = false;
+try { extractJSON(enveloppe('désolé, je ne peux pas répondre')); } catch { vide = true; }
+verifie('réponse sans JSON refusée', vide, true);
 
 // ══════════════════════════════════════════════
 // 5. Portillon de validation — ce qui entre en base

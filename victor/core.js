@@ -27,6 +27,14 @@ const GROQ_MODEL        = process.env.GROQ_MODEL         || 'llama-3.3-70b-versa
 // Timeout de tout appel IA. Sans lui un blocage réseau fige le worker.
 const AI_TIMEOUT_MS     = Number(process.env.AI_TIMEOUT_MS || 90_000);
 
+// Plafond de réflexion des modèles 2.5. Les tokens de réflexion sont
+// décomptés de maxOutputTokens : sans plafond, ils dévorent le budget et
+// le JSON sort tronqué. Mesuré le 16/08 sur 102 matchs : 1625 tokens de
+// réflexion + 6551 de réponse = plafond 8192 atteint, finishReason
+// MAX_TOKENS, réponse coupée en plein milieu du premier pronostic. Avec
+// un plafond à 1024 : finishReason STOP, JSON complet.
+const THINKING_BUDGET   = Number(process.env.GEMINI_THINKING_BUDGET || 1024);
+
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
 // ══════════════════════════════════════════════
@@ -134,7 +142,7 @@ export async function getVictorBriefing() {
 // ══════════════════════════════════════════════
 
 // ── Appel Gemini helper ───────────────────────
-async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false, model = null, noThinking = false } = {}) {
+async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, search = false, model = null, noThinking = false, thinkingBudget = null } = {}) {
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY manquante');
   const body = {
     contents,
@@ -147,7 +155,9 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
       // 383 tokens de réflexion sur un budget de 400 → 1 token de réponse,
       // finishReason=MAX_TOKENS, JSON tronqué. Sur une tâche de simple
       // jugement, la réflexion n'apporte rien et nuit à la fiabilité.
-      ...(noThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      ...(noThinking             ? { thinkingConfig: { thinkingBudget: 0 } }
+        : thinkingBudget !== null ? { thinkingConfig: { thinkingBudget } }
+        : {}),
     },
   };
   if (search) body.tools = [{ googleSearch: {} }];
@@ -165,6 +175,15 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Gemini HTTP ${resp.status}: ${t.slice(0, 200)}`); }
   const data = await resp.json();
   if (data.error) throw new Error(`Gemini: ${data.error.message}`);
+
+  // Une réponse coupée doit se voir dans les logs. Sans ça, l'échec se
+  // manifeste 40 lignes plus loin sous la forme d'une erreur de parsing
+  // JSON, qui pointe vers extractJSON alors que le fautif est le budget.
+  const motifFin = data.candidates?.[0]?.finishReason;
+  if (motifFin && motifFin !== 'STOP') {
+    const u = data.usageMetadata || {};
+    console.warn(`   ⚠️  Gemini finishReason=${motifFin} — réflexion ${u.thoughtsTokenCount ?? 0} + réponse ${u.candidatesTokenCount ?? 0} tokens (plafond ${Math.min(maxTokens, 8192)})`);
+  }
   return data;
 }
 
@@ -218,10 +237,18 @@ async function callAI(systemPrompt, userMessage, maxTokens = 8000, { noThinking 
   // ── 1. Gemini en mode JSON strict (primaire) ──
   if (GEMINI_API_KEY) {
     try {
-      const data = await geminiRequest(
-        [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }],
-        { maxTokens, jsonMode: true, noThinking }
-      );
+      const contenu = [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n---\n\n${userMessage}` }] }];
+      let data = await geminiRequest(contenu,
+        { maxTokens, jsonMode: true, noThinking, thinkingBudget: noThinking ? null : THINKING_BUDGET });
+
+      // Filet : si la réponse est TOUJOURS coupée malgré le plafond (prompt
+      // très long, journée à 100 matchs), on relance en supprimant toute
+      // réflexion. Le budget de sortie passe alors entièrement dans le JSON.
+      // Mieux vaut une analyse moins réfléchie qu'aucun pronostic du jour.
+      if (!noThinking && data.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+        console.warn('   ↻ Réponse tronquée — relance sans réflexion');
+        data = await geminiRequest(contenu, { maxTokens, jsonMode: true, noThinking: true });
+      }
       console.log(`   🤖 Moteur : Gemini (${GEMINI_MODEL})`);
       return { source: 'gemini', data };
     } catch (err) {
@@ -266,7 +293,7 @@ async function callAI(systemPrompt, userMessage, maxTokens = 8000, { noThinking 
 // EXTRACTION JSON ROBUSTE
 // ══════════════════════════════════════════════
 
-function extractJSON(aiResponse) {
+export function extractJSON(aiResponse) {
   // Normalise les deux formats : { source, data } de callAI ou réponse brute
   const resp = aiResponse?.source ? aiResponse.data : aiResponse;
 
@@ -302,12 +329,16 @@ function extractJSON(aiResponse) {
 
   // Cherche le premier { et le dernier }
   const start = clean.indexOf('{');
-  const end   = clean.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error('Aucun JSON trouvé dans la réponse IA');
-  }
+  if (start === -1) throw new Error('Aucun JSON trouvé dans la réponse IA');
 
-  clean = clean.slice(start, end + 1);
+  // Une réponse coupée AVANT sa première accolade fermante n'a aucun bloc
+  // complet à isoler — elle n'est pas perdue pour autant : la tentative 4
+  // sait refermer les structures ouvertes. Ce garde levait avant elle et
+  // rendait la réparation inatteignable dans le pire cas, celui où elle
+  // sert justement à quelque chose. Le 16/08, les trois essais du job
+  // prematch sont morts ici, sur « Aucun JSON trouvé ».
+  const end = clean.lastIndexOf('}');
+  clean = end > start ? clean.slice(start, end + 1) : clean.slice(start);
 
   // Tentative 1 : parse direct
   try {

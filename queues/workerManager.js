@@ -59,6 +59,12 @@ async function requeueStaleJobs(seuilMin = STALE_AFTER_MIN) {
              -- alors que le service tournait depuis 34 h sans coupure —
              -- il attendait le quota football-data. Un diagnostic faux
              -- coûte plus cher qu'une absence de diagnostic.
+             --
+             -- COALESCE ne fige plus un message périmé : claimNextJob()
+             -- remet `error` à NULL à chaque essai, donc une valeur non
+             -- nulle ici est forcément la cause réelle consignée par
+             -- ecrireVerdict(). Ce libellé n'apparaît que si le job n'a
+             -- rien pu dire de lui-même.
              error  = COALESCE(error, 'Repris : toujours en cours après ' || $1 || ' min sans aboutir'),
              updated_at = NOW()
       WHERE  status = 'running'
@@ -166,7 +172,14 @@ async function claimNextJob() {
     SET    status     = 'running',
            started_at = NOW(),
            updated_at = NOW(),
-           attempts   = attempts + 1
+           attempts   = attempts + 1,
+           -- Remis à zéro à chaque essai. Sans ça, la progression et le
+           -- message d'erreur du tour précédent survivent et se lisent
+           -- comme un diagnostic frais : le 16/08, le job affichait
+           -- « progress 88 » hérité de la 1re tentative alors que la 3e
+           -- n'avait pas écrit une seule ligne.
+           progress   = 0,
+           error      = NULL
     WHERE  id = (
       SELECT id
       FROM   victor_jobs
@@ -179,6 +192,37 @@ async function claimNextJob() {
     RETURNING id, name, data, attempts, max_attempts AS "maxAttempts"
   `);
   return rows[0] || null;
+}
+
+// ── Écriture du verdict d'un job ────────────────────────────────
+// Cet UPDATE ne doit JAMAIS pouvoir remonter. S'il échoue, le job reste
+// 'running' sans une ligne d'explication : le balayage le reprend 20 min
+// plus tard, brûle un essai, et le heartbeat annonce « toujours en cours
+// après 20 min » alors que le job a échoué en deux minutes.
+//
+// C'est exactement ce qui s'est produit les 15 et 16/08 : un typage de
+// paramètre ambigu ($1 servait à la fois de valeur assignée et de terme
+// de comparaison, « inconsistent types deduced for parameter $1 ») rendait
+// cet UPDATE impossible. Trois tentatives perdues, zéro pronostic, et un
+// diagnostic faux affiché à Roberto.
+async function ecrireVerdict(id, sql, params) {
+  try {
+    await query(sql, params);
+    return true;
+  } catch (err) {
+    console.error(`❌ [Worker] Verdict non écrit pour #${id} : ${err.message} — repli minimal`);
+    try {
+      await query(
+        `UPDATE victor_jobs
+         SET status = 'failed', error = $1, completed_at = NOW(), updated_at = NOW()
+         WHERE id = $2`,
+        [`Verdict inscriptible impossible : ${err.message}`.slice(0, 500), id]
+      );
+    } catch (err2) {
+      console.error(`❌ [Worker] Repli impossible pour #${id} : ${err2.message}`);
+    }
+    return false;
+  }
 }
 
 // ── Exécution d'un job réclamé ──────────────────────────────────
@@ -207,9 +251,10 @@ async function processClaimedJob(row) {
           JOB_TIMEOUT_MS).unref()
       ),
     ]);
-    await query(
+    await ecrireVerdict(row.id,
       `UPDATE victor_jobs
-       SET status = 'done', result = $1, error = NULL, completed_at = NOW(), updated_at = NOW()
+       SET status = 'done', result = $1, error = NULL, progress = 100,
+           completed_at = NOW(), updated_at = NOW()
        WHERE id = $2`,
       [JSON.stringify(result ?? {}), row.id]
     );
@@ -219,13 +264,20 @@ async function processClaimedJob(row) {
     const backoffMs = BACKOFF_BASE_MS * 2 ** (row.attempts - 1);
     console.error(`❌ [Worker] Job échoué : ${row.name} #${row.id} (tentative ${row.attempts}/${row.maxAttempts}) — ${err.message}`);
 
-    await query(
+    // $1 est à la fois assigné à `status` (varchar) et comparé à 'pending'
+    // (text). Sans le transtypage explicite, PostgreSQL refuse la requête :
+    // « inconsistent types deduced for parameter $1 ». L'échec devenait
+    // alors impossible à consigner — voir ecrireVerdict() ci-dessus.
+    await ecrireVerdict(row.id,
       `UPDATE victor_jobs
-       SET status = $1, error = $2,
-           scheduled_for = CASE WHEN $1 = 'pending' THEN NOW() + ($3 || ' milliseconds')::interval ELSE scheduled_for END,
+       SET status = $1::text, error = $2,
+           scheduled_for = CASE WHEN $1::text = 'pending'
+                                THEN NOW() + ($3 || ' milliseconds')::interval
+                                ELSE scheduled_for END,
+           completed_at  = CASE WHEN $1::text = 'failed' THEN NOW() ELSE completed_at END,
            updated_at = NOW()
        WHERE id = $4`,
-      [willRetry ? 'pending' : 'failed', err.message, String(backoffMs), row.id]
+      [willRetry ? 'pending' : 'failed', String(err.message).slice(0, 500), String(backoffMs), row.id]
     );
   }
 }
