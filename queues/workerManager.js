@@ -61,10 +61,10 @@ async function requeueStaleJobs(seuilMin = STALE_AFTER_MIN) {
              -- coûte plus cher qu'une absence de diagnostic.
              --
              -- COALESCE ne fige plus un message périmé : claimNextJob()
-             -- remet `error` à NULL à chaque essai, donc une valeur non
-             -- nulle ici est forcément la cause réelle consignée par
-             -- ecrireVerdict(). Ce libellé n'apparaît que si le job n'a
-             -- rien pu dire de lui-même.
+             -- remet la colonne error à NULL à chaque essai, donc une
+             -- valeur non nulle ici est forcément la cause réelle
+             -- consignée par ecrireVerdict(). Ce libellé n'apparaît que
+             -- si le job n'a rien pu dire de lui-même.
              error  = COALESCE(error, 'Repris : toujours en cours après ' || $1 || ' min sans aboutir'),
              updated_at = NOW()
       WHERE  status = 'running'
