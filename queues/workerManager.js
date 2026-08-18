@@ -336,6 +336,7 @@ function surveillerBase(err) {
       const min = Math.round((Date.now() - _baseKoDepuis) / 60000);
       _baseKoDepuis = null;
       if (min >= 15) {
+        console.warn(`🔔 [Sentinelle] Base rétablie après ${min} min — alerte Telegram envoyée`);
         sendAlert(`Base de données à nouveau joignable après ${min} min d'indisponibilité.`, 'success')
           .catch(() => { /* l'alerte est un bonus, jamais un blocage */ });
       }
@@ -349,6 +350,11 @@ function surveillerBase(err) {
   if (Date.now() - _baseKoDepuis < ALERTE_APRES_MS) return;
   if (Date.now() - _derniereAlerte < ALERTE_REPOS_MS) return;
   _derniereAlerte = Date.now();
+  // Tracé DANS les logs, pas seulement envoyé : sendAlert() est silencieux
+  // quand il réussit, ce qui rendait la sentinelle invérifiable autrement
+  // qu'en demandant à Roberto de regarder son téléphone. Un mécanisme
+  // d'alerte qu'on ne peut pas observer ne vaut pas grand-chose.
+  console.warn(`🔔 [Sentinelle] Base injoignable depuis ${depuisMin} min — alerte Telegram envoyée`);
   sendAlert(
     `Base de données injoignable depuis ${depuisMin} min — aucun pronostic ne peut être produit.\n${String(err.message).slice(0, 200)}`,
     'danger'
