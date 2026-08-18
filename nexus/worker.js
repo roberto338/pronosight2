@@ -48,10 +48,11 @@ const AGENT_MAP = {
 
 // Cadence juste après une tâche : d'autres attendent peut-être derrière.
 const POLL_ACTIF_MS    = 5_000;
-// Cadence au repos. Le worker est réveillé par insertTask() : ce sondage
-// ne rattrape que les orphelines. À 15 s, il empêchait le compute Neon de
-// se suspendre — quota du palier gratuit épuisé le 18/08 à 01:26.
-const POLL_REPOS_MS    = Number(process.env.NEXUS_POLL_IDLE_MS || 20 * 60 * 1000);
+// Sondage au repos — DÉSACTIVÉ par défaut (0 = dormir jusqu'au réveil).
+// Chaque sondage réveille le compute Neon pour toute la durée de son
+// autosuspend : sonder pour ne rien trouver coûte bien plus que deux
+// requêtes. Le worker est réveillé par insertTask(), c'est suffisant.
+const POLL_REPOS_MS    = Number(process.env.NEXUS_POLL_IDLE_MS ?? 0);
 const CONCURRENCY      = 4;      // max simultaneous jobs
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
 const STALE_AFTER_MIN  = Number(process.env.JOB_STALE_MINUTES || 20);
@@ -257,10 +258,17 @@ async function tick() {
   } finally {
     _enCours = false;
     // Une tâche vient d'être lancée : on repasse vite pour la suivante.
-    // Sinon on laisse la base dormir jusqu'au prochain réveil.
-    const delai = _reveilDemande ? 0 : (aTravaille ? POLL_ACTIF_MS : POLL_REPOS_MS);
+    // Sinon on ne replanifie rien — le worker dort jusqu'au prochain réveil
+    // et le compute Neon peut se suspendre.
+    let delai = null;   // null = dormir
+    if (_reveilDemande)         delai = 0;
+    else if (aTravaille)        delai = POLL_ACTIF_MS;
+    else if (POLL_REPOS_MS > 0) delai = POLL_REPOS_MS;
     _reveilDemande = false;
-    planifier(delai);
+
+    // Un réveil demandé vaut aussi 0 ms : deux choses différentes, d'où null.
+    if (delai === null) _timer = null;
+    else planifier(delai);
   }
 }
 
@@ -277,7 +285,7 @@ export function startNexusWorker() {
   _running = true;
   definirReveil('nexus', reveiller);
   planifier(1_000); // premier passage après 1s (orphelines du process précédent)
-  console.log(`✅ [NexusWorker] démarré — réveil à l'insertion, sondage de secours toutes les ${Math.round(POLL_REPOS_MS / 60000)} min (concurrency ${CONCURRENCY})`);
+  console.log(`✅ [NexusWorker] démarré — réveil à l'insertion, ${POLL_REPOS_MS > 0 ? `sondage de secours toutes les ${Math.round(POLL_REPOS_MS / 60000)} min` : 'aucun sondage périodique'} (concurrency ${CONCURRENCY})`);
 }
 
 /**

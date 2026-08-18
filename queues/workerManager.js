@@ -25,11 +25,22 @@ import { definirReveil }     from './reveil.js';
 // Cadence après un job : d'autres peuvent attendre derrière, et la limite
 // d'un job toutes les 10 s protège les quotas IA (ex-limiter BullMQ).
 const POLL_ACTIF_MS    = 10_000;
-// Cadence au repos. Le worker est désormais réveillé à l'ajout d'un job :
-// ce sondage ne rattrape plus que les orphelins d'un process mort. À 10 s
-// il maintenait le compute Neon éveillé en permanence — 864 000 requêtes
-// par mois pour 5 jobs par jour, quota gratuit épuisé le 18/08 à 01:26.
-const POLL_REPOS_MS    = Number(process.env.JOB_POLL_IDLE_MS || 20 * 60 * 1000);
+// Sondage au repos — DÉSACTIVÉ par défaut (0 = dormir jusqu'au réveil).
+//
+// Un sondage périodique ne coûte pas deux requêtes : il réveille le compute
+// Neon, qui reste ensuite actif pendant tout son délai d'autosuspend (5 min
+// par défaut). Une cadence de 20 min, c'est donc 72 réveils par jour et
+// ~6 h de calcul facturé pour ne rien trouver.
+//
+// Le worker n'en a pas besoin : les jobs naissent dans ce processus
+// (cron interne, route HTTP, bot) et le réveillent à l'insertion. Le
+// balayage des orphelins tourne en tête de chaque tick, donc à chaque
+// réveil — gratuitement, puisque la base est déjà debout.
+//
+// Seul cas non couvert : un job inséré par un AUTRE processus (script
+// lancé à la main). Il attendra le prochain cron. Définir JOB_POLL_IDLE_MS
+// à une valeur en millisecondes pour rétablir un filet périodique.
+const POLL_REPOS_MS    = Number(process.env.JOB_POLL_IDLE_MS ?? 0);
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
 
 // Doit rester INFÉRIEUR au seuil de requeue du balayage (20 min), sinon
@@ -307,6 +318,7 @@ let _lastPrune      = 0;
 let _enCours        = false;  // un tick est-il en train de tourner ?
 let _reveilDemande  = false;  // réveil reçu pendant un tick → replanifier à 0
 let _replanifierDans = null;  // backoff d'un retry : ne pas attendre le repos
+let _echecsBase     = 0;      // échecs base consécutifs → backoff progressif
 
 // ── Sentinelle base de données ──────────────────────────────────
 //
@@ -393,29 +405,40 @@ async function tick() {
       const n = await pruneOldJobs(14).catch(() => 0);
       if (n > 0) console.log(`🧹 [Worker] ${n} vieux job(s) purgés`);
     }
-    surveillerBase(null);           // la base répond : on referme l'incident
+    _echecsBase = 0;                // la base répond : backoff remis à zéro
+    surveillerBase(null);           // et on referme l'incident s'il y en avait un
   } catch (err) {
     console.error('❌ [Worker] Poll error:', err.message);
     surveillerBase(err);
-    // Base injoignable : on réessaie plus souvent que la cadence de repos.
-    // Une base qui refuse les connexions ne consomme pas de compute, et on
-    // veut détecter son retour sans attendre 20 minutes.
-    if (estPanneBase(err)) _replanifierDans = 2 * 60 * 1000;
+    // Base injoignable : on retente, sinon on ne saurait jamais qu'elle est
+    // revenue. Backoff progressif plafonné à 15 min — une base en panne ne
+    // consomme rien, mais une base simplement lente serait maintenue debout
+    // par un réessai toutes les 2 minutes pendant des heures.
+    if (estPanneBase(err)) {
+      _echecsBase += 1;
+      _replanifierDans = Math.min(2 * 60 * 1000 * 2 ** (_echecsBase - 1), 15 * 60 * 1000);
+    }
   } finally {
     _enCours = false;
-    // Trois cadences, de la plus urgente à la plus économe :
+    // Cadences, de la plus urgente à la plus économe :
     //   0            → un réveil est arrivé pendant le tick
-    //   backoff      → un job vient d'être reprogrammé pour un nouvel essai
+    //   backoff      → nouvel essai programmé, ou base en panne
     //   POLL_ACTIF   → on vient de travailler, d'autres jobs attendent peut-être
-    //   POLL_REPOS   → rien à faire : on laisse la base dormir
-    let delai;
-    if (_reveilDemande)              { delai = 0; }
+    //   POLL_REPOS   → rien à faire. À 0 (défaut) on ne replanifie RIEN :
+    //                  le worker dort jusqu'au prochain réveil, et le compute
+    //                  Neon peut se suspendre au lieu d'être réveillé pour rien.
+    let delai = null;   // null = ne rien replanifier, dormir
+    if (_reveilDemande)                 { delai = 0; }
     else if (_replanifierDans !== null) { delai = _replanifierDans; }
-    else if (aTravaille)             { delai = POLL_ACTIF_MS; }
-    else                             { delai = POLL_REPOS_MS; }
+    else if (aTravaille)                { delai = POLL_ACTIF_MS; }
+    else if (POLL_REPOS_MS > 0)         { delai = POLL_REPOS_MS; }
     _reveilDemande   = false;
     _replanifierDans = null;
-    planifier(delai);
+
+    // Attention : un réveil demandé vaut aussi 0 ms. Ce sont deux choses
+    // différentes — d'où le null plutôt qu'un test sur la valeur.
+    if (delai === null) _timer = null;   // seul reveiller() le rallumera
+    else planifier(delai);
   }
 }
 
@@ -441,7 +464,7 @@ export function startWorker() {
     .catch(() => { /* le balayage périodique prendra le relais */ });
 
   planifier(2_000);
-  console.log(`⚙️  Worker Victor démarré — réveil à l'ajout, sondage de secours toutes les ${Math.round(POLL_REPOS_MS / 60000)} min`);
+  console.log(`⚙️  Worker Victor démarré — réveil à l'ajout, ${POLL_REPOS_MS > 0 ? `sondage de secours toutes les ${Math.round(POLL_REPOS_MS / 60000)} min` : 'aucun sondage périodique (la base peut dormir)'}`);
   return true;
 }
 
