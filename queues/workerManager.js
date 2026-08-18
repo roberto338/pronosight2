@@ -16,12 +16,20 @@ import { liveProcessor }     from './workers/liveWorker.js';
 import { checkResults, updateVictorStats, weeklyVictorReview } from '../victor/core.js';
 import { discoverNewPatterns } from '../victor/patterns.js';
 import { computePatterns }    from '../victor/patterns-compute.js';
-import { sendDailyStats, sendHeartbeat } from '../bot/telegram.js';
+import { sendDailyStats, sendHeartbeat, sendAlert } from '../bot/telegram.js';
 import { runHealthcheck }    from '../victor/healthcheck.js';
 import { query }             from '../db/database.js';
 import { pruneOldJobs }      from './victorQueue.js';
+import { definirReveil }     from './reveil.js';
 
-const POLL_INTERVAL_MS = 10_000; // 1 claim max par tick → max 1 job / 10s (ex-limiter BullMQ)
+// Cadence après un job : d'autres peuvent attendre derrière, et la limite
+// d'un job toutes les 10 s protège les quotas IA (ex-limiter BullMQ).
+const POLL_ACTIF_MS    = 10_000;
+// Cadence au repos. Le worker est désormais réveillé à l'ajout d'un job :
+// ce sondage ne rattrape plus que les orphelins d'un process mort. À 10 s
+// il maintenait le compute Neon éveillé en permanence — 864 000 requêtes
+// par mois pour 5 jobs par jour, quota gratuit épuisé le 18/08 à 01:26.
+const POLL_REPOS_MS    = Number(process.env.JOB_POLL_IDLE_MS || 20 * 60 * 1000);
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
 
 // Doit rester INFÉRIEUR au seuil de requeue du balayage (20 min), sinon
@@ -264,6 +272,10 @@ async function processClaimedJob(row) {
     const backoffMs = BACKOFF_BASE_MS * 2 ** (row.attempts - 1);
     console.error(`❌ [Worker] Job échoué : ${row.name} #${row.id} (tentative ${row.attempts}/${row.maxAttempts}) — ${err.message}`);
 
+    // Un nouvel essai programmé dans 5 s ne doit pas attendre la cadence
+    // de repos (20 min). On raccourcit la prochaine planification.
+    if (willRetry) _replanifierDans = backoffMs + 500;
+
     // $1 est à la fois assigné à `status` (varchar) et comparé à 'pending'
     // (text). Sans le transtypage explicite, PostgreSQL refuse la requête :
     // « inconsistent types deduced for parameter $1 ». L'échec devenait
@@ -282,17 +294,92 @@ async function processClaimedJob(row) {
   }
 }
 
-// ── Boucle de polling (concurrency 1) ───────────────────────────
-let _running   = false;
-let _timer     = null;
-let _lastPrune = 0;
+// ── Boucle d'exécution ──────────────────────────────────────────
+//
+// Le worker ne découvre plus le travail en sondant : victorQueue le
+// réveille au moment où un job est inséré (même processus). Le sondage
+// périodique ne sert plus qu'à rattraper les orphelins d'un process mort,
+// et devient donc très lent — ce qui laisse le compute Neon se suspendre
+// au lieu d'être tenu éveillé 24 h sur 24.
+let _running        = false;
+let _timer          = null;
+let _lastPrune      = 0;
+let _enCours        = false;  // un tick est-il en train de tourner ?
+let _reveilDemande  = false;  // réveil reçu pendant un tick → replanifier à 0
+let _replanifierDans = null;  // backoff d'un retry : ne pas attendre le repos
+
+// ── Sentinelle base de données ──────────────────────────────────
+//
+// La panne du 18/08 (quota de calcul Neon épuisé à 01:26) n'a déclenché
+// AUCUNE alerte : le heartbeat quotidien établit son diagnostic en
+// interrogeant la base, donc la seule panne qu'il ne peut structurellement
+// pas signaler est celle de la base elle-même. Roberto l'a découverte en
+// constatant l'absence de pronostics.
+//
+// Cette sentinelle ne sonde rien : elle observe les erreurs que le tick
+// rencontre déjà. Aucune requête supplémentaire, donc aucun réveil du
+// compute Neon — ce serait contradictoire avec le reste de ce fichier.
+const ALERTE_APRES_MS = Number(process.env.DB_ALERTE_APRES_MS || 15 * 60 * 1000);
+const ALERTE_REPOS_MS = 6 * 60 * 60 * 1000;   // pas plus d'une alerte par 6 h
+let _baseKoDepuis  = null;
+let _derniereAlerte = 0;
+
+function estPanneBase(err) {
+  const m = String(err?.message || '').toLowerCase();
+  return ['quota', 'econnrefused', 'etimedout', 'timeout', 'terminated',
+          'connection', 'too many clients', 'server closed'].some(t => m.includes(t));
+}
+
+function surveillerBase(err) {
+  if (!err) {
+    if (_baseKoDepuis) {
+      const min = Math.round((Date.now() - _baseKoDepuis) / 60000);
+      _baseKoDepuis = null;
+      if (min >= 15) {
+        sendAlert(`Base de données à nouveau joignable après ${min} min d'indisponibilité.`, 'success')
+          .catch(() => { /* l'alerte est un bonus, jamais un blocage */ });
+      }
+    }
+    return;
+  }
+  if (!estPanneBase(err)) return;
+  if (!_baseKoDepuis) _baseKoDepuis = Date.now();
+
+  const depuisMin = Math.round((Date.now() - _baseKoDepuis) / 60000);
+  if (Date.now() - _baseKoDepuis < ALERTE_APRES_MS) return;
+  if (Date.now() - _derniereAlerte < ALERTE_REPOS_MS) return;
+  _derniereAlerte = Date.now();
+  sendAlert(
+    `Base de données injoignable depuis ${depuisMin} min — aucun pronostic ne peut être produit.\n${String(err.message).slice(0, 200)}`,
+    'danger'
+  ).catch(() => { /* si Telegram tombe aussi, rien à faire de plus */ });
+}
+
+function planifier(delaiMs) {
+  if (!_running) return;
+  if (_timer) clearTimeout(_timer);
+  _timer = setTimeout(tick, delaiMs);
+}
+
+// Appelée par victorQueue à chaque ajout de job, via queues/reveil.js.
+function reveiller(raison = 'ajout de job') {
+  if (!_running) return;
+  if (_enCours) { _reveilDemande = true; return; }  // le tick en cours replanifiera
+  planifier(0);
+  console.log(`⚡ [Worker] Réveil — ${raison}`);
+}
 
 async function tick() {
   if (!_running) return;
+  _enCours = true;
+  let aTravaille = false;
   try {
     await requeueStaleJobs();     // avant tout claim : libère les zombies
     const row = await claimNextJob();
-    if (row) await processClaimedJob(row); // séquentiel : 1 job IA à la fois
+    if (row) {
+      aTravaille = true;
+      await processClaimedJob(row); // séquentiel : 1 job IA à la fois
+    }
 
     // Purge quotidienne des vieux jobs terminés
     if (Date.now() - _lastPrune > 24 * 60 * 60 * 1000) {
@@ -300,10 +387,29 @@ async function tick() {
       const n = await pruneOldJobs(14).catch(() => 0);
       if (n > 0) console.log(`🧹 [Worker] ${n} vieux job(s) purgés`);
     }
+    surveillerBase(null);           // la base répond : on referme l'incident
   } catch (err) {
     console.error('❌ [Worker] Poll error:', err.message);
+    surveillerBase(err);
+    // Base injoignable : on réessaie plus souvent que la cadence de repos.
+    // Une base qui refuse les connexions ne consomme pas de compute, et on
+    // veut détecter son retour sans attendre 20 minutes.
+    if (estPanneBase(err)) _replanifierDans = 2 * 60 * 1000;
   } finally {
-    if (_running) _timer = setTimeout(tick, POLL_INTERVAL_MS);
+    _enCours = false;
+    // Trois cadences, de la plus urgente à la plus économe :
+    //   0            → un réveil est arrivé pendant le tick
+    //   backoff      → un job vient d'être reprogrammé pour un nouvel essai
+    //   POLL_ACTIF   → on vient de travailler, d'autres jobs attendent peut-être
+    //   POLL_REPOS   → rien à faire : on laisse la base dormir
+    let delai;
+    if (_reveilDemande)              { delai = 0; }
+    else if (_replanifierDans !== null) { delai = _replanifierDans; }
+    else if (aTravaille)             { delai = POLL_ACTIF_MS; }
+    else                             { delai = POLL_REPOS_MS; }
+    _reveilDemande   = false;
+    _replanifierDans = null;
+    planifier(delai);
   }
 }
 
@@ -313,12 +419,12 @@ export function startWorker() {
     return true;
   }
   _running = true;
+  definirReveil('victor', reveiller);
 
   // ── Reprise immédiate au démarrage ────────────────────────────
   // Une seule instance, un seul worker, concurrency 1 : au boot, un job
   // encore en 'running' appartenait forcément au process précédent. Il
-  // est orphelin par définition — inutile d'attendre les 20 minutes du
-  // balayage périodique.
+  // est orphelin par définition — inutile d'attendre le balayage.
   //
   // Le 15/08, le job value de 13h a été tué par un SIGTERM de Render à
   // 75% d'avancement. Il est resté 'running', et quand le balayage l'a
@@ -328,13 +434,14 @@ export function startWorker() {
     .then(n => { if (n > 0) console.warn(`♻️  [Worker] ${n} job(s) repris au démarrage`); })
     .catch(() => { /* le balayage périodique prendra le relais */ });
 
-  _timer   = setTimeout(tick, 2_000);
-  console.log('⚙️  Worker Victor démarré — poller PostgreSQL (victor_jobs, 1 job / 10s max)');
+  planifier(2_000);
+  console.log(`⚙️  Worker Victor démarré — réveil à l'ajout, sondage de secours toutes les ${Math.round(POLL_REPOS_MS / 60000)} min`);
   return true;
 }
 
 export function stopWorker() {
   _running = false;
+  definirReveil('victor', null);
   if (_timer) { clearTimeout(_timer); _timer = null; }
   console.log('[Worker] Arrêté (le job en cours se termine)');
 }

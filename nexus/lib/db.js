@@ -4,6 +4,7 @@
 // ══════════════════════════════════════════════
 
 import { query } from '../../db/database.js';
+import { reveillerWorker } from '../../queues/reveil.js';
 
 /**
  * Insert a new task and return its id
@@ -21,6 +22,12 @@ export async function insertTask({ agentType, input, meta = {}, scheduledFor = n
      RETURNING id`,
     [agentType, input, JSON.stringify(meta), scheduledFor]
   );
+  // Le worker Nexus ne sonde plus toutes les 15 s : c'est ici qu'il
+  // apprend qu'il a du travail. Sans ce réveil, une commande Telegram
+  // resterait sur « ⏳ Nexus traite ta demande… » jusqu'au sondage de
+  // secours, puisque c'est le worker qui envoie la réponse.
+  // Une tâche datée (scheduledFor) attendra son heure : inutile de réveiller.
+  if (!scheduledFor) reveillerWorker('nexus', `${agentType} #${rows[0].id}`);
   return rows[0].id;
 }
 

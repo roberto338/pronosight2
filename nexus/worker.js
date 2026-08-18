@@ -6,6 +6,7 @@
 // ══════════════════════════════════════════════
 
 import { query }          from '../db/database.js';
+import { definirReveil }  from '../queues/reveil.js';
 import { updateTaskStatus, saveOutput } from './lib/db.js';
 import { saveMessage }    from './lib/memory.js';
 import { buildMemoryContext, extractAndSave } from './lib/longTermMemory.js';
@@ -45,7 +46,12 @@ const AGENT_MAP = {
   google:   runGoogle,
 };
 
-const POLL_INTERVAL_MS = 15_000; // 15 seconds between polls
+// Cadence juste après une tâche : d'autres attendent peut-être derrière.
+const POLL_ACTIF_MS    = 5_000;
+// Cadence au repos. Le worker est réveillé par insertTask() : ce sondage
+// ne rattrape que les orphelines. À 15 s, il empêchait le compute Neon de
+// se suspendre — quota du palier gratuit épuisé le 18/08 à 01:26.
+const POLL_REPOS_MS    = Number(process.env.NEXUS_POLL_IDLE_MS || 20 * 60 * 1000);
 const CONCURRENCY      = 4;      // max simultaneous jobs
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
 const STALE_AFTER_MIN  = Number(process.env.JOB_STALE_MINUTES || 20);
@@ -209,9 +215,32 @@ async function processJob(job) {
   }
 }
 
-// ── Poll loop ─────────────────────────────────────
+// ── Boucle d'exécution ────────────────────────────
+//
+// Même principe que queues/workerManager.js : le worker est réveillé par
+// insertTask() au lieu de sonder. Le sondage ne rattrape plus que les
+// orphelines d'un process mort, et devient donc lent — ce qui laisse le
+// compute Neon se suspendre au lieu d'être tenu éveillé en permanence.
+let _enCours       = false;
+let _reveilDemande = false;
+
+function planifier(delaiMs) {
+  if (!_running) return;
+  if (_timer) clearTimeout(_timer);
+  _timer = setTimeout(tick, delaiMs);
+}
+
+function reveiller(raison = 'nouvelle tâche') {
+  if (!_running) return;
+  if (_enCours) { _reveilDemande = true; return; }
+  planifier(0);
+  console.log(`⚡ [NexusWorker] Réveil — ${raison}`);
+}
+
 async function tick() {
   if (!_running) return;
+  _enCours = true;
+  let aTravaille = false;
   try {
     await requeueStaleTasks();   // avant tout claim : libère les zombies
 
@@ -219,15 +248,19 @@ async function tick() {
     while (_activeJobs < CONCURRENCY) {
       const job = await claimNextJob();
       if (!job) break; // no pending jobs
+      aTravaille = true;
       _activeJobs++;
       processJob(job).finally(() => { _activeJobs--; });
     }
   } catch (err) {
     console.error('[NexusWorker] Poll error:', err.message);
   } finally {
-    if (_running) {
-      _timer = setTimeout(tick, POLL_INTERVAL_MS);
-    }
+    _enCours = false;
+    // Une tâche vient d'être lancée : on repasse vite pour la suivante.
+    // Sinon on laisse la base dormir jusqu'au prochain réveil.
+    const delai = _reveilDemande ? 0 : (aTravaille ? POLL_ACTIF_MS : POLL_REPOS_MS);
+    _reveilDemande = false;
+    planifier(delai);
   }
 }
 
@@ -242,8 +275,9 @@ export function startNexusWorker() {
     return;
   }
   _running = true;
-  _timer   = setTimeout(tick, 1_000); // first poll after 1s
-  console.log('✅ [NexusWorker] DB-based poller started (interval: 15s, concurrency: 4)');
+  definirReveil('nexus', reveiller);
+  planifier(1_000); // premier passage après 1s (orphelines du process précédent)
+  console.log(`✅ [NexusWorker] démarré — réveil à l'insertion, sondage de secours toutes les ${Math.round(POLL_REPOS_MS / 60000)} min (concurrency ${CONCURRENCY})`);
 }
 
 /**
@@ -251,6 +285,7 @@ export function startNexusWorker() {
  */
 export function stopNexusWorker() {
   _running = false;
+  definirReveil('nexus', null);
   if (_timer) { clearTimeout(_timer); _timer = null; }
   console.log('[NexusWorker] Stopped (active jobs will finish)');
 }

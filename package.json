@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch --env-file=.env server.js",
-    "test": "node tools/verif-syntaxe.js && node victor/test-unit.js && node nexus/test-unit.js",
+    "test": "node tools/verif-syntaxe.js && node victor/test-unit.js && node queues/test-unit.js && node nexus/test-unit.js",
     "test:live": "node victor/test-unit.js --live",
     "health": "node victor/healthcheck.js",
     "test:nexus": "node nexus/test-unit.js"

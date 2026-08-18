@@ -13,6 +13,7 @@
 // ══════════════════════════════════════════════
 
 import { query } from '../db/database.js';
+import { reveillerWorker } from './reveil.js';
 
 // Objet queue minimal — les routes de statut testent seulement sa présence
 export const victorQueue = { backend: 'postgres', table: 'victor_jobs' };
@@ -49,7 +50,7 @@ async function addJob(name, data = {}, { priority = 5, dedupeKey = null } = {}) 
        RETURNING id`,
       [name, payload, priority, dedupeKey]
     );
-    if (rows[0]) return { id: rows[0].id };
+    if (rows[0]) { reveillerWorker('victor', `${name} #${rows[0].id}`); return { id: rows[0].id }; }
     // Aucune ligne renvoyée = job déjà 'pending' ou 'done' → on le réutilise
     const { rows: existing } = await query(
       `SELECT id FROM victor_jobs WHERE dedupe_key = $1`, [dedupeKey]
@@ -63,6 +64,10 @@ async function addJob(name, data = {}, { priority = 5, dedupeKey = null } = {}) 
      RETURNING id`,
     [name, payload, priority]
   );
+  // Le worker ne sonde plus toutes les 10 s : c'est ici qu'il apprend
+  // qu'il a du travail. Sans ce réveil, le job attendrait le sondage
+  // de secours (20 min).
+  reveillerWorker('victor', `${name} #${rows[0].id}`);
   return { id: rows[0].id };
 }
 

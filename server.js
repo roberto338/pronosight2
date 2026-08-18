@@ -752,10 +752,30 @@ app.listen(PORT, () => {
   startScheduler();
 
   // ── Nexus multi-agent system ──────────────────
+  //
+  // En veille par défaut. Nexus déclenchait 17 tâches planifiées, dont une
+  // toutes les 30 minutes, chacune suivie d'appels IA et d'écritures en
+  // base. Sur le palier gratuit Neon, ce travail de fond consommait le
+  // quota mensuel avant la fin du mois — épuisé le 18/08 à 01:26, base
+  // injoignable, Victor à l'arrêt avec elle.
+  //
+  // Le worker, lui, reste démarré : depuis qu'il est réveillé à
+  // l'insertion au lieu de sonder, il ne coûte plus rien au repos. Et il
+  // est indispensable — c'est LUI qui répond aux commandes Telegram et au
+  // chat web. Le couper rendrait Nexus muet plutôt qu'économe.
+  //
+  // Pour réactiver les planifications : NEXUS_MODE=actif sur Render.
+  const nexusMode = (process.env.NEXUS_MODE || 'veille').toLowerCase();
   try {
     startNexusWorker();
-    startNexusCron();
     startTelegramHandler();
+    if (nexusMode === 'actif') {
+      startNexusCron();
+      console.log('🧠 Nexus ACTIF — tâches planifiées comprises');
+    } else {
+      console.log('😴 Nexus EN VEILLE — chat et bot répondent, aucune tâche planifiée');
+      console.log('   (NEXUS_MODE=actif pour réactiver les 17 planifications)');
+    }
   } catch (nexusErr) {
     console.warn('⚠️  Nexus non démarré:', nexusErr.message);
   }
