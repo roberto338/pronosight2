@@ -22,7 +22,12 @@ const GEMINI_MODEL        = process.env.GEMINI_MODEL        || 'gemini-flash-lat
 const GEMINI_SEARCH_MODEL = process.env.GEMINI_SEARCH_MODEL || 'gemini-flash-latest';
 const GEMMA_MODEL       = process.env.GEMMA_MODEL        || 'gemma-4-31b-it';
 const GROQ_API_KEY      = process.env.GROQ_API_KEY;
-const GROQ_MODEL        = process.env.GROQ_MODEL         || 'llama-3.3-70b-versatile';
+// llama-3.3-70b-versatile a été RETIRÉ par Groq (constaté le 18/08/2026,
+// remonté par /api/victor/health). Le moteur de secours était donc mort
+// sans que rien ne le signale : en cas de panne Google, Victor n'avait
+// plus aucun filet. Vérifié le 18/08 : gpt-oss-120b répond en mode JSON
+// strict (finish_reason=stop, JSON parsable), 131 k de contexte.
+const GROQ_MODEL        = process.env.GROQ_MODEL         || 'openai/gpt-oss-120b';
 
 // Timeout de tout appel IA. Sans lui un blocage réseau fige le worker.
 const AI_TIMEOUT_MS     = Number(process.env.AI_TIMEOUT_MS || 90_000);

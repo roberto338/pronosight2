@@ -26,7 +26,7 @@ import { getFixturesOfDay, fetchWithTimeout } from './sources.js';
  */
 export async function verifierModeleGroq() {
   const cle    = process.env.GROQ_API_KEY;
-  const modele = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  const modele = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
   if (!cle) return { ok: false, message: 'GROQ_API_KEY absente — plus aucun filet si Gemini tombe' };
 
   try {

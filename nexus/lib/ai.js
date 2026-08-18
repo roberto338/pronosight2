@@ -146,7 +146,8 @@ export async function callGroq(systemPrompt, userMessage, options = {}) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY non configurée');
 
-  const model     = options.groqModel || process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  // Voir victor/core.js : llama-3.3-70b-versatile retiré par Groq le 18/08/2026.
+  const model     = options.groqModel || process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
   const maxTokens = Math.min(options.maxTokens || 4096, 8192);
 
   const messages = [];
