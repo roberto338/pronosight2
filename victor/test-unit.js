@@ -19,6 +19,7 @@ import {
   estNotable, validerEvent, normalizeTeam,
 } from './core.js';
 import { heureParis, estHoraireProvisoire } from './sources.js';
+import { cacheLire, cacheEcrire, cacheVider } from './odds.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -455,6 +456,33 @@ verifie('statut LIVE → écarté',
 // Sans horodatage on ne peut rien affirmer : on refuse plutôt que de parier
 verifie('horodatage inconnu → écarté',
   estJouable({ status: 'NS', debutUTC: null }, T, J), false);
+
+
+// ══════════════════════════════════════════════
+// Cache des cotes — chaque compétition interrogée coûte 2 crédits
+// ══════════════════════════════════════════════
+//
+// Le palier gratuit de The Odds API donne 500 crédits par mois. Au 25/08,
+// 380 étaient consommés — dont une part pure perte : une reprise de job
+// repayait l'intégralité des cotes (arrivé les 24 et 25/08), et un
+// déclenchement manuel juste après un cron aussi. Sans cotes, Victor ne
+// calcule aucune value et ne publie rien : tomber à court arrête tout.
+
+cacheVider();
+verifie('cache vide → rien à lire',       cacheLire('soccer_epl'), null);
+
+cacheEcrire('soccer_epl', [{ id: 'x' }]);
+verifie('après écriture → relu',          cacheLire('soccer_epl')?.length, 1);
+verifie('autre compétition non affectée', cacheLire('soccer_spain_la_liga'), null);
+
+// L'expiration doit vraiment expirer, sinon une analyse de 13h servirait
+// les cotes de 7h — le marché a bougé entre-temps.
+cacheEcrire('soccer_serie_a', [{ id: 'y' }]);
+const entree = cacheLire('soccer_serie_a');
+verifie('entrée fraîche lisible',         entree?.length, 1);
+
+cacheVider();
+verifie('vidage effectif',                cacheLire('soccer_epl'), null);
 
 
 // ══════════════════════════════════════════════

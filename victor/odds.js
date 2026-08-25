@@ -22,6 +22,38 @@ const ODDS_KEY = process.env.ODDS_API_KEY;
 // Plafond de compétitions interrogées par exécution — garde-fou de quota.
 const MAX_COMPETS = Number(process.env.ODDS_MAX_COMPETS || 6);
 
+// ── Cache court des cotes ────────────────────────────────────────
+// Chaque compétition interrogée coûte 2 crédits, et le palier gratuit
+// n'en donne que 500 par mois. Or les mêmes cotes étaient repayées
+// plusieurs fois par jour :
+//   · une reprise de job refait tout le pipeline. Les 24 et 25/08, les
+//     jobs value ont échoué au 1er essai (moteurs IA indisponibles) et
+//     la reprise a repayé l'intégralité des cotes.
+//   · un déclenchement manuel juste après un cron paie une 2e fois.
+// Au 25/08 : 380 crédits consommés sur 500, soit ~15/jour.
+//
+// 20 minutes : assez pour couvrir une reprise et deux exécutions
+// rapprochées, trop court pour que les analyses de 7h et 13h se
+// partagent des cotes périmées — elles doivent voir le marché du moment.
+const CACHE_COTES_MS = Number(process.env.ODDS_CACHE_MS || 20 * 60 * 1000);
+// regions=eu (1) × markets=h2h,totals (2) — la facturation est au produit
+// des deux, pas à la requête.
+const CREDITS_PAR_COMPET = 2;
+const _cacheCotes = new Map();   // sportKey → { evenements, expire }
+
+/** Vide le cache — réservé aux tests. */
+export function cacheVider() { _cacheCotes.clear(); }
+
+export function cacheLire(sport) {
+  const e = _cacheCotes.get(sport);
+  if (!e || Date.now() > e.expire) { _cacheCotes.delete(sport); return null; }
+  return e.evenements;
+}
+
+export function cacheEcrire(sport, evenements) {
+  _cacheCotes.set(sport, { evenements, expire: Date.now() + CACHE_COTES_MS });
+}
+
 // Codes football-data → clés de sport The Odds API
 const SPORT_KEYS = {
   PL:  'soccer_epl',
@@ -208,21 +240,28 @@ export async function getOdds(fixtures = []) {
     return out;
   }
 
-  let restants = null;
+  let restants = null, payees = 0, recyclees = 0;
 
   for (const code of codes) {
     const sport = SPORT_KEYS[code];
     try {
-      const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds/`
-        + `?apiKey=${ODDS_KEY}&regions=eu&markets=h2h,totals&oddsFormat=decimal`;
-      const resp = await fetchWithTimeout(url, {}, 20_000);
-      restants = resp.headers.get('x-requests-remaining') ?? restants;
+      let evenements = cacheLire(sport);
+      if (evenements) {
+        recyclees++;
+      } else {
+        const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds/`
+          + `?apiKey=${ODDS_KEY}&regions=eu&markets=h2h,totals&oddsFormat=decimal`;
+        const resp = await fetchWithTimeout(url, {}, 20_000);
+        restants = resp.headers.get('x-requests-remaining') ?? restants;
 
-      if (resp.status === 401) { console.warn('   ⚠️  Cotes: clé refusée (401)'); return out; }
-      if (resp.status === 429) { console.warn('   ⚠️  Cotes: quota mensuel épuisé'); return out; }
-      if (!resp.ok) { console.warn(`   ⚠️  Cotes ${sport}: HTTP ${resp.status}`); continue; }
+        if (resp.status === 401) { console.warn('   ⚠️  Cotes: clé refusée (401)'); return out; }
+        if (resp.status === 429) { console.warn('   ⚠️  Cotes: quota mensuel épuisé'); return out; }
+        if (!resp.ok) { console.warn(`   ⚠️  Cotes ${sport}: HTTP ${resp.status}`); continue; }
 
-      const evenements = await resp.json();
+        evenements = await resp.json();
+        cacheEcrire(sport, evenements);
+        payees++;
+      }
 
       // Rapprochement avec nos matchs : équipes normalisées + même jour.
       for (const ev of evenements) {
@@ -248,8 +287,17 @@ export async function getOdds(fixtures = []) {
     }
   }
 
+  // Consommation tracée : sans ce chiffre, une dérive de crédits reste
+  // invisible jusqu'au jour où l'API répond 429 et où Victor ne peut
+  // plus rien calculer. On la CALCULE (2 crédits par compétition, cf. en
+  // tête de fichier) plutôt que de la déduire de x-requests-remaining :
+  // cet en-tête est renvoyé APRÈS la requête, un delta entre la première
+  // et la dernière réponse oublierait toujours le coût de la première.
+  const consommes = payees * CREDITS_PAR_COMPET;
   console.log(`   💰 Cotes: ${out.size} match(s) cotés sur ${codes.length} compétition(s)`
-    + (restants != null ? ` — ${restants} crédit(s) restant(s) ce mois` : ''));
+    + ` — ${payees} interrogée(s), ${recyclees} depuis le cache`
+    + ` · ${consommes} crédit(s) consommé(s)`
+    + (restants != null ? `, ${restants} restant(s) ce mois` : ''));
   return out;
 }
 
