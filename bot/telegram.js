@@ -275,6 +275,14 @@ export async function sendHeartbeat(diag) {
   }
 
   const ok = diag.problemes.length === 0;
+
+  // Le compteur d'echecs doit refleter ce sur quoi Roberto peut AGIR.
+  // Le 25/08, "echoues 2" designait deux jobs des 15 et 16 aout, deja
+  // diagnostiques et en attente de purge automatique. Un chiffre alarmant
+  // qui n'appelle aucune action apprend a ignorer les suivants.
+  const echecs  = diag.jobs.failedRecents ?? diag.jobs.failed;
+  const anciens = diag.jobs.failedAnciens ?? 0;
+  const scories = anciens > 0 ? esc(' (+' + anciens + ' anciens, purge auto)') : '';
   let text = ok
     ? `✅ *PronoSight — tout va bien*\n`
     : `🚨 *PronoSight — ${diag.problemes.length} problème(s)*\n`;
@@ -283,8 +291,16 @@ export async function sendHeartbeat(diag) {
   text += `📅 ${esc(diag.date)}\n`;
   text += `🎯 Pronostics aujourd'hui : ${diag.pronosticsAujourdhui}\n`;
   text += `📊 Dernier pronostic : ${esc(diag.dernierPronostic || 'jamais')}\n`;
-  text += `⚙️ Jobs — en attente ${diag.jobs.pending} · en cours ${diag.jobs.running} · échoués ${diag.jobs.failed}\n`;
+  text += `⚙️ Jobs — en attente ${diag.jobs.pending} · en cours ${diag.jobs.running} · échoués ${echecs}${scories}\n`;
   text += `🛟 Moteur de secours Groq : ${diag.groqOk ? 'OK' : '⚠️ INDISPONIBLE'}\n`;
+
+  // "Tout va bien" avec zero pronostic est une contradiction que le
+  // lecteur doit trancher seul. On l'explicite : une journee sans cote
+  // exploitable est un refus de parier, pas une panne.
+  if (ok && diag.pronosticsAujourdhui === 0) {
+    text += `ℹ️ ${esc("Aucun pronostic retenu — faute de match jouable ou de cotes, pas de panne")}
+`;
+  }
 
   if (diag.jobsBloques > 0) text += `⛔ Jobs figés : ${diag.jobsBloques}\n`;
 

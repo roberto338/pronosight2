@@ -18,6 +18,7 @@ import {
   evalPronostic, evalValueBet, matchFixture, repairTruncatedJSON, extractJSON,
   estNotable, validerEvent, normalizeTeam,
 } from './core.js';
+import { heureParis, estHoraireProvisoire } from './sources.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -389,6 +390,73 @@ if (process.argv.includes('--live')) {
 
 // ══════════════════════════════════════════════
 // Verdict
+
+// ══════════════════════════════════════════════
+// Fenêtre jouable — un pronostic sur un match commencé n'en est pas un
+// ══════════════════════════════════════════════
+//
+// Régression des 21 et 23/08 : 4 pronostics sur 16 ont été publiés APRÈS
+// le coup d'envoi. Le filtre ne testait que le statut déclaré par le
+// fournisseur, toujours en retard. Corinthians vs Rosario, débuté à
+// 02:30, est parti à 07:02 ; Go Ahead vs Den Haag, débuté à 12:15, à
+// 13:01. Pour un abonné, recevoir un pari sur un match déjà joué est
+// indéfendable — c'est le défaut le plus coûteux qu'on ait eu.
+
+// ── estHoraireProvisoire : minuit UTC pile = match non programmé ──
+verifie('minuit UTC = provisoire',      estHoraireProvisoire('2026-08-22T00:00:00Z'), true);
+verifie('heure réelle = définitive',    estHoraireProvisoire('2026-08-22T18:00:00Z'), false);
+verifie('horodatage absent = provisoire', estHoraireProvisoire(null), true);
+verifie('horodatage illisible = provisoire', estHoraireProvisoire('pas une date'), true);
+// Un match à 02:00 Paris (00:00 UTC en hiver) reste suspect, mais un
+// match à 00:30 UTC est un vrai coup d'envoi : seul minuit PILE compte.
+verifie('00:30 UTC = définitive',       estHoraireProvisoire('2026-08-22T00:30:00Z'), false);
+
+// ── heureParis : l'affichage dérive de l'horodatage, jamais saisi à part ──
+verifie('18:00 UTC → 20:00 Paris (été)', heureParis('2026-08-22T18:00:00Z'), '20:00');
+verifie('00:00 UTC → 02:00 Paris (été)', heureParis('2026-08-22T00:00:00Z'), '02:00');
+verifie('horodatage absent → vide',      heureParis(null), '');
+verifie('horodatage illisible → vide',   heureParis('n importe quoi'), '');
+
+// ── Le filtre lui-même, reproduit à l'identique ──
+// Trois conditions : coup d'envoi futur (marge 15 min), bon jour,
+// non terminé. On rejoue la logique de runVictor sur des cas construits.
+const MARGE = 15 * 60 * 1000;
+function estJouable(f, maintenant, dateISO) {
+  if (f.status === 'FT' || f.status === 'LIVE') return false;
+  const debut = f.debutUTC ? new Date(f.debutUTC).getTime() : NaN;
+  if (Number.isNaN(debut)) return false;
+  if (debut - maintenant < MARGE) return false;
+  if (String(f.debutUTC).slice(0, 10) !== dateISO) return false;
+  return true;
+}
+const T = new Date('2026-08-21T05:00:00Z').getTime();   // 07:00 Paris, l'heure du cron
+const J = '2026-08-21';
+
+verifie('match du soir → jouable',
+  estJouable({ status: 'NS', debutUTC: '2026-08-21T19:00:00Z' }, T, J), true);
+// Le cas Corinthians vs Rosario : coup d'envoi 00:30 UTC, analyse à 05:00
+verifie('match déjà commencé → écarté',
+  estJouable({ status: 'NS', debutUTC: '2026-08-21T00:30:00Z' }, T, J), false);
+// Le cas Go Ahead vs Den Haag vu par le job de 13h
+verifie('commencé il y a 46 min → écarté',
+  estJouable({ status: 'NS', debutUTC: '2026-08-23T10:15:00Z' },
+             new Date('2026-08-23T11:01:00Z').getTime(), '2026-08-23'), false);
+// Le cas NEC vs Excelsior : bon statut, mais programmé le lendemain
+verifie('match du lendemain → écarté',
+  estJouable({ status: 'NS', debutUTC: '2026-08-22T18:00:00Z' }, T, J), false);
+verifie('coup d envoi dans 10 min → écarté (sous la marge)',
+  estJouable({ status: 'NS', debutUTC: '2026-08-21T05:10:00Z' }, T, J), false);
+verifie('coup d envoi dans 20 min → jouable',
+  estJouable({ status: 'NS', debutUTC: '2026-08-21T05:20:00Z' }, T, J), true);
+verifie('statut FT → écarté',
+  estJouable({ status: 'FT', debutUTC: '2026-08-21T19:00:00Z' }, T, J), false);
+verifie('statut LIVE → écarté',
+  estJouable({ status: 'LIVE', debutUTC: '2026-08-21T19:00:00Z' }, T, J), false);
+// Sans horodatage on ne peut rien affirmer : on refuse plutôt que de parier
+verifie('horodatage inconnu → écarté',
+  estJouable({ status: 'NS', debutUTC: null }, T, J), false);
+
+
 // ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {

@@ -84,6 +84,16 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
     );
     for (const r of rows) if (r.status in jobs) jobs[r.status] = r.n;
 
+    // Le heartbeat tourne DANS un job 'heartbeat' : il se comptait
+    // lui-même. Le 25/08 il annonçait « en cours 1 » alors que rien
+    // n'était bloqué — un bulletin de santé qui s'inquiète de sa propre
+    // existence apprend à son lecteur à ignorer ses alertes.
+    const { rows: soi } = await query(
+      `SELECT COUNT(*)::int AS n FROM victor_jobs
+       WHERE status = 'running' AND name = 'heartbeat'`
+    );
+    jobs.running = Math.max(0, jobs.running - (soi[0]?.n ?? 0));
+
     const { rows: bloques } = await query(
       `SELECT COUNT(*)::int AS n FROM victor_jobs
        WHERE status = 'running' AND started_at < NOW() - INTERVAL '30 minutes'`
@@ -110,8 +120,15 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
       problemes.push(`job "${r.name}" abandonné après ${r.attempts}/${r.max_attempts} essais — ${r.motif}`);
     }
 
-    const anciens = jobs.failed - recents.length;
-    if (anciens > 5) problemes.push(`${anciens} ancien(s) job(s) en échec (purge automatique sous 14 j)`);
+    // Le compteur affiché doit refléter ce sur quoi Roberto peut AGIR.
+    // Le 25/08, « échoués 2 » désignait deux jobs du 15 et du 16 août,
+    // déjà diagnostiqués et en attente de purge automatique. Un chiffre
+    // alarmant qui ne demande aucune action est un chiffre nuisible.
+    jobs.failedRecents = recents.length;
+    jobs.failedAnciens = Math.max(0, jobs.failed - recents.length);
+    if (jobs.failedAnciens > 5) {
+      problemes.push(`${jobs.failedAnciens} ancien(s) job(s) en échec (purge automatique sous 14 j)`);
+    }
   } catch (err) {
     problemes.push(`File inaccessible : ${err.message}`);
   }

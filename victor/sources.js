@@ -58,6 +58,33 @@ const FD_STATUS = {
   POSTPONED: 'OTHER', SUSPENDED: 'OTHER', CANCELLED: 'OTHER',
 };
 
+// ── Horodatage absolu ────────────────────────────────────────────
+// Chaque match transporte désormais l'instant exact de son coup d'envoi.
+// Sans lui, le pipeline ne pouvait filtrer que sur le statut déclaré par
+// le fournisseur — un statut toujours en retard. Le 21/08, Corinthians vs
+// Rosario a été publié à 07:02 alors qu'il avait débuté à 02:30 :
+// football-data ne l'avait pas encore marqué FT.
+//
+// L'heure affichée est DÉRIVÉE de cet horodatage, jamais saisie à part :
+// deux champs racontant la même chose finissent toujours par diverger.
+export function heureParis(debutUTC) {
+  if (!debutUTC) return '';
+  const d = new Date(debutUTC);
+  return Number.isNaN(d.getTime()) ? ''
+    : d.toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' });
+}
+
+// football-data place les matchs non encore programmés à minuit UTC pile.
+// Ce n'est pas un vrai coup d'envoi : c'est un marqueur d'attente. Le
+// 21/08, NEC vs Excelsior y figurait à 00:00 UTC alors que la rencontre
+// se jouait le lendemain à 18:00 UTC — The Odds API, elle, l'avait juste.
+export function estHoraireProvisoire(debutUTC) {
+  if (!debutUTC) return true;
+  const d = new Date(debutUTC);
+  return Number.isNaN(d.getTime())
+      || (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0);
+}
+
 function fromFootballData(m) {
   return {
     sport:       'Football',
@@ -72,7 +99,8 @@ function fromFootballData(m) {
     match:       `${m.homeTeam?.shortName || m.homeTeam?.name} vs ${m.awayTeam?.shortName || m.awayTeam?.name}`,
     home:        m.homeTeam?.shortName || m.homeTeam?.name || '',
     away:        m.awayTeam?.shortName || m.awayTeam?.name || '',
-    heure:       m.utcDate ? new Date(m.utcDate).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }) : '',
+    debutUTC:    m.utcDate || null,
+    heure:       heureParis(m.utcDate),
     dateISO:     m.utcDate?.slice(0, 10) || '',
     status:      FD_STATUS[m.status] || 'OTHER',
     homeGoals:   m.score?.fullTime?.home ?? null,
@@ -102,7 +130,8 @@ function fromTsdb(e) {
     match:       `${e.strHomeTeam} vs ${e.strAwayTeam}`,
     home:        e.strHomeTeam || '',
     away:        e.strAwayTeam || '',
-    heure:       e.strTimestamp ? new Date(e.strTimestamp + 'Z').toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }) : (e.strTime || '').slice(0, 5),
+    debutUTC:    e.strTimestamp ? e.strTimestamp + 'Z' : null,
+    heure:       e.strTimestamp ? heureParis(e.strTimestamp + 'Z') : (e.strTime || '').slice(0, 5),
     dateISO:     e.dateEvent || '',
     status,
     homeGoals:   hg,
@@ -275,7 +304,8 @@ export async function fetchApiFootball(dateISO, { status = 'FT' } = {}) {
       match:       `${f.teams?.home?.name} vs ${f.teams?.away?.name}`,
       home:        f.teams?.home?.name || '',
       away:        f.teams?.away?.name || '',
-      heure:       f.fixture?.date ? new Date(f.fixture.date).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }) : '',
+      debutUTC:    f.fixture?.date || null,
+      heure:       heureParis(f.fixture?.date),
       dateISO,
       status:      ['FT', 'AET', 'PEN'].includes(f.fixture?.status?.short) ? 'FT'
                  : ['1H', '2H', 'HT', 'ET'].includes(f.fixture?.status?.short) ? 'LIVE' : 'NS',
@@ -304,7 +334,24 @@ function dedupe(fixtures) {
     if (!f.home || !f.away) continue;
     const cle = [normalizeTeam(f.home), normalizeTeam(f.away)].sort().join('|');
     const prec = map.get(cle);
-    if (!prec || (rang[f.source] ?? 9) < (rang[prec.source] ?? 9)) map.set(cle, f);
+
+    if (!prec) { map.set(cle, f); continue; }
+
+    const gagnant = (rang[f.source] ?? 9) < (rang[prec.source] ?? 9) ? f : prec;
+    const perdant = gagnant === f ? prec : f;
+
+    // La fiche la plus riche gagne, mais pas au prix d'un mauvais horaire.
+    // football-data est prioritaire parce qu'il porte les identifiants et
+    // les statistiques — il place pourtant les matchs non programmés à
+    // minuit UTC. Le 21/08, son NEC vs Excelsior « 00:00 UTC » a écrasé
+    // celui de The Odds API, qui avait le vrai coup d'envoi. Résultat : un
+    // pronostic publié sur un match annoncé à 02:00 du matin.
+    if (estHoraireProvisoire(gagnant.debutUTC) && !estHoraireProvisoire(perdant.debutUTC)) {
+      gagnant.debutUTC = perdant.debutUTC;
+      gagnant.heure    = heureParis(perdant.debutUTC);
+      gagnant.dateISO  = String(perdant.debutUTC).slice(0, 10);
+    }
+    map.set(cle, gagnant);
   }
   return [...map.values()];
 }

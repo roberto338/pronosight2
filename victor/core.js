@@ -40,6 +40,12 @@ const AI_TIMEOUT_MS     = Number(process.env.AI_TIMEOUT_MS || 90_000);
 // un plafond à 1024 : finishReason STOP, JSON complet.
 const THINKING_BUDGET   = Number(process.env.GEMINI_THINKING_BUDGET || 1024);
 
+// Marge avant le coup d'envoi. Un pronostic publié 3 minutes avant le
+// début n'est pas jouable en pratique : le temps que l'abonné lise le
+// message et pose son pari, le match a commencé. 15 minutes est le
+// minimum pour que l'information ait une valeur.
+const MARGE_AVANT_COUP_ENVOI_MS = Number(process.env.MARGE_COUP_ENVOI_MIN || 15) * 60 * 1000;
+
 // ══════════════════════════════════════════════
 // BRIEFING — Contexte injecté dans chaque analyse
 // ══════════════════════════════════════════════
@@ -481,7 +487,47 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   const evenementsCotes = await getOddsEvents(dateISO).catch(() => []);
   await etape(22, 'matchs du jour (toutes sources)');
   const fixtures = await getFixturesOfDay(dateISO, { extra: evenementsCotes });
-  const aVenir   = fixtures.filter(f => f.status !== 'FT');
+
+  // ── Un match « à venir » doit l'être VRAIMENT ────────────────────
+  // Ce filtre ne testait que le statut déclaré par le fournisseur. Or ce
+  // statut est toujours en retard : le 21/08, Corinthians vs Rosario avait
+  // débuté à 02:30 et football-data ne l'avait toujours pas marqué FT à
+  // 07:00 — le pronostic est parti à 07:02, sur un match terminé. Et le
+  // 23/08, le job de 13h a publié Go Ahead vs Den Haag, commencé à 12:15.
+  // Quatre pronostics sur seize, sur cinq jours, portaient sur des matchs
+  // injouables. Pour un abonné, c'est indéfendable.
+  //
+  // Trois conditions désormais, dans l'ordre du plus sûr au moins sûr :
+  //   1. le coup d'envoi est dans le futur (marge de sécurité comprise)
+  //   2. le match appartient bien au jour analysé
+  //   3. le fournisseur ne le déclare pas déjà terminé
+  const maintenant = Date.now();
+  const rejets_horaires = [];
+  const aVenir = fixtures.filter(f => {
+    if (f.status === 'FT' || f.status === 'LIVE') return false;
+
+    // Sans horodatage exploitable, on ne peut RIEN affirmer. On écarte :
+    // publier un pari sur un match dont on ignore l'heure est précisément
+    // le risque qu'on cherche à supprimer.
+    const debut = f.debutUTC ? new Date(f.debutUTC).getTime() : NaN;
+    if (Number.isNaN(debut)) { rejets_horaires.push(`${f.match} (heure inconnue)`); return false; }
+
+    if (debut - maintenant < MARGE_AVANT_COUP_ENVOI_MS) {
+      rejets_horaires.push(`${f.match} (coup d'envoi ${f.heure || '?'}, déjà passé ou imminent)`);
+      return false;
+    }
+    if (String(f.debutUTC).slice(0, 10) !== dateISO) {
+      rejets_horaires.push(`${f.match} (programmé le ${String(f.debutUTC).slice(0, 10)})`);
+      return false;
+    }
+    return true;
+  });
+
+  if (rejets_horaires.length > 0) {
+    console.log(`   ⏱️  ${rejets_horaires.length} match(s) écarté(s) — hors de la fenêtre jouable :`);
+    rejets_horaires.slice(0, 8).forEach(r => console.log(`      · ${r}`));
+    if (rejets_horaires.length > 8) console.log(`      · … et ${rejets_horaires.length - 8} autre(s)`);
+  }
 
   if (aVenir.length === 0) {
     console.warn(`⚠️  Aucun match à venir trouvé pour le ${dateISO} — analyse annulée`);
@@ -667,6 +713,15 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // est perdant sur la durée, même s'il a des chances de passer.
     const fx = aVenir.find(f => normalizeTeam(f.home) === normalizeTeam(ev.equipe_a || '')
                              || normalizeTeam(f.away) === normalizeTeam(ev.equipe_b || ''));
+
+    // ── L'heure vient de la source, pas du modèle ──────────────────
+    // Le schéma du prompt demande un champ "heure" au modèle, et c'est
+    // cette valeur qu'on enregistrait. Un fait vérifiable n'a rien à
+    // faire entre les mains d'un LLM : même quand il recopie fidèlement,
+    // il peut se tromper d'un chiffre, et personne ne s'en apercevra.
+    // Même principe que la cote, calculée et non déclarée.
+    if (fx?.heure) ev.heure = fx.heure;
+
     const vb = fx?.fixtureId ? evaluerValue(ev, cotes.get(fx.fixtureId)) : null;
     if (vb) {
       ev.cote_estimee = vb.cote;              // cote RÉELLE, plus une estimation

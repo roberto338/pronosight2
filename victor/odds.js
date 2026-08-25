@@ -15,7 +15,7 @@
 //        markets=h2h,totals & regions=eu  →  2 crédits par compétition.
 // ══════════════════════════════════════════════
 
-import { fetchWithTimeout, normalizeTeam } from './sources.js';
+import { fetchWithTimeout, normalizeTeam, heureParis } from './sources.js';
 
 const ODDS_KEY = process.env.ODDS_API_KEY;
 
@@ -170,9 +170,8 @@ export async function getOddsEvents(dateISO) {
             match: `${e.home_team} vs ${e.away_team}`,
             home: e.home_team || '',
             away: e.away_team || '',
-            heure: e.commence_time
-              ? new Date(e.commence_time).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' })
-              : '',
+            debutUTC: e.commence_time || null,
+            heure: heureParis(e.commence_time),
             dateISO,
             status: 'NS',
             homeGoals: null, awayGoals: null,
