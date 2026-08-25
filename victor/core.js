@@ -723,6 +723,13 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     if (fx?.heure) ev.heure = fx.heure;
 
     const vb = fx?.fixtureId ? evaluerValue(ev, cotes.get(fx.fixtureId)) : null;
+
+    // ── L'origine de la cote est enregistrée, pas seulement sa valeur ──
+    // Sans marché en face, le chiffre affiché est écrit par le modèle et
+    // n'est contrôlé que sur sa plausibilité. Le présenter comme une cote
+    // de bookmaker serait donner une invention pour un fait. On le dit.
+    ev.cote_confirmee = Boolean(vb);
+
     if (vb) {
       ev.cote_estimee = vb.cote;              // cote RÉELLE, plus une estimation
       ev.value_calculee = vb.value;
@@ -763,9 +770,10 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            enjeu, contexte, forme_equipe_a, forme_equipe_b, infirmerie,
            stats_cles, analyse_tactique, pronostic_principal, cote_estimee,
            confiance, value_bet, cote_value, pari_a_eviter, score_predit,
-           confiance_score, analyse_courte, phrase_signature, pari_code)
+           confiance_score, analyse_courte, phrase_signature, pari_code,
+           cote_confirmee)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-                 $17,$18,$19,$20,$21,$22,$23,$24,$25)
+                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
          -- Un seul pronostic par match et par jour (migration 010).
          -- Les jobs de 7h et de 13h analysent tous deux la journée : sans
          -- cette clause, le second insérait un doublon et un pari gagnant
@@ -791,6 +799,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            analyse_tactique    = EXCLUDED.analyse_tactique,
            phrase_signature    = EXCLUDED.phrase_signature,
            pari_code           = EXCLUDED.pari_code,
+           cote_confirmee      = EXCLUDED.cote_confirmee,
            updated_at          = NOW()
          WHERE ps_pronostics.resultat_reel IS NULL` : ''}
          RETURNING id`,
@@ -820,6 +829,9 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
           ev.analyse_courte      || null,
           ev.phrase_signature    || null,
           ev.pari_code           || null,
+          // Booléen brut : `|| null` transformerait false en NULL, et on
+          // perdrait justement l'information qu'on cherche à conserver.
+          ev.cote_confirmee ?? null,
         ]
       );
       // Aucune ligne renvoyée = ON CONFLICT DO NOTHING, le pronostic

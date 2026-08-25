@@ -142,6 +142,16 @@ export async function broadcastDaily(victorData) {
       msgEvents += `🎯 *Pronostic :* ${esc(ev.pronostic_principal)}\n`;
       msgEvents += `💰 *Cote :* ~${esc(ev.cote_estimee)} | ${esc(ev.confiance)}\n`;
 
+      // ── Dire d'où vient la cote ────────────────────────────────
+      // Quand The Odds API ne couvre pas la compétition, ce chiffre est
+      // écrit par le modèle et seulement contrôlé sur sa plausibilité
+      // (entre 1.01 et 51). L'afficher comme les autres reviendrait à
+      // présenter une estimation pour une donnée de marché. Le tilde ne
+      // suffit pas à le dire — il faut l'écrire.
+      if (ev.cote_confirmee === false) {
+        msgEvents += `ℹ️ ${esc('Cote estimée — non confirmée par le marché')}\n`;
+      }
+
       // ⚠️ Ne JAMAIS échapper les parenthèses : en Markdown v1 Telegram
       // elles ne sont pas spéciales, et « \( » s'affiche littéralement.
       // Le message du 13/08 montrait « aucun \(~0\) » aux abonnés.

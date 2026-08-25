@@ -486,6 +486,42 @@ verifie('vidage effectif',                cacheLire('soccer_epl'), null);
 
 
 // ══════════════════════════════════════════════
+// Origine de la cote — publier sans marché, mais le dire
+// ══════════════════════════════════════════════
+//
+// Décision du 25/08 : plutôt que de refuser un pronostic quand The Odds
+// API ne couvre pas la compétition, on le publie en indiquant que la
+// cote est estimée. Deux invariants en découlent, et ils doivent tenir :
+//
+//   1. validerEvent() ne doit JAMAIS rejeter un pronostic au seul motif
+//      qu'il n'a pas de cote — sinon on aurait choisi l'option stricte
+//      sans le vouloir, et les jours creux ne produiraient plus rien.
+//   2. false ne doit pas se confondre avec « inconnu ». La colonne
+//      distingue trois états : marché confirmé, estimation, et NULL pour
+//      les pronostics antérieurs. Écrire `ev.cote_confirmee || null`
+//      transformerait false en NULL et perdrait toute la mesure.
+
+const evSansCote = {
+  match: 'A vs B', equipe_a: 'A', equipe_b: 'B',
+  pari_code: 'OU:OVER:2.5', pronostic_principal: 'Plus de 2.5 buts',
+};
+verifie('pronostic sans cote accepté', validerEvent(evSansCote).length, 0);
+
+const evCoteVide = { ...evSansCote, cote_estimee: '' };
+verifie('cote vide acceptée', validerEvent(evCoteVide).length, 0);
+
+// La plausibilité reste contrôlée : une cote inventée reste bornée.
+verifie('cote absurde refusée', validerEvent({ ...evSansCote, cote_estimee: 900 }).length, 1);
+verifie('cote sous 1.01 refusée', validerEvent({ ...evSansCote, cote_estimee: 0.5 }).length, 1);
+verifie('cote plausible acceptée', validerEvent({ ...evSansCote, cote_estimee: 1.85 }).length, 0);
+
+// Le piège du booléen : `false || null` vaut null, `false ?? null` vaut false.
+const enBase = (v) => (v ?? null);
+verifie('marché confirmé → true',  enBase(true),  true);
+verifie('estimation → false',      enBase(false), false);
+verifie('inconnu → null',          enBase(undefined), null);
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);
