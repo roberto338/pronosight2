@@ -722,13 +722,40 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // Même principe que la cote, calculée et non déclarée.
     if (fx?.heure) ev.heure = fx.heure;
 
-    const vb = fx?.fixtureId ? evaluerValue(ev, cotes.get(fx.fixtureId)) : null;
+    const cotesDuMatch = fx?.fixtureId ? cotes.get(fx.fixtureId) : null;
+    const vb = cotesDuMatch ? evaluerValue(ev, cotesDuMatch) : null;
 
     // ── L'origine de la cote est enregistrée, pas seulement sa valeur ──
     // Sans marché en face, le chiffre affiché est écrit par le modèle et
     // n'est contrôlé que sur sa plausibilité. Le présenter comme une cote
     // de bookmaker serait donner une invention pour un fait. On le dit.
     ev.cote_confirmee = Boolean(vb);
+
+    // ── Un marché disponible doit être utilisé ────────────────────────
+    // Si on a les cotes de ce match mais qu'aucune ne correspond au pari
+    // proposé, c'est que le modèle a choisi une ligne que personne ne cote.
+    // Le 31/08, les quatre pronostics étaient des « Under 3.5 » et
+    // « Over 1.5 » alors que sept matchs étaient cotés : The Odds API ne
+    // publie que la ligne principale du bookmaker, 2.5 buts au football.
+    // Le calcul de value — le garde-fou censé écarter les paris perdants
+    // sur la durée — était donc contourné sur 53 % de l'historique.
+    //
+    // On rejette ici plutôt que de publier un pari non arbitré. Les matchs
+    // SANS aucune cote gardent le droit de passer : c'est le sens de
+    // cote_confirmee=false et de la mention affichée à l'abonné.
+    if (cotesDuMatch && !vb) {
+      rejets.push({
+        match: ev.match,
+        // Ne lister que les marchés RÉELLEMENT cotés : agregerEvenement
+        // pose toujours les trois clés 1X2, à null quand aucun bookmaker
+        // ne les fournit. Les afficher ferait croire à une ligne
+        // disponible et enverrait le diagnostic dans le mur.
+        motifs: [`pari "${ev.pari_code}" non coté par le marché (lignes disponibles : ${
+          Object.entries(cotesDuMatch.marches || {}).filter(([, c]) => c).map(([k]) => k).join(', ') || 'aucune'
+        })`],
+      });
+      continue;
+    }
 
     if (vb) {
       ev.cote_estimee = vb.cote;              // cote RÉELLE, plus une estimation

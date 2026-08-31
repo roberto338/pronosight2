@@ -32,10 +32,19 @@ const MAX_COMPETS = Number(process.env.ODDS_MAX_COMPETS || 6);
 //   · un déclenchement manuel juste après un cron paie une 2e fois.
 // Au 25/08 : 380 crédits consommés sur 500, soit ~15/jour.
 //
-// 20 minutes : assez pour couvrir une reprise et deux exécutions
-// rapprochées, trop court pour que les analyses de 7h et 13h se
-// partagent des cotes périmées — elles doivent voir le marché du moment.
-const CACHE_COTES_MS = Number(process.env.ODDS_CACHE_MS || 20 * 60 * 1000);
+// 6 heures — révisé le 31/08. Une fenêtre de 20 minutes ne couvrait que
+// les reprises ; les analyses de 7h et de 13h repayaient chacune leurs
+// cotes, soit ~20 crédits par jour, 600 par mois pour un palier qui en
+// donne 500. Le gratuit ne peut structurellement pas tenir deux analyses
+// quotidiennes. Au 31/08 il ne restait que 28 crédits.
+//
+// Ce que ça coûte : l'analyse de 13h travaille sur les cotes du matin.
+// Sur des matchs du soir en grands championnats elles bougent peu, et le
+// seuil de rejet est `value > 0` — une dérive marginale inverse rarement
+// le signe. Ce que ça évite : ne plus avoir de cotes du tout, auquel cas
+// Victor ne peut plus rien arbitrer et ne publie rien.
+// À ramener à 20 min le jour où le palier payant est pris.
+const CACHE_COTES_MS = Number(process.env.ODDS_CACHE_MS || 6 * 60 * 60 * 1000);
 // regions=eu (1) × markets=h2h,totals (2) — la facturation est au produit
 // des deux, pas à la requête.
 const CREDITS_PAR_COMPET = 2;

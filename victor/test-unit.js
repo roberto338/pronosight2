@@ -522,6 +522,52 @@ verifie('estimation → false',      enBase(false), false);
 verifie('inconnu → null',          enBase(undefined), null);
 
 // ══════════════════════════════════════════════
+// Un marché disponible doit être utilisé
+// ══════════════════════════════════════════════
+//
+// Le 31/08 : 7 matchs cotés, et pourtant les 4 pronostics étaient des
+// « Under 3.5 » et « Over 1.5 ». The Odds API ne publie que la ligne
+// principale du bookmaker — 2.5 buts au football. evaluerValue ne
+// trouvait donc aucune cote, retournait null, et le pari passait sans
+// jamais être arbitré. 53 % de l'historique était dans ce cas : le
+// garde-fou censé écarter les paris perdants ne servait à rien.
+
+const marchesReels = { marches: {
+  '1X2:HOME': 2.10, '1X2:DRAW': 3.40, '1X2:AWAY': 3.10,
+  'OU:OVER:2.5': 1.95, 'OU:UNDER:2.5': 1.85,
+} };
+
+// evaluerValue trouve la ligne cotée → le pari est arbitrable
+const arbitrable = evaluerValue(
+  { pronostic_principal: 'Plus de 2.5 buts', probabilite: 0.60, equipe_a: 'A', equipe_b: 'B' },
+  marchesReels);
+verifie('seuil coté → value calculée', arbitrable !== null, true);
+verifie('cote réelle reprise',         arbitrable?.cote, 1.95);
+
+// Le seuil 3.5 n'est pas au menu : aucune cote, donc aucun arbitrage
+const horsMarche = evaluerValue(
+  { pronostic_principal: 'Moins de 3.5 buts', probabilite: 0.80, equipe_a: 'A', equipe_b: 'B' },
+  marchesReels);
+verifie('seuil non coté → non arbitrable', horsMarche, null);
+
+const over15 = evaluerValue(
+  { pronostic_principal: 'Plus de 1.5 buts', probabilite: 0.85, equipe_a: 'A', equipe_b: 'B' },
+  marchesReels);
+verifie('Over 1.5 → non arbitrable', over15, null);
+
+// Les familles sans équivalent dans h2h/totals ne le seront jamais
+const doubleChance = evaluerValue(
+  { pronostic_principal: 'Double chance 1X', probabilite: 0.75, equipe_a: 'A', equipe_b: 'B' },
+  marchesReels);
+verifie('double chance → non arbitrable', doubleChance, null);
+
+// Aucune donnée de marché : le pronostic reste publiable, avec mention
+verifie('aucun marché → null sans erreur', evaluerValue({ pronostic_principal: 'Plus de 2.5 buts', probabilite: 0.6 }, null), null);
+
+// La value reste calculée, pas déclarée : 0.60 × 1.95 − 1 = 0.17
+verifie('value calculée juste', Math.round((arbitrable.value + Number.EPSILON) * 100) / 100, 0.17);
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

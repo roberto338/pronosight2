@@ -96,14 +96,32 @@ Les cotes affichées sont des MOYENNES RÉELLES de plusieurs bookmakers.
 - Scénario à éviter (trop risqué / incertain)
 
 ## 8. CHOIX DU MARCHÉ
-Marchés à PRIVILÉGIER :
-- Over 1.5 buts
-- Under 3.5 buts
-- Double chance
-- Équipe marque (team total over 0.5)
-- BTTS si logique forte
-- But après 75e (live)
-- Over live raisonnable
+### QUAND des cotes de marché sont fournies pour le match
+
+Tu DOIS choisir un pari que ces cotes permettent d'arbitrer, c'est-à-dire
+un pari dont la cote figure dans la ligne "Cotes marché" :
+- 1X2 (victoire domicile / nul / victoire extérieur)
+- Over / Under sur le seuil EXACTEMENT coté (généralement 2.5 buts)
+
+Tout autre pari sera REJETÉ automatiquement. Ce n'est pas une préférence
+de style : sans cote de marché en face, la value ne peut pas être calculée,
+et un pari non arbitré n'a aucune raison d'être publié.
+
+Attention au piège du seuil : si le marché cote "Under 2.5" et que tu
+proposes "Under 3.5", ta cote n'existe nulle part. Prends le seuil coté.
+
+### QUAND aucune cote n'est fournie
+
+Les autres familles redeviennent utilisables (double chance, BTTS, total
+d'une équipe). Le pronostic sera publié avec la mention explicite que sa
+cote est estimée et non confirmée par le marché.
+
+### Méfie-toi des quasi-certitudes
+
+Un pari à cote 1.15-1.30 implique 77 à 87 % de réussite. Après la marge du
+bookmaker, la probabilité réelle est plus basse encore. Ce sont les paris
+qu'on gagne souvent et qui font perdre de l'argent sur la durée. Ne les
+propose que si ta probabilité estimée dépasse VRAIMENT celle du marché.
 
 Marchés à ÉVITER sauf logique très forte :
 - Score exact
@@ -200,14 +218,23 @@ Chaque event représente un match POUR LEQUEL TU PROPOSES UN PARI.
     AH:HOME:-1.5 | AH:AWAY:+2.5         handicap asiatique
     TT:HOME:OVER:0.5                    total d'UNE équipe
 
-  Le seuil peut être n'importe quel nombre (0.5, 1.5, 2.5, 3.5…).
+  Le seuil peut être n'importe quel nombre (0.5, 1.5, 2.5, 3.5…) — MAIS
+  quand des cotes sont fournies, seul le seuil réellement coté est
+  accepté (voir "CHOIX DU MARCHÉ"). Les familles DC, BTTS, AH et TT ne
+  sont jamais arbitrables par le marché : réserve-les aux matchs sans
+  cotes.
   N'invente aucune autre famille. Si le pari que tu envisages n'entre dans
   aucune de ces cases, choisis-en un autre ou ne propose pas ce match.
   Un pari combiné ("gagne ET plus de 1.5") n'est PAS exprimable : évite-le.
 
 - "pronostic_principal" : le même pari en français lisible, pour l'affichage.
   C'est "pari_code" qui fait foi pour la notation.
-- "value_bet" : pari secondaire à meilleure cote, ou "aucun".
+- "value_bet" : pari secondaire à cote STRICTEMENT SUPÉRIEURE au pari
+  principal, ou "aucun". C'est le sens même d'un value bet : plus de
+  risque contre plus de rendement. Le 31/08, les quatre pronostics
+  proposaient un value bet à cote INFÉRIEURE au pari principal (1.18
+  contre 1.28) — un pari secondaire moins rémunérateur que le principal
+  n'a aucun intérêt pour l'abonné. Si tu n'en trouves pas, écris "aucun".
 - "pari_a_eviter" : ce qu'il ne faut surtout pas jouer sur ce match.
 - "probabilite" : ta probabilité estimée pour le pronostic principal (0 à 1).
 - "confiance" : "Moyenne" / "Élevée" / "Très élevée" — cohérente avec "probabilite".

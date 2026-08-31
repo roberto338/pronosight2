@@ -140,7 +140,18 @@ export async function broadcastDaily(victorData) {
       msgEvents += `${emoji} *${esc(ev.sport)}* | ${esc(ev.competition)}\n`;
       msgEvents += `🆚 *${esc(ev.equipe_a)} vs ${esc(ev.equipe_b)}* — ${esc(ev.heure)}\n`;
       msgEvents += `🎯 *Pronostic :* ${esc(ev.pronostic_principal)}\n`;
-      msgEvents += `💰 *Cote :* ~${esc(ev.cote_estimee)} | ${esc(ev.confiance)}\n`;
+      // ── La cote peut manquer, et c'est légitime ────────────────
+      // Depuis que le prompt exige un pari réellement coté, le modèle ne
+      // remplit plus toujours "cote_estimee" lui-même : la vraie cote est
+      // injectée après coup depuis le marché. Sur un match sans cotes, le
+      // champ peut donc rester vide — afficher « ~ » ou « ~undefined »
+      // à un abonné serait pire que de ne rien afficher.
+      const coteAffichable = ev.cote_estimee != null && ev.cote_estimee !== '';
+      if (coteAffichable) {
+        msgEvents += `💰 *Cote :* ~${esc(ev.cote_estimee)} | ${esc(ev.confiance)}\n`;
+      } else {
+        msgEvents += `💰 *Cote :* ${esc('non disponible')} | ${esc(ev.confiance)}\n`;
+      }
 
       // ── Dire d'où vient la cote ────────────────────────────────
       // Quand The Odds API ne couvre pas la compétition, ce chiffre est
@@ -148,7 +159,7 @@ export async function broadcastDaily(victorData) {
       // (entre 1.01 et 51). L'afficher comme les autres reviendrait à
       // présenter une estimation pour une donnée de marché. Le tilde ne
       // suffit pas à le dire — il faut l'écrire.
-      if (ev.cote_confirmee === false) {
+      if (ev.cote_confirmee === false && coteAffichable) {
         msgEvents += `ℹ️ ${esc('Cote estimée — non confirmée par le marché')}\n`;
       }
 
