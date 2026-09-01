@@ -568,6 +568,46 @@ verifie('aucun marché → null sans erreur', evaluerValue({ pronostic_principal
 verifie('value calculée juste', Math.round((arbitrable.value + Number.EPSILON) * 100) / 100, 0.17);
 
 // ══════════════════════════════════════════════
+// La cote du value bet vient du marché, elle aussi
+// ══════════════════════════════════════════════
+//
+// Le 01/09, les trois pronostics avaient enfin une cote principale
+// vérifiée — mais leur value bet portait une cote écrite par le modèle
+// (1.87, 1.73, 2.74) que rien ne confirmait. Le défaut n'avait pas
+// disparu, il s'était déplacé d'une ligne.
+//
+// On reproduit ici la résolution appliquée dans runVictor.
+
+const marchesVb = {
+  '1X2:HOME': 1.87, '1X2:DRAW': 3.50, '1X2:AWAY': 4.10,
+  'OU:OVER:2.5': 1.73, 'OU:UNDER:2.5': 2.05,
+};
+function resoudreValueBet(valueBet, marches, equipeA, equipeB) {
+  const nul = String(valueBet || '').trim().toLowerCase();
+  if (!marches || !valueBet || nul === 'aucun' || nul === 'no bet' || nul === 'n/a') return { valueBet, cote: null };
+  const cle  = marches[valueBet] != null ? valueBet : cleMarche(valueBet, equipeA, equipeB);
+  const cote = cle ? marches[cle] : null;
+  return cote ? { valueBet, cote } : { valueBet: 'aucun', cote: null };
+}
+
+// Code déjà dans le vocabulaire : la cote du marché est reprise
+verifie('code coté → cote du marché', resoudreValueBet('1X2:HOME', marchesVb).cote, 1.87);
+verifie('code coté → pari conservé', resoudreValueBet('1X2:HOME', marchesVb).valueBet, '1X2:HOME');
+verifie('Over 2.5 coté → cote reprise', resoudreValueBet('OU:OVER:2.5', marchesVb).cote, 1.73);
+
+// Texte libre des anciens formats : cleMarche fait la traduction
+verifie('texte libre traduit', resoudreValueBet('Plus de 2.5 buts', marchesVb).cote, 1.73);
+
+// Pari non coté : on le supprime plutôt que d'inventer une cote
+verifie('DC non cotée → supprimé', resoudreValueBet('DC:1X', marchesVb).valueBet, 'aucun');
+verifie('DC non cotée → cote nulle', resoudreValueBet('DC:1X', marchesVb).cote, null);
+verifie('seuil non coté → supprimé', resoudreValueBet('OU:UNDER:3.5', marchesVb).valueBet, 'aucun');
+
+// « aucun » reste « aucun », sans bruit
+verifie('aucun préservé', resoudreValueBet('aucun', marchesVb).valueBet, 'aucun');
+verifie('sans marché → intact', resoudreValueBet('1X2:HOME', null).cote, null);
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

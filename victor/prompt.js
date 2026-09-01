@@ -229,12 +229,13 @@ Chaque event représente un match POUR LEQUEL TU PROPOSES UN PARI.
 
 - "pronostic_principal" : le même pari en français lisible, pour l'affichage.
   C'est "pari_code" qui fait foi pour la notation.
-- "value_bet" : pari secondaire à cote STRICTEMENT SUPÉRIEURE au pari
-  principal, ou "aucun". C'est le sens même d'un value bet : plus de
-  risque contre plus de rendement. Le 31/08, les quatre pronostics
-  proposaient un value bet à cote INFÉRIEURE au pari principal (1.18
-  contre 1.28) — un pari secondaire moins rémunérateur que le principal
-  n'a aucun intérêt pour l'abonné. Si tu n'en trouves pas, écris "aucun".
+- "value_bet" : pari secondaire sur le MÊME match, exprimé dans le même
+  vocabulaire de codes, ou "aucun". Quand des cotes sont fournies, il doit
+  lui aussi figurer parmi les lignes cotées — sa cote sera reprise du
+  marché, et s'il n'y est pas il sera simplement supprimé.
+  Ce n'est pas un second choix de repli : c'est un pari DIFFÉRENT du
+  principal qui offre lui aussi de la value. S'il n'apporte rien de plus
+  que le pari principal, écris "aucun" — c'est une réponse valable.
 - "pari_a_eviter" : ce qu'il ne faut surtout pas jouer sur ce match.
 - "probabilite" : ta probabilité estimée pour le pronostic principal (0 à 1).
 - "confiance" : "Moyenne" / "Élevée" / "Très élevée" — cohérente avec "probabilite".

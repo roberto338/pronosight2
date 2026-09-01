@@ -14,7 +14,7 @@ import {
   getScorers, formatFixturesForPrompt, fetchWithTimeout,
   demarrerBudgetSources, arreterBudgetSources,
 } from './sources.js';
-import { getOdds, getOddsEvents, evaluerValue } from './odds.js';
+import { getOdds, getOddsEvents, evaluerValue, cleMarche } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
@@ -722,6 +722,12 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // Même principe que la cote, calculée et non déclarée.
     if (fx?.heure) ev.heure = fx.heure;
 
+    // Même raison pour la compétition. Le 01/09, West Ham vs
+    // Wolverhampton — un match de Premier League — a été publié sous
+    // l'étiquette « Championship » parce que le modèle l'avait écrit
+    // ainsi. La source, elle, sait de quelle compétition il s'agit.
+    if (fx?.competition) ev.competition = fx.competition;
+
     const cotesDuMatch = fx?.fixtureId ? cotes.get(fx.fixtureId) : null;
     const vb = cotesDuMatch ? evaluerValue(ev, cotesDuMatch) : null;
 
@@ -755,6 +761,30 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
         })`],
       });
       continue;
+    }
+
+    // ── La cote du value bet aussi vient du marché ────────────────
+    // Le pari secondaire était publié avec une cote écrite par le modèle
+    // et jamais confrontée à quoi que ce soit — le même défaut que le
+    // pari principal avait avant aujourd'hui, simplement déplacé d'une
+    // ligne. Le 01/09, les trois value bets portaient des cotes
+    // (1.87, 1.73, 2.74) qu'aucune source ne confirmait.
+    //
+    // Le modèle écrit ce champ en CODE (« 1X2:HOME »), parfois en texte
+    // libre sur d'anciens formats : on gère les deux. Si le marché ne
+    // cote pas ce pari, on retire le value bet plutôt que d'afficher un
+    // chiffre inventé à côté d'une cote principale, elle, vérifiée.
+    if (cotesDuMatch?.marches && ev.value_bet && !/^\s*(aucun|no bet|n\/a)\s*$/i.test(ev.value_bet)) {
+      const cleVb  = cotesDuMatch.marches[ev.value_bet] != null
+        ? ev.value_bet
+        : cleMarche(ev.value_bet, ev.equipe_a, ev.equipe_b);
+      const coteVb = cleVb ? cotesDuMatch.marches[cleVb] : null;
+      if (coteVb) {
+        ev.cote_value = coteVb;
+      } else {
+        ev.value_bet  = 'aucun';
+        ev.cote_value = null;
+      }
     }
 
     if (vb) {
