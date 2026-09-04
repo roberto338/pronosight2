@@ -608,6 +608,64 @@ verifie('aucun préservé', resoudreValueBet('aucun', marchesVb).valueBet, 'aucu
 verifie('sans marché → intact', resoudreValueBet('1X2:HOME', null).cote, null);
 
 // ══════════════════════════════════════════════
+// Appariement : refuser plutôt que deviner
+// ══════════════════════════════════════════════
+//
+// Avant le 03/09, teamsMatch acceptait un recouvrement de tokens de 0.5
+// pile : deux noms de deux mots partageant le premier passaient. Vérifié
+// par exécution : « Manchester United vs Arsenal » était apparié à
+// « Manchester City 3-0 Arsenal », « Real Madrid vs Barcelona » à
+// « Real Sociedad 1-4 Barcelona ». Le score d'un AUTRE match était écrit
+// sur le pronostic, faussant le taux de réussite en silence.
+//
+// Et matchFixture prenait le PREMIER candidat trouvé, sans arbitrer.
+
+const ft = (home, away) => ({ home, away, homeGoals: 1, awayGoals: 0, status: "FT", source: "test" });
+
+// ── Les faux positifs doivent être refusés ──
+verifie('Manchester United ≠ Manchester City',
+  matchFixture('Manchester United vs Arsenal', [ft('Manchester City', 'Arsenal')]), null);
+verifie('Real Madrid ≠ Real Sociedad',
+  matchFixture('Real Madrid vs Barcelona', [ft('Real Sociedad', 'Barcelona')]), null);
+verifie('Real Madrid ≠ Real Betis',
+  matchFixture('Real Madrid vs Getafe', [ft('Real Betis', 'Getafe')]), null);
+verifie('Atletico Madrid ≠ Real Madrid',
+  matchFixture('Atletico Madrid vs Sevilla', [ft('Real Madrid', 'Sevilla')]), null);
+
+// ── Les cas légitimes doivent survivre ──
+verifie('alias USA conservé',
+  matchFixture('USA vs Korea Republic', [ft('United States', 'South Korea')])?.home, 'United States');
+verifie('nom court conservé',
+  matchFixture('Internacional vs Clube do Remo', [ft('Internacional', 'Remo')])?.home, 'Internacional');
+verifie('exact conservé',
+  matchFixture('Nottingham Forest vs Everton', [ft('Nottingham Forest', 'Everton')])?.away, 'Everton');
+verifie('ordre inversé conservé',
+  matchFixture('Everton vs Nottingham Forest', [ft('Nottingham Forest', 'Everton')])?.home, 'Nottingham Forest');
+
+// ── Ambiguïté : refuser ET signaler ──
+// Deux rencontres du jour revendiquent le pronostic avec la même force.
+// Trancher au hasard écrirait un score faux ; on refuse et on consigne.
+let signalee = null;
+const ambigu = matchFixture('Manchester vs Arsenal', [
+  ft('Manchester United', 'Arsenal'),
+  ft('Manchester City', 'Arsenal'),
+], { onAmbigu: (d) => { signalee = d; } });
+verifie('ambiguïté → aucun appariement', ambigu, null);
+verifie('ambiguïté → signalée', signalee !== null, true);
+verifie('ambiguïté → 2 candidats listés', signalee?.candidats?.length, 2);
+
+// Un candidat EXACT bat une simple ressemblance : pas d'ambiguïté ici.
+verifie('exact l\'emporte sur le flou',
+  matchFixture('Manchester City vs Arsenal', [
+    ft('Manchester United', 'Arsenal'),
+    ft('Manchester City', 'Arsenal'),
+  ])?.home, 'Manchester City');
+
+// Aucun candidat : null, sans bruit.
+verifie('aucun candidat → null', matchFixture('Ajax vs Feyenoord', [ft('PSV', 'Utrecht')]), null);
+verifie('format invalide → null', matchFixture('Ajax', [ft('Ajax', 'PSV')]), null);
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

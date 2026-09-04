@@ -976,48 +976,96 @@ const TEAM_ALIASES = new Map([
  * Teste si deux noms d'équipes normalisés désignent la même équipe.
  * 3 passes : égalité exacte → substring (≥4 chars) → alias → overlap tokens.
  */
-function teamsMatch(a, b) {
-  if (a === b) return true;
+// Force de l'appariement, du plus sûr au plus faible. Sert à départager
+// plusieurs candidats : un match exact bat toujours une ressemblance.
+const APP_EXACT = 3, APP_ALIAS = 2, APP_FLOU = 1, APP_AUCUN = 0;
 
-  // Substring : le plus court contenu dans le plus long, min 4 chars pour éviter faux positifs
-  const shorter = a.length <= b.length ? a : b;
-  const longer  = a.length >  b.length ? a : b;
-  if (shorter.length >= 4 && longer.includes(shorter)) return true;
+/**
+ * Force de la correspondance entre deux noms normalisés.
+ * @returns {0|1|2|3}
+ */
+function forceAppariement(a, b) {
+  if (!a || !b) return APP_AUCUN;
+  if (a === b) return APP_EXACT;
 
-  // Alias dictionary (bidirectionnel)
-  const aliasA = TEAM_ALIASES.get(a);
-  if (aliasA?.includes(b)) return true;
-  const aliasB = TEAM_ALIASES.get(b);
-  if (aliasB?.includes(a)) return true;
+  // Alias explicites (bidirectionnels) : « usa » ↔ « united states ».
+  if (TEAM_ALIASES.get(a)?.includes(b)) return APP_ALIAS;
+  if (TEAM_ALIASES.get(b)?.includes(a)) return APP_ALIAS;
 
-  // Token overlap : mots significatifs (≥4 lettres) en commun
-  // "south korea" ↔ "korea republic" → partagent "korea" → match
-  // "england"     ↔ "manchester"     → aucun token commun → no match
+  // Sous-chaîne — mais le plus court doit représenter l'ESSENTIEL du plus
+  // long. Sans ce ratio, « milan » était accepté comme « inter milan » :
+  // les deux clubs de la ville devenaient interchangeables. 0.6 laisse
+  // passer les abréviations réelles et rejette les préfixes de club.
+  const court = a.length <= b.length ? a : b;
+  const long  = a.length >  b.length ? a : b;
+  if (court.length >= 4 && long.includes(court) && court.length / long.length >= 0.6) {
+    return APP_FLOU;
+  }
+
+  // Recouvrement de tokens significatifs. Le seuil est STRICTEMENT
+  // supérieur à 0.5 : à 0.5 pile, deux noms de deux mots partageant le
+  // premier passaient — « manchester united » valait « manchester city »,
+  // « real madrid » valait « real sociedad ». Vérifié le 03/09 : 5 faux
+  // positifs sur 7 cas testés. Les alias couvrent les cas légitimes que
+  // ce durcissement écarte (« south korea » ↔ « korea republic »).
   const tokA = a.split(' ').filter(t => t.length >= 4);
   const tokB = b.split(' ').filter(t => t.length >= 4);
   if (tokA.length > 0 && tokB.length > 0) {
-    const shared = tokA.filter(t => tokB.includes(t));
-    if (shared.length > 0 && shared.length / Math.min(tokA.length, tokB.length) >= 0.5) return true;
+    const communs = tokA.filter(t => tokB.includes(t));
+    if (communs.length / Math.min(tokA.length, tokB.length) > 0.5) return APP_FLOU;
   }
 
-  return false;
+  return APP_AUCUN;
+}
+
+/** Conservée pour la lisibilité des appelants : deux noms se correspondent-ils ? */
+function teamsMatch(a, b) {
+  return forceAppariement(a, b) > APP_AUCUN;
 }
 
 /**
  * Tente de matcher un pronostic DB (string "TeamA vs TeamB") avec un
  * match normalisé de victor/sources.js. Retourne le match ou null.
  */
-export function matchFixture(pronoMatch, fixtures) {
+export function matchFixture(pronoMatch, fixtures, { onAmbigu = null } = {}) {
   const parts = String(pronoMatch || '').split(/\s+vs\.?\s+/i);
   if (parts.length < 2) return null;
   const [a, b] = parts.map(normalizeTeam);
 
-  return fixtures.find(f => {
-    const home = normalizeTeam(f.home || '');
-    const away = normalizeTeam(f.away || '');
-    return (teamsMatch(home, a) && teamsMatch(away, b))
-        || (teamsMatch(home, b) && teamsMatch(away, a));
-  }) || null;
+  // On note CHAQUE candidat au lieu de prendre le premier qui passe.
+  // L'ancienne version renvoyait fixtures.find(...) : si deux rencontres
+  // du jour correspondaient, elle en choisissait une au hasard de l'ordre
+  // de collecte, et écrivait son score sur le pronostic.
+  const candidats = [];
+  for (const f of fixtures) {
+    const dom = normalizeTeam(f.home || '');
+    const ext = normalizeTeam(f.away || '');
+
+    const droit  = Math.min(forceAppariement(dom, a), forceAppariement(ext, b));
+    const invers = Math.min(forceAppariement(dom, b), forceAppariement(ext, a));
+    const score  = Math.max(droit, invers);
+
+    if (score > APP_AUCUN) candidats.push({ fixture: f, score });
+  }
+
+  if (candidats.length === 0) return null;
+
+  const meilleur = Math.max(...candidats.map(c => c.score));
+  const exaequo  = candidats.filter(c => c.score === meilleur);
+
+  // ── Refus de régler en cas d'ambiguïté ────────────────────────────
+  // Deux rencontres du jour revendiquent le pronostic avec la même force :
+  // aucune raison objective d'en préférer une. Écrire un score au hasard
+  // fausserait le taux de réussite en silence — le seul chiffre qui
+  // justifierait un abonnement. On préfère ne pas noter et le signaler.
+  if (exaequo.length > 1) {
+    const detail = exaequo.map(c => `${c.fixture.home} vs ${c.fixture.away}`);
+    console.warn(`   ⚠️  Appariement ambigu pour "${pronoMatch}" — ${exaequo.length} candidats : ${detail.join(' | ')}`);
+    if (onAmbigu) onAmbigu({ pronostic: pronoMatch, candidats: detail, force: meilleur });
+    return null;
+  }
+
+  return exaequo[0].fixture;
 }
 
 /**
@@ -1278,7 +1326,24 @@ export async function checkResults() {
         ...(resultatsParDate.get(p.date_iso) || []),
         ...(resultatsParDate.get(decalerJour(p.date_iso, 1)) || []),
       ];
-      const fixture = matchFixture(p.match, candidats);
+      // L'ambiguïté est consignée : refuser de noter sans laisser de trace
+      // reviendrait à perdre le pronostic en silence — il resterait « non
+      // noté » sans que rien n'indique pourquoi (migration 013).
+      const fixture = matchFixture(p.match, candidats, {
+        onAmbigu: async ({ candidats: noms, force }) => {
+          try {
+            await query(
+              `INSERT INTO ps_appariements_ambigus
+                 (pronostic_id, match_annonce, candidats, force_match)
+               VALUES ($1, $2, $3::jsonb, $4)
+               ON CONFLICT (pronostic_id) DO NOTHING`,
+              [p.id, p.match, JSON.stringify(noms), force]
+            );
+          } catch (e) {
+            console.warn(`   ⚠️  File de revue inaccessible : ${e.message}`);
+          }
+        },
+      });
 
       if (fixture) {
         // Guard : match pas encore terminé (getResultsOfDay ne renvoie

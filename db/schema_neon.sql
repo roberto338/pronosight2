@@ -1,4 +1,4 @@
--- 19 tables en prod
+-- 20 tables en prod
 
 CREATE TABLE IF NOT EXISTS nexus_bankroll (
   id               SERIAL,
@@ -214,6 +214,20 @@ CREATE INDEX IF NOT EXISTS idx_nexus_tasks_agent_type ON public.nexus_tasks USIN
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_claim ON public.nexus_tasks USING btree (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_created_at ON public.nexus_tasks USING btree (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_status ON public.nexus_tasks USING btree (status);
+
+CREATE TABLE IF NOT EXISTS ps_appariements_ambigus (
+  id               SERIAL,
+  pronostic_id     INTEGER NOT NULL,
+  match_annonce    TEXT NOT NULL,
+  candidats        JSONB NOT NULL,
+  force_match      SMALLINT,
+  resolu           BOOLEAN NOT NULL DEFAULT false,
+  detecte_le       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolu_le        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_ambigus_a_traiter ON public.ps_appariements_ambigus USING btree (detecte_le) WHERE (resolu = false);
+CREATE UNIQUE INDEX idx_ambigus_pronostic ON public.ps_appariements_ambigus USING btree (pronostic_id);
 
 CREATE TABLE IF NOT EXISTS ps_pronostics (
   id               SERIAL,

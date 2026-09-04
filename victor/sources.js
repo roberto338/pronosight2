@@ -176,7 +176,31 @@ export function arreterBudgetSources() {
 const tempsRestant = () => _echeance === null ? Infinity : _echeance - Date.now();
 
 /** @returns {Promise<boolean>} false si le budget interdit d'attendre. */
+// ── Espacement des appels ────────────────────────────────────
+// Le compteur glissant empêche de DÉPASSER 10 req/min, mais il autorise
+// 9 appels en trois secondes — après quoi le 10e attend près de 60 s.
+// C'est ce qui s'est produit le 21/08 (« pause 47s ») : l'attente mangeait
+// le budget de temps et l'enrichissement était abandonné.
+//
+// Une analyse consomme 8 requêtes (forme 2 + classement, buteurs et H2H
+// par compétition) pour un plafond de 9 : il n'y a aucune marge pour un
+// seul retry. En espaçant à partir du 5e appel, les 9 s'étalent sur la
+// minute au lieu de s'entasser, et un appel supplémentaire n'attend plus
+// que quelques secondes.
+const FD_SEUIL_ESPACEMENT = 5;      // les 4 premiers appels partent sans délai
+const FD_ESPACEMENT_MS    = 4_000;  // 5 appels espacés = 20 s, dans le budget
+
 async function fdThrottle() {
+  // Espacement progressif : rapide tant qu'on est loin du plafond.
+  const recents = _fdAppels.filter(t => Date.now() - t < 60_000);
+  if (recents.length >= FD_SEUIL_ESPACEMENT) {
+    const depuisDernier = Date.now() - recents[recents.length - 1];
+    const aAttendre = FD_ESPACEMENT_MS - depuisDernier;
+    if (aAttendre > 0 && aAttendre < tempsRestant()) {
+      await new Promise(r => setTimeout(r, aAttendre));
+    }
+  }
+
   const maintenant = Date.now();
   _fdAppels = _fdAppels.filter(t => maintenant - t < 60_000);
 

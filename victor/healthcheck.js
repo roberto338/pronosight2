@@ -78,6 +78,7 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
   // ── État de la file ─────────────────────────────────────────
   const jobs = { pending: 0, running: 0, done: 0, failed: 0 };
   let jobsBloques = 0;
+  let appariementsAmbigus = 0;
   try {
     const { rows } = await query(
       `SELECT status, COUNT(*)::int AS n FROM victor_jobs GROUP BY status`
@@ -101,6 +102,21 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
     jobsBloques = bloques[0]?.n ?? 0;
 
     if (jobsBloques > 0) problemes.push(`${jobsBloques} job(s) figé(s) en 'running'`);
+
+    // ── File de revue des appariements ambigus (migration 013) ──────
+    // checkResults refuse de noter un pronostic quand deux rencontres du
+    // jour le revendiquent avec la même force. Sans ce compteur, le refus
+    // serait invisible et le pronostic disparaîtrait des statistiques sans
+    // explication — le contraire du but recherché.
+    try {
+      const { rows: amb } = await query(
+        `SELECT COUNT(*)::int AS n FROM ps_appariements_ambigus WHERE resolu = false`
+      );
+      appariementsAmbigus = amb[0]?.n ?? 0;
+      if (appariementsAmbigus > 0) {
+        problemes.push(`${appariementsAmbigus} pronostic(s) non noté(s) — appariement ambigu à arbitrer`);
+      }
+    } catch { /* table absente = migration non appliquée, sans conséquence ici */ }
 
     // Un échec RÉCENT est actionnable ; un échec de juillet est une
     // scorie en attente de purge. Les mélanger noyait le signal utile :
@@ -163,7 +179,7 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
 
   return {
     date: dateISO, pronosticsAujourdhui, dernierPronostic,
-    jobs, jobsBloques, matchsDuJour,
+    jobs, jobsBloques, appariementsAmbigus, matchsDuJour,
     groqOk: groq.ok,
     problemes,
   };
