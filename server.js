@@ -7,6 +7,13 @@
 // placé dans le corps du fichier s'exécuterait trop tard. Voir config/env.js.
 import './config/env.js';
 
+import { createHash } from 'node:crypto';
+import {
+  ODDS_REGIONS, ODDS_MARKETS, sportKeyValide, bookmakersValides,
+  cheminFootballDataAutorise, cheminApiFootballAutorise,
+  GEMINI_MAX_TOKENS, refusGemini,
+} from './config/proxy-guards.js';
+
 import { startScheduler }          from './cron/scheduler.js';
 import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
@@ -139,7 +146,30 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
   }
 
   try {
-    const { messages, useSearch = false, maxTokens = 4096, model = null, jsonMode = false, cacheKey = null } = req.body;
+    const { messages, useSearch = false, jsonMode = false } = req.body;
+
+    // ── Bornes sur ce que l'appelant peut demander ──────────────────
+    // Cette route est publique et fait répondre la clé Gemini du serveur —
+    // celle dont dépend la production quotidienne de pronostics, et que
+    // Gemma partage. Sans bornes, un tiers choisissait le modèle et la
+    // taille de réponse : un proxy LLM ouvert sur le quota de Roberto.
+    const refus = refusGemini(messages, JSON.stringify(messages || '').length);
+    if (refus) return res.status(400).json({ error: { message: refus } });
+
+    // Le frontend demande au plus 6000 tokens (public/js/modules/api.js).
+    const maxTokens = Math.min(Number(req.body.maxTokens) || 4096, GEMINI_MAX_TOKENS);
+
+    // Modèle imposé par le serveur : le frontend n'en demande jamais.
+    const model = null;
+
+    // ── Clé de cache dérivée du contenu, jamais reçue du client ──────
+    // Elle était fournie dans le corps de la requête : deux appelants
+    // pouvaient partager une clé, donc lire la réponse l'un de l'autre, ou
+    // empoisonner le cache d'un tiers. Un hachage du contenu supprime le
+    // problème et rend le cache réellement efficace.
+    const cacheKey = createHash('sha256')
+      .update(JSON.stringify({ messages, useSearch, jsonMode, maxTokens }))
+      .digest('hex').slice(0, 32);
 
     // ── Cache hit ──
     if (cacheKey) {
@@ -238,6 +268,20 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
 // ══════════════════════════════════════════════
 // ROUTE: The Odds API Proxy
 // ══════════════════════════════════════════════
+// ⚠️ regions et markets sont FIGÉS côté serveur, jamais lus dans la query.
+//
+// The Odds API facture au produit regions × markets : « regions=eu&markets=
+// =h2h,totals » coûte 2 crédits, pas 1. En laissant l'appelant choisir, un
+// appel forgé avec 4 régions et 4 marchés coûtait 16 crédits. À 20 requêtes
+// par minute autorisées, le quota mensuel entier (500) partait en moins de
+// deux minutes — et sans cotes, Victor ne peut plus rien arbitrer.
+//
+// Le frontend n'a jamais demandé autre chose que eu + h2h
+// (public/js/modules/api.js:312) : figer ne lui retire rien et ramène le
+// coût de 16 crédits à 1.
+
+
+
 app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
   const apiKey = process.env.ODDS_API_KEY;
   if (!apiKey) {
@@ -246,15 +290,21 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
 
   try {
     const { sportKey } = req.params;
-    const { regions, markets, oddsFormat, bookmakers } = req.query;
+    // Le sportKey atterrit dans le chemin de l'URL amont : on le borne à la
+    // forme réelle des clés The Odds API (soccer_epl, soccer_france_ligue_one…).
+    if (!sportKeyValide(sportKey)) {
+      return res.status(400).json({ error: 'sportKey invalide' });
+    }
+    const { bookmakers } = req.query;
 
     const params = new URLSearchParams({
       apiKey,
-      regions: regions || 'eu',
-      markets: markets || 'h2h',
-      oddsFormat: oddsFormat || 'decimal'
+      regions: ODDS_REGIONS,
+      markets: ODDS_MARKETS,
+      oddsFormat: 'decimal'
     });
-    if (bookmakers) params.set('bookmakers', bookmakers);
+    // bookmakers filtre la réponse sans multiplier le coût — on le conserve.
+    if (bookmakers && bookmakersValides(bookmakers)) params.set('bookmakers', bookmakers);
 
     const url = `https://api.the-odds-api.com/v4/sports/${encodeURIComponent(sportKey)}/odds/?${params}`;
     const response = await fetch(url);
@@ -282,6 +332,18 @@ app.get('/api/football-data/*', generalLimiter, async (req, res) => {
 
   try {
     const fdPath = req.params[0];
+
+    // Liste blanche : le frontend n'appelle que deux formes
+    // (public/js/modules/api.js — competitions/<code>/matches et /standings).
+    // Sans elle, n'importe quel endpoint football-data était atteignable via
+    // le proxy, et surtout n'importe quel volume d'appels : le palier gratuit
+    // plafonne à 10 requêtes/minute, partagées avec victor/sources.js qui en
+    // consomme 8 par analyse. Saturer ce débit prive Victor de TOUTE sa couche
+    // statistique — forme, classement, confrontations directes, buteurs.
+    if (!cheminFootballDataAutorise(fdPath)) {
+      return res.status(400).json({ error: 'Chemin football-data non autorisé' });
+    }
+
     const qs = new URLSearchParams(req.query).toString();
     const url = `https://api.football-data.org/v4/${fdPath}${qs ? '?' + qs : ''}`;
 
@@ -339,6 +401,13 @@ app.get('/api/apifootball/*', generalLimiter, async (req, res) => {
   const key = process.env.RAPIDAPI_KEY;
   if (!key) return res.status(404).json({ error: 'RAPIDAPI_KEY non configurée' });
   const path = req.params[0];
+
+  // Liste blanche : seuls les quatre endpoints appelés par le frontend
+  // (public/js/modules/api.js — apifFetch).
+  if (!cheminApiFootballAutorise(path)) {
+    return res.status(400).json({ error: 'Chemin api-football non autorisé' });
+  }
+
   const qs = new URLSearchParams(req.query).toString();
   const url = `https://v3.football.api-sports.io/${path}${qs ? '?' + qs : ''}`;
   try {
@@ -346,10 +415,23 @@ app.get('/api/apifootball/*', generalLimiter, async (req, res) => {
       headers: { 'x-apisports-key': key }
     });
     const data = await resp.json();
+
+    // ⚠️ Cette API répond HTTP 200 avec l'erreur dans le corps : un compte
+    // suspendu ou un quota épuisé renvoie { errors: { access: "..." } } avec
+    // un statut 200. Relayer la réponse telle quelle faisait croire au
+    // frontend qu'il avait reçu des données. Le compte est suspendu depuis le
+    // 21/08 — sans ce contrôle, l'échec est invisible côté client.
+    const errs = data?.errors;
+    const enErreur = Array.isArray(errs) ? errs.length > 0 : (errs && Object.keys(errs).length > 0);
+    if (enErreur) {
+      console.warn('[APIF Proxy] refus amont:', JSON.stringify(errs).slice(0, 200));
+      return res.status(502).json({ error: 'api-football indisponible' });
+    }
+
     res.json(data);
   } catch (e) {
     console.error('[APIF Proxy]', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(502).json({ error: 'api-football indisponible' });
   }
 });
 
