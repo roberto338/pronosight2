@@ -403,6 +403,45 @@ export async function getFixturesOfDay(dateISO, { extra = [] } = {}) {
   return tout;
 }
 
+// ══════════════════════════════════════════════
+// MOTEUR STATISTIQUE — persistance des rencontres terminées
+// ══════════════════════════════════════════════
+//
+// Ces données transitaient déjà par ce fichier : buildFormIndex télécharge
+// vingt jours de rencontres avec les buts et les identifiants d'équipe, puis
+// n'en garde qu'une chaîne de cinq caractères pour le prompt. Le reste était
+// perdu à chaque run. On l'écrit désormais, ce qui donne au moteur de
+// Poisson sa matière première SANS un seul appel API supplémentaire.
+//
+// Trois précautions, parce que ce fichier est sur le chemin critique de
+// Victor en production :
+//
+//  1. DRAPEAU. Tant que PRONO_ENGINE ne vaut pas 'on', rien ne se produit et
+//     pas une ligne de code base n'est chargée. Le comportement de Victor est
+//     alors strictement celui d'avant.
+//  2. IMPORT DYNAMIQUE. Un import statique de repository.js chargerait
+//     db/database.js à l'ouverture du module, donc ouvrirait un pool et
+//     afficherait « DATABASE_URL manquante » même drapeau baissé. Le coût
+//     d'une fonctionnalité éteinte doit être nul.
+//  3. ÉCHEC SILENCIEUX. Une panne d'écriture ne doit jamais empêcher Victor
+//     d'analyser. La règle du budget de collecte s'applique ici aussi : une
+//     analyse sans mémorisation vaut infiniment mieux qu'aucune analyse.
+export async function persisterResultats(matchs, contexte = '') {
+  if (process.env.PRONO_ENGINE !== 'on') return null;
+  if (!Array.isArray(matchs) || matchs.length === 0) return null;
+  try {
+    const { enregistrerResultats } = await import('../prono/data/repository.js');
+    const bilan = await enregistrerResultats(matchs);
+    if (bilan.inseres > 0) {
+      console.log(`   💾 Moteur: ${bilan.inseres} rencontre(s) mémorisée(s)${contexte ? ' — ' + contexte : ''}`);
+    }
+    return bilan;
+  } catch (err) {
+    console.warn(`   ⚠️  Moteur: persistance ignorée (${err.message})`);
+    return null;
+  }
+}
+
 /**
  * Matchs TERMINÉS du jour, avec score — pour checkResults().
  * @returns {Promise<Fixture[]>}
@@ -422,7 +461,38 @@ export async function getResultsOfDay(dateISO) {
     .filter(f => f.status === 'FT' && f.homeGoals !== null && f.awayGoals !== null);
 
   console.log(`   📡 Résultats: ${finis.length} match(s) terminé(s) avec score`);
+  await persisterResultats(finis, `résultats du ${dateISO}`);
   return finis;
+}
+
+/**
+ * Rencontres terminées d'une période, par tranches de 10 jours.
+ *
+ * football-data refuse les plages supérieures à 10 jours (HTTP 400), d'où le
+ * découpage — identique à celui de buildFormIndex, dont cette fonction
+ * extrait la partie collecte pour la rendre réutilisable par le backfill.
+ *
+ * Coût : une requête par tranche de 10 jours, soumise au throttle commun.
+ * @returns {Promise<Fixture[]>}
+ */
+export async function fetchResultatsPeriode(jours = 90, options = {}) {
+  const { fenetre = 10 } = options;
+  const tranches = [];
+  for (let debut = jours; debut > 0; debut -= fenetre) {
+    tranches.push({
+      dateFrom: new Date(Date.now() - debut * 864e5).toISOString().slice(0, 10),
+      dateTo:   new Date(Date.now() - Math.max(debut - fenetre, 0) * 864e5).toISOString().slice(0, 10),
+      status:   'FINISHED',
+    });
+  }
+  const lots = [];
+  for (const t of tranches) lots.push(await fdMatches(t));   // séquentiel : le throttle est partagé
+  return lots.flat();
+}
+
+/** Nombre de requêtes qu'une collecte de `jours` jours consommera. */
+export function requetesPourPeriode(jours = 90, fenetre = 10) {
+  return Math.ceil(jours / fenetre);
 }
 
 /**
@@ -444,6 +514,8 @@ export async function buildFormIndex(jours = 20) {
   }
 
   const matchs = (await Promise.all(tranches.map(fdMatches))).flat();
+  await persisterResultats(matchs, `fenêtre de ${jours} jours`);
+
   const idx = new Map();
 
   // ⚠️ Clé = identifiant d'équipe, JAMAIS le nom. Indexer par nom faisait
@@ -625,6 +697,7 @@ export function formatFixturesForPrompt(fixtures, contexte = {}) {
 }
 
 export default {
+  persisterResultats, fetchResultatsPeriode, requetesPourPeriode,
   getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
   formatFixturesForPrompt, fetchApiFootball, normalizeTeam, fetchWithTimeout,
 };

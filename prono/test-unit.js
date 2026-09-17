@@ -17,6 +17,10 @@ import { simuler, mulberry32, quantile } from './engine/montecarlo.js';
 import { devigoriser, edge, kelly, estValue } from './engine/odds.js';
 import { scoreConfiance } from './engine/confidence.js';
 import { analyserMatch } from './engine/index.js';
+import {
+  ligneDepuisFixture, versHistorique, moyennesDepuisLignes,
+  MOY_DOM_DEFAUT, MOY_EXT_DEFAUT,
+} from './data/normalisation.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -310,6 +314,89 @@ let leve = false;
 try { analyserMatch({ equipeDom: { nom: 'A' }, equipeExt: { nom: 'B' }, ligue: {} }); }
 catch { leve = true; }
 verifie('Moyennes de ligue manquantes refusées', leve, true);
+
+
+// ══════════════════════════════════════════════
+// Normalisation des données entrantes
+// ══════════════════════════════════════════════
+// Ce qui entre en base décide de ce que le modèle croira. Chaque règle de
+// rejet ci-dessous protège d'une corruption qui serait ensuite invisible.
+
+const fixtureOK = {
+  sport: 'Football', competition: 'Ligue 1', codeCompet: 'FL1', fixtureId: 12345,
+  homeId: 'fd:521', awayId: 'fd:548', home: 'Lille', away: 'Nantes',
+  dateISO: '2026-09-12', debutUTC: '2026-09-12T19:00:00Z',
+  status: 'FT', homeGoals: 2, awayGoals: 1, source: 'football-data',
+};
+
+const ligne = ligneDepuisFixture(fixtureOK);
+verifie('Rencontre valide retenue', ligne?.equipe_dom_id, 'fd:521');
+verifie('Score conservé', [ligne?.buts_dom, ligne?.buts_ext], [2, 1]);
+verifie('Identifiant de source conservé', ligne?.source_match_id, '12345');
+verifie('Code compétition conservé', ligne?.competition_code, 'FL1');
+
+// Un match non terminé n'a pas de score définitif : le retenir figerait un
+// score de mi-temps comme résultat final.
+verifie('Match non terminé écarté', ligneDepuisFixture({ ...fixtureOK, status: 'NS' }), null);
+verifie('Match en cours écarté',    ligneDepuisFixture({ ...fixtureOK, status: 'LIVE' }), null);
+verifie('Score absent écarté',      ligneDepuisFixture({ ...fixtureOK, homeGoals: null }), null);
+
+// Sans identifiant, l'équipe serait indexée par nom — le piège documenté
+// dans sources.js:449, qui confondait Vitória SC et Vitória.
+verifie('Sans identifiant domicile, écarté', ligneDepuisFixture({ ...fixtureOK, homeId: null }), null);
+verifie('Sans identifiant extérieur, écarté', ligneDepuisFixture({ ...fixtureOK, awayId: null }), null);
+verifie('Équipe contre elle-même écartée', ligneDepuisFixture({ ...fixtureOK, awayId: 'fd:521' }), null);
+
+// Le modèle est calibré sur le football. Un score de basket ferait exploser
+// les moyennes de la « ligue » sans que rien ne le signale.
+verifie('Basket écarté', ligneDepuisFixture({ ...fixtureOK, sport: 'Basketball' }), null);
+
+verifie('Date absente écartée', ligneDepuisFixture({ ...fixtureOK, dateISO: '', debutUTC: null }), null);
+verifie('Date malformée écartée', ligneDepuisFixture({ ...fixtureOK, dateISO: '12/09/2026', debutUTC: null }), null);
+verifie('Score négatif écarté', ligneDepuisFixture({ ...fixtureOK, homeGoals: -1 }), null);
+verifie('Score non entier écarté', ligneDepuisFixture({ ...fixtureOK, homeGoals: 1.5 }), null);
+verifie('Entrée nulle écartée', ligneDepuisFixture(null), null);
+
+// Sans identifiant de rencontre, la ligne reste valide : l'index unique
+// (jour, équipe dom, équipe ext) prend alors le relais contre les doublons.
+verifie('Sans fixtureId, rencontre conservée',
+  ligneDepuisFixture({ ...fixtureOK, fixtureId: null })?.source_match_id, null);
+
+// Date reprise du coup d'envoi quand dateISO manque.
+verifie('Date déduite du coup d\'envoi',
+  ligneDepuisFixture({ ...fixtureOK, dateISO: '' })?.joue_le, '2026-09-12');
+
+// ── Lecture des buts selon le camp ──
+// Inverser marqués et encaissés inverserait attaque et défense : une
+// équipe solide deviendrait une passoire, sans la moindre erreur visible.
+const lignesBase = [
+  { joue_le: '2026-09-12', equipe_dom_id: 'A', equipe_ext_id: 'B', equipe_dom: 'Alpha', equipe_ext: 'Beta', buts_dom: 3, buts_ext: 1 },
+  { joue_le: '2026-09-05', equipe_dom_id: 'C', equipe_ext_id: 'A', equipe_dom: 'Gamma', equipe_ext: 'Alpha', buts_dom: 0, buts_ext: 2 },
+];
+const histA = versHistorique(lignesBase, 'A');
+verifie('Deux rencontres pour Alpha', histA.length, 2);
+verifie('À domicile : 3 marqués, 1 encaissé', [histA[0].butsMarques, histA[0].butsEncaisses], [3, 1]);
+verifie('À l\'extérieur : 2 marqués, 0 encaissé', [histA[1].butsMarques, histA[1].butsEncaisses], [2, 0]);
+verifie('Camp identifié', [histA[0].domicile, histA[1].domicile], [true, false]);
+verifie('Adversaire identifié', [histA[0].adversaire, histA[1].adversaire], ['Beta', 'Gamma']);
+verifie('Équipe absente : historique vide', versHistorique(lignesBase, 'Z').length, 0);
+
+// La date peut arriver en objet Date depuis pg : elle doit ressortir en ISO
+// court, faute de quoi la pondération par ancienneté échoue silencieusement.
+const histDate = versHistorique(
+  [{ joue_le: new Date('2026-09-12T00:00:00Z'), equipe_dom_id: 'A', equipe_ext_id: 'B', buts_dom: 1, buts_ext: 0 }], 'A');
+verifie('Date pg convertie en ISO', histDate[0].date, '2026-09-12');
+
+// ── Moyennes de ligue ──
+const peuDeMatchs = moyennesDepuisLignes([{ buts_dom: 3, buts_ext: 0 }]);
+verifie('Trop peu de matchs : repli sur la valeur par défaut',
+  [peuDeMatchs.moyButsDom, peuDeMatchs.mesuree], [MOY_DOM_DEFAUT, false]);
+vrai('Le repli ne se déguise pas en mesure', peuDeMatchs.mesuree === false);
+
+const assez = moyennesDepuisLignes(Array.from({ length: 40 }, () => ({ buts_dom: 2, buts_ext: 1 })));
+verifie('Moyennes mesurées sur 40 matchs',
+  [assez.moyButsDom, assez.moyButsExt, assez.mesuree], [2, 1, true]);
+verifie('Aucune donnée : repli', moyennesDepuisLignes([]).moyButsExt, MOY_EXT_DEFAUT);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);
