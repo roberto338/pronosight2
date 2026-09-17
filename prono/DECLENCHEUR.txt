@@ -1,0 +1,18 @@
+rien
+
+# ── Comment s'en servir depuis un téléphone ──
+#
+# Remplacer le mot de la PREMIÈRE ligne, puis commiter depuis l'éditeur web
+# de GitHub. Le workflow « Moteur statistique » se déclenche tout seul et
+# affiche son résultat dans l'onglet Actions.
+#
+#   rien           ne fait rien (état de repos, laisser ainsi après usage)
+#   etat           lecture seule : combien de rencontres, combien d'équipes prêtes
+#   apercu         simulation de la migration, aucune écriture
+#   migration      applique la 014, régénère db/schema_neon.sql et le commite
+#   backfill       collecte 90 jours de résultats
+#   backfill 150   collecte 150 jours
+#
+# Un commit sur ce fichier vaut confirmation : l'éditer est un geste
+# délibéré, contrairement à un menu déroulant qu'un pouce déclenche par
+# accident. Remettre « rien » après chaque opération.

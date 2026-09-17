@@ -1,0 +1,178 @@
+# ══════════════════════════════════════════════
+# Moteur statistique — opérations de base depuis un téléphone
+# ══════════════════════════════════════════════
+#
+# Ce dépôt se pilote désormais sans poste de travail. Ce workflow exécute,
+# sur un runner GitHub, les commandes qui exigent un accès à la base Neon :
+# migration, régénération du schéma, amorçage de la mémoire du moteur.
+#
+# DEUX FAÇONS DE LE DÉCLENCHER
+#
+#  1. Onglet Actions → « Run workflow » (menu déroulant).
+#     Nécessite que ce fichier soit présent sur la branche par défaut.
+#
+#  2. Modifier prono/DECLENCHEUR.txt depuis l'éditeur web de GitHub et
+#     commiter. Fonctionne immédiatement sur N'IMPORTE QUELLE branche, sans
+#     rien fusionner. Le contenu du fichier donne l'étape à exécuter :
+#         etat        → lecture seule
+#         apercu      → simulation, aucune écriture
+#         migration   → applique la 014 + régénère et commite le schéma
+#         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
+#
+# SECRETS REQUIS (Settings → Secrets and variables → Actions)
+#   DATABASE_URL        chaîne de connexion Neon
+#   FOOTBALL_DATA_KEY   clé football-data.org (étape backfill uniquement)
+
+name: Moteur statistique
+
+on:
+  workflow_dispatch:
+    inputs:
+      etape:
+        description: "Étape à exécuter"
+        required: true
+        default: apercu
+        type: choice
+        options: [etat, apercu, migration, backfill]
+      jours:
+        description: "Backfill : nombre de jours à collecter"
+        required: false
+        default: "90"
+      confirmation:
+        description: "Pour 'migration' et 'backfill' : taper APPLIQUER"
+        required: false
+        default: ""
+  push:
+    paths: ["prono/DECLENCHEUR.txt"]
+
+concurrency:
+  group: moteur-statistique
+  cancel-in-progress: false
+
+jobs:
+  executer:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # nécessaire pour recommiter db/schema_neon.sql
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install --no-audit --no-fund
+
+      # ── Quelle étape, et l'a-t-on confirmée ? ──
+      # Un déclenchement par fichier porte sa propre confirmation : éditer et
+      # commiter est déjà un geste délibéré. Le menu déroulant, lui, se
+      # mistape à un doigt près sur un écran de téléphone.
+      - id: choix
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            CONTENU=$(head -1 prono/DECLENCHEUR.txt | tr -d '\r' | xargs)
+            ETAPE=$(echo "$CONTENU" | awk '{print $1}')
+            JOURS=$(echo "$CONTENU" | awk '{print $2}')
+            CONFIRME=oui
+          else
+            ETAPE="${{ inputs.etape }}"
+            JOURS="${{ inputs.jours }}"
+            [ "${{ inputs.confirmation }}" = "APPLIQUER" ] && CONFIRME=oui || CONFIRME=non
+          fi
+          [ -z "$JOURS" ] && JOURS=90
+          echo "etape=$ETAPE"     >> $GITHUB_OUTPUT
+          echo "jours=$JOURS"     >> $GITHUB_OUTPUT
+          echo "confirme=$CONFIRME" >> $GITHUB_OUTPUT
+          echo "### Étape : \`$ETAPE\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Contrôles hors base
+        run: npm test
+
+      - name: État de la mémoire
+        if: steps.choix.outputs.etape == 'etat'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node prono/etat.js | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Aperçu — aucune écriture
+        if: steps.choix.outputs.etape == 'apercu'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '```'
+            node nexus/migrations/run_014_moteur_statistique.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # ── Migration + régénération du schéma, dans le même job ──
+      # La règle de CLAUDE.md veut que migration et schéma régénéré soient
+      # commités ensemble. Les enchaîner ici garantit qu'ils ne peuvent pas
+      # diverger : le schéma est lu sur la base qui vient d'être migrée.
+      - name: Migration 014
+        if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node nexus/migrations/run_014_moteur_statistique.js --appliquer
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Régénération de db/schema_neon.sql
+        if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node db/introspect.js > /tmp/schema.sql
+          # Un dump vide ou tronqué ne doit JAMAIS écraser la source de
+          # vérité du schéma : sans ce garde-fou, une panne réseau au mauvais
+          # moment effacerait la référence de 22 tables.
+          TABLES=$(grep -c '^CREATE TABLE' /tmp/schema.sql || true)
+          echo "Tables introspectées : $TABLES" | tee -a $GITHUB_STEP_SUMMARY
+          if [ "$TABLES" -lt 19 ]; then
+            echo "❌ Dump suspect ($TABLES tables) — schéma NON remplacé." | tee -a $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          mv /tmp/schema.sql db/schema_neon.sql
+
+      - name: Commit du schéma régénéré
+        if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
+        run: |
+          if git diff --quiet db/schema_neon.sql; then
+            echo "Schéma inchangé — rien à commiter." | tee -a $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add db/schema_neon.sql
+          git commit -m "Regeneration de db/schema_neon.sql apres la migration 014
+
+          Introspection de la prod par db/introspect.js, execute sur le runner
+          juste apres l'application de la migration. Regle CLAUDE.md : ce
+          fichier reflete la base, il ne la precede pas."
+          git push origin HEAD:${{ github.ref_name }}
+          echo "✅ Schéma régénéré et commité." >> $GITHUB_STEP_SUMMARY
+
+      - name: Amorçage de la mémoire
+        if: steps.choix.outputs.etape == 'backfill' && steps.choix.outputs.confirme == 'oui'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '```'
+            node prono/backfill.js --jours=${{ steps.choix.outputs.jours }} --appliquer
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Confirmation manquante
+        if: (steps.choix.outputs.etape == 'migration' || steps.choix.outputs.etape == 'backfill') && steps.choix.outputs.confirme != 'oui'
+        run: |
+          echo "⛔ Étape non exécutée : taper APPLIQUER dans le champ confirmation." | tee -a $GITHUB_STEP_SUMMARY
+          exit 1
