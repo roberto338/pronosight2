@@ -20,6 +20,7 @@ import { analyserMatch } from './engine/index.js';
 import {
   ligneDepuisFixture, versHistorique, moyennesDepuisLignes,
   MOY_DOM_DEFAUT, MOY_EXT_DEFAUT,
+  SOURCES_MEMORISEES,
 } from './data/normalisation.js';
 
 let ok = 0, ko = 0;
@@ -350,6 +351,16 @@ verifie('Équipe contre elle-même écartée', ligneDepuisFixture({ ...fixtureOK
 // Le modèle est calibré sur le football. Un score de basket ferait exploser
 // les moyennes de la « ligue » sans que rien ne le signale.
 verifie('Basket écarté', ligneDepuisFixture({ ...fixtureOK, sport: 'Basketball' }), null);
+
+// Une seule source mémorisée. Les identifiants sont cloisonnés par source
+// (fd: / af: / tsdb:) : mémoriser plusieurs sources ferait exister la même
+// équipe sous deux identités, chacune avec la moitié de son historique.
+// dedupe() ne protège que dans la journée, pas d'un jour à l'autre.
+verifie('Une seule source mémorisée', [...SOURCES_MEMORISEES], ['football-data']);
+verifie('TheSportsDB écarté',  ligneDepuisFixture({ ...fixtureOK, source: 'thesportsdb', homeId: 'tsdb:1', awayId: 'tsdb:2' }), null);
+verifie('API-Football écarté', ligneDepuisFixture({ ...fixtureOK, source: 'api-football', homeId: 'af:1', awayId: 'af:2' }), null);
+verifie('The Odds API écarté', ligneDepuisFixture({ ...fixtureOK, source: 'odds-api' }), null);
+verifie('Source absente écartée', ligneDepuisFixture({ ...fixtureOK, source: undefined }), null);
 
 verifie('Date absente écartée', ligneDepuisFixture({ ...fixtureOK, dateISO: '', debutUTC: null }), null);
 verifie('Date malformée écartée', ligneDepuisFixture({ ...fixtureOK, dateISO: '12/09/2026', debutUTC: null }), null);

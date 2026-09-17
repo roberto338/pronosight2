@@ -25,6 +25,38 @@ export const MIN_MATCHS_LIGUE = 30;
 export const FENETRE_JOURS = 180;
 
 // ══════════════════════════════════════════════
+// Sources retenues — une seule, et c'est délibéré
+// ══════════════════════════════════════════════
+//
+// victor/sources.js prefixe les identifiants d'equipe par source : `fd:521`
+// pour football-data, `af:85` pour API-Football, `tsdb:133714` pour
+// TheSportsDB. Ce cloisonnement protege l'indice de forme des homonymes
+// (sources.js:449) et il est juste. Mais il a une consequence pour une
+// memoire qui, elle, PERSISTE entre les runs.
+//
+// dedupe() fusionne bien les doublons a l'interieur d'une journee, en
+// donnant la priorite a football-data. Il ne peut rien entre deux jours :
+// si football-data est indisponible un soir, la rencontre est enregistree
+// sous des identifiants `tsdb:`, et le lendemain la meme equipe revient
+// sous `fd:`. Elle existerait alors en base comme DEUX equipes distinctes,
+// chacune avec la moitie de son historique — donc deux fois sous le seuil
+// des dix matchs, sans que rien ne le signale.
+//
+// Deuxieme raison, dirimante : seul football-data renseigne codeCompet.
+// Sans code de competition, moyennesLigue ne peut pas calculer la reference
+// par rapport a laquelle une force vaut 1, et le repli s'appliquerait a
+// toutes les rencontres des autres sources.
+//
+// On ne conserve donc que football-data. C'est deja la seule source de
+// buildFormIndex, qui fournit l'essentiel du volume. Les rencontres des
+// autres sources continuent d'alimenter Victor exactement comme avant :
+// elles ne sont simplement pas memorisees pour le modele.
+//
+// A rouvrir le jour ou une table de correspondance d'equipes entre sources
+// existera — pas avant, et surtout pas par defaut.
+export const SOURCES_MEMORISEES = new Set(['football-data']);
+
+// ══════════════════════════════════════════════
 
 /**
  * Convertit une rencontre normalisée par victor/sources.js en ligne de base.
@@ -42,6 +74,9 @@ export function ligneDepuisFixture(f) {
   // sports de Victor (basket, tennis) n'ont ni la même distribution de
   // scores ni la même notion de but : les stocker fausserait les moyennes.
   if (f.sport && f.sport !== 'Football') return null;
+
+  // Une seule source memorisee : voir SOURCES_MEMORISEES ci-dessus.
+  if (!SOURCES_MEMORISEES.has(f.source)) return null;
 
   if (f.status !== 'FT') return null;
   if (f.homeGoals == null || f.awayGoals == null) return null;
@@ -61,7 +96,7 @@ export function ligneDepuisFixture(f) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(joueLe)) return null;
 
   return {
-    source:          f.source || 'inconnu',
+    source:          f.source,
     source_match_id: f.fixtureId != null ? String(f.fixtureId) : null,
     competition:     f.competition || null,
     competition_code: f.codeCompet || null,
@@ -122,4 +157,4 @@ export function moyennesDepuisLignes(lignes) {
 
 
 export default { ligneDepuisFixture, versHistorique, moyennesDepuisLignes,
-  MOY_DOM_DEFAUT, MOY_EXT_DEFAUT, MIN_MATCHS_LIGUE, FENETRE_JOURS };
+  MOY_DOM_DEFAUT, MOY_EXT_DEFAUT, MIN_MATCHS_LIGUE, FENETRE_JOURS, SOURCES_MEMORISEES };

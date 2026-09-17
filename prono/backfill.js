@@ -27,6 +27,7 @@
 
 import { fetchResultatsPeriode, requetesPourPeriode } from '../victor/sources.js';
 import { enregistrerResultats, ligneDepuisFixture, etatMemoire, couvertureEquipes } from './data/repository.js';
+import { SOURCES_MEMORISEES } from './data/normalisation.js';
 import pool from '../db/database.js';
 
 const args = process.argv.slice(2);
@@ -67,10 +68,11 @@ console.log(`   ${fixtures.length} rencontre(s) reçue(s) en ${Math.round((Date.
 
 // Ce qui est écarté, et pourquoi — sinon l'écart entre reçu et retenu
 // resterait inexpliqué, et on ne saurait pas si la collecte a échoué.
-const motifs = { 'autre sport': 0, 'non terminé': 0, 'sans score': 0, 'sans identifiant': 0 };
+const motifs = { 'autre sport': 0, 'autre source': 0, 'non terminé': 0, 'sans score': 0, 'sans identifiant': 0 };
 for (const f of fixtures) {
   if (ligneDepuisFixture(f)) continue;
   if (f.sport && f.sport !== 'Football') motifs['autre sport']++;
+  else if (!SOURCES_MEMORISEES.has(f.source)) motifs['autre source']++;
   else if (f.status !== 'FT') motifs['non terminé']++;
   else if (f.homeGoals == null || f.awayGoals == null) motifs['sans score']++;
   else motifs['sans identifiant']++;
