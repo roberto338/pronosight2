@@ -1,7 +1,7 @@
 {
   "name": "pronosight",
   "version": "4.1.0",
-  "description": "PronoSight — IA Pronostics Sportifs avec Victor",
+  "description": "PronoSight \u2014 IA Pronostics Sportifs avec Victor",
   "main": "server.js",
   "type": "module",
   "engines": {
@@ -10,10 +10,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch --env-file=.env server.js",
-    "test": "node tools/verif-syntaxe.js && node config/test-unit.js && node victor/test-unit.js && node queues/test-unit.js && node nexus/test-unit.js",
+    "test": "node tools/verif-syntaxe.js && node config/test-unit.js && node victor/test-unit.js && node queues/test-unit.js && node nexus/test-unit.js && node prono/test-unit.js",
     "test:live": "node victor/test-unit.js --live",
     "health": "node victor/healthcheck.js",
-    "test:nexus": "node nexus/test-unit.js"
+    "test:nexus": "node nexus/test-unit.js",
+    "test:prono": "node prono/test-unit.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
