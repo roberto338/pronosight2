@@ -92,14 +92,26 @@ console.log(`\nMémoire : ${avant.total} → ${apres.total} rencontre(s), ${apre
 console.log(`Équipes connues : ${couv.equipes}, dont ${couv.suffisantes} avec au moins 10 matchs (moyenne ${couv.moyenne})`);
 
 // Le verdict qui compte : le moteur est-il utilisable, et sur quoi ?
-if (couv.suffisantes === 0) {
-  console.log(`\n⚠️  Aucune équipe n'atteint 10 matchs. Le moteur fonctionnera mais`);
-  console.log(`   tous ses intervalles seront larges et ses confiances basses.`);
-  console.log(`   Élargir la période : node prono/backfill.js --jours=150 --appliquer`);
+//
+// Le premier jet de ce script affichait « ✅ 4% des équipes sont exploitables ».
+// Une coche verte sur un résultat inexploitable est pire que pas de verdict :
+// elle invite à passer à la suite. Les seuils ci-dessous sont explicites.
+const part = Math.round(100 * couv.suffisantes / Math.max(couv.equipes, 1));
+console.log('');
+if (part >= 50) {
+  console.log(`✅ ${part}% des équipes sont exploitables par le modèle.`);
+} else if (part >= 25) {
+  console.log(`⚠️  ${part}% seulement des équipes sont exploitables.`);
+  console.log(`   Le moteur tournera, mais refusera de conclure sur la majorité des matchs.`);
 } else {
-  const part = Math.round(100 * couv.suffisantes / Math.max(couv.equipes, 1));
-  console.log(`\n✅ ${part}% des équipes sont exploitables par le modèle.`);
-  if (part < 50) console.log(`   Sous 50 %, envisager --jours=150 pour couvrir plus d'équipes.`);
+  console.log(`⛔ ${part}% des équipes sont exploitables — le moteur est inutilisable en l'état.`);
+  console.log(`   Les intervalles seront muets et les confiances nulles presque partout.`);
+}
+if (part < 50) {
+  console.log(`\n   Élargir la fenêtre : --jours=180 (aligné sur FENETRE_JOURS, que`);
+  console.log(`   repository.js utilise déjà pour lire l'historique).`);
+  console.log(`   En Europe, 90 jours depuis septembre tombent en pleine trêve estivale :`);
+  console.log(`   la collecte est correcte, c'est le calendrier qui est vide.`);
 }
 
 await pool.end();
