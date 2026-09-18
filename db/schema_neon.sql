@@ -1,4 +1,4 @@
--- 20 tables en prod
+-- 24 tables en prod
 
 CREATE TABLE IF NOT EXISTS nexus_bankroll (
   id               SERIAL,
@@ -215,6 +215,75 @@ CREATE INDEX IF NOT EXISTS idx_nexus_tasks_claim ON public.nexus_tasks USING btr
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_created_at ON public.nexus_tasks USING btree (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_nexus_tasks_status ON public.nexus_tasks USING btree (status);
 
+CREATE TABLE IF NOT EXISTS pa_analyses (
+  id               SERIAL,
+  equipe_dom       VARCHAR(100) NOT NULL,
+  equipe_ext       VARCHAR(100) NOT NULL,
+  competition      VARCHAR(100),
+  coup_envoi       TIMESTAMPTZ,
+  model_version    VARCHAR(20) NOT NULL,
+  lambda_dom       NUMERIC NOT NULL,
+  lambda_ext       NUMERIC NOT NULL,
+  rho              NUMERIC NOT NULL,
+  att_dom          NUMERIC,
+  def_dom          NUMERIC,
+  att_ext          NUMERIC,
+  def_ext          NUMERIC,
+  n_matchs_dom     SMALLINT,
+  n_matchs_ext     SMALLINT,
+  score_confiance  SMALLINT,
+  iterations       INTEGER,
+  calcule_le       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  buts_dom_reels   SMALLINT,
+  buts_ext_reels   SMALLINT,
+  verifie_le       TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_pa_analyses_a_verifier ON public.pa_analyses USING btree (coup_envoi) WHERE (verifie_le IS NULL);
+CREATE INDEX IF NOT EXISTS idx_pa_analyses_coup_envoi ON public.pa_analyses USING btree (coup_envoi DESC);
+CREATE INDEX IF NOT EXISTS idx_pa_analyses_version ON public.pa_analyses USING btree (model_version, calcule_le DESC);
+
+CREATE TABLE IF NOT EXISTS pa_analysis_markets (
+  id               SERIAL,
+  analyse_id       INTEGER NOT NULL,
+  marche           VARCHAR(20) NOT NULL,
+  selection        VARCHAR(20) NOT NULL,
+  proba            NUMERIC NOT NULL,
+  proba_basse      NUMERIC,
+  proba_haute      NUMERIC,
+  cote_juste       NUMERIC,
+  cote_offerte     NUMERIC,
+  bookmaker        VARCHAR(40),
+  edge             NUMERIC,
+  est_value        BOOLEAN NOT NULL DEFAULT false,
+  gagnant          BOOLEAN
+);
+
+CREATE INDEX IF NOT EXISTS idx_pa_markets_calibration ON public.pa_analysis_markets USING btree (marche, proba) WHERE (gagnant IS NOT NULL);
+CREATE UNIQUE INDEX idx_pa_markets_unique ON public.pa_analysis_markets USING btree (analyse_id, marche, selection);
+CREATE INDEX IF NOT EXISTS idx_pa_markets_value ON public.pa_analysis_markets USING btree (est_value, edge DESC) WHERE (est_value = true);
+
+CREATE TABLE IF NOT EXISTS pa_match_results (
+  id               SERIAL,
+  source           VARCHAR(30) NOT NULL,
+  source_match_id  VARCHAR(40),
+  competition      VARCHAR(100),
+  competition_code VARCHAR(10),
+  joue_le          DATE NOT NULL,
+  equipe_dom_id    VARCHAR(40) NOT NULL,
+  equipe_ext_id    VARCHAR(40) NOT NULL,
+  equipe_dom       VARCHAR(100) NOT NULL,
+  equipe_ext       VARCHAR(100) NOT NULL,
+  buts_dom         SMALLINT NOT NULL,
+  buts_ext         SMALLINT NOT NULL,
+  collecte_le      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pa_results_dom ON public.pa_match_results USING btree (equipe_dom_id, joue_le DESC);
+CREATE INDEX IF NOT EXISTS idx_pa_results_ext ON public.pa_match_results USING btree (equipe_ext_id, joue_le DESC);
+CREATE UNIQUE INDEX idx_pa_results_rencontre ON public.pa_match_results USING btree (joue_le, equipe_dom_id, equipe_ext_id);
+CREATE UNIQUE INDEX idx_pa_results_source ON public.pa_match_results USING btree (source, source_match_id) WHERE (source_match_id IS NOT NULL);
+
 CREATE TABLE IF NOT EXISTS ps_appariements_ambigus (
   id               SERIAL,
   pronostic_id     INTEGER NOT NULL,
@@ -263,9 +332,12 @@ CREATE TABLE IF NOT EXISTS ps_pronostics (
   created_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
   updated_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
   pari_code        VARCHAR(40),
-  cote_confirmee   BOOLEAN
+  cote_confirmee   BOOLEAN,
+  moteur           VARCHAR(24),
+  modele           VARCHAR(64)
 );
 
+CREATE INDEX IF NOT EXISTS idx_pronostics_moteur ON public.ps_pronostics USING btree (moteur, date) WHERE (moteur IS NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_confiance ON public.ps_pronostics USING btree (confiance);
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_cote_confirmee ON public.ps_pronostics USING btree (cote_confirmee, date) WHERE (cote_confirmee IS NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_date ON public.ps_pronostics USING btree (date DESC);
@@ -320,6 +392,22 @@ CREATE TABLE IF NOT EXISTS ps_victor_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ps_stats_date ON public.ps_victor_stats USING btree (date DESC);
+
+CREATE TABLE IF NOT EXISTS usage_log (
+  id               BIGSERIAL,
+  jour             DATE NOT NULL DEFAULT CURRENT_DATE,
+  service          VARCHAR(32) NOT NULL,
+  endpoint         VARCHAR(120),
+  unites           INTEGER NOT NULL DEFAULT 1,
+  tokens_entree    INTEGER,
+  tokens_sortie    INTEGER,
+  succes           BOOLEAN NOT NULL DEFAULT true,
+  contexte         VARCHAR(64),
+  cree_le          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_jour_service ON public.usage_log USING btree (jour, service);
+CREATE INDEX IF NOT EXISTS idx_usage_purge ON public.usage_log USING btree (cree_le);
 
 CREATE TABLE IF NOT EXISTS victor_jobs (
   id               SERIAL,
