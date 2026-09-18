@@ -1,4 +1,4 @@
-rien
+etat
 
 # ── Comment s'en servir depuis un téléphone ──
 #
