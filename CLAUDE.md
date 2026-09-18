@@ -4,7 +4,7 @@ Toute modification de structure BDD (table, colonne, index, contrainte) suit
 obligatoirement ce processus, dans un seul et même changement (commit) :
 
 1. Écrire une **migration numérotée** dans `nexus/migrations/`
-   (suivant : `008_xxx.sql`, avec son runner `run_xxx.js` si besoin).
+   (suivant : `015_xxx.sql`, avec son runner `run_xxx.js` si besoin).
 2. Appliquer la migration sur la base Neon de prod.
 3. **Régénérer `db/schema_neon.sql` par introspection de la prod**
    (information_schema + pg_indexes + pg_constraint), jamais à la main.
@@ -12,12 +12,23 @@ obligatoirement ce processus, dans un seul et même changement (commit) :
 
 **Ne JAMAIS éditer `db/schema_neon.sql` à la main.** Ce fichier est la source
 de vérité de l'état de la base : il reflète la prod, il ne la précède pas.
-Dernière régénération : 07/08/2026, après la migration 009
-(19 tables — 4 ps_* + 14 nexus_* + victor_jobs).
+Dernière régénération : 18/09/2026, après la migration 014
+(24 tables — 5 ps_* + 14 nexus_* + 3 pa_* + victor_jobs + usage_log).
+
+Cette régénération a mesuré le coût de l'avoir négligée. Le fichier ignorait :
+la table `usage_log` entière (10 colonnes), les colonnes `ps_pronostics.moteur`
+et `.modele` — pourtant écrites en production par `victor/core.js:915` — et
+l'index `idx_pronostics_moteur`. La dérive était donc réelle, et invisible.
+C'est précisément ce que cette règle existe pour empêcher.
 
 L'étape 3 se fait avec **`node db/introspect.js`** (dump complet) ou
 `node db/introspect.js <table>` (une seule table). C'est cet outil qui rend
 la règle applicable — ne pas revenir à une mise à jour manuelle.
+
+Sans poste de travail, les étapes 2 et 3 s'enchaînent automatiquement via le
+workflow « Moteur statistique » : écrire `migration` dans
+`prono/DECLENCHEUR.txt` depuis l'éditeur web de GitHub applique la migration
+puis commite le schéma régénéré. Voir `.github/workflows/moteur-statistique.yml`.
 
 ---
 
