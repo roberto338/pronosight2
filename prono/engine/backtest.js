@@ -26,6 +26,8 @@
 // courbe de fiabilité, plus bas. Un modèle peut avoir un bon log-loss et
 // mentir systématiquement de dix points.
 
+import { mulberry32 } from './montecarlo.js';
+
 /**
  * ÉTALON DE RÉFÉRENCE — pourquoi « mieux que le hasard » ne veut rien dire.
  *
@@ -89,6 +91,64 @@ export function etalonTauxDeBase(rows) {
 export function gainRelatif(score, etalon) {
   if (!Number.isFinite(score) || !Number.isFinite(etalon) || etalon === 0) return null;
   return (etalon - score) / etalon;
+}
+
+/**
+ * Le gain est-il réel, ou une fluctuation ?
+ *
+ * Le balayage d'hyper-paramètres a rendu « +1,89 % de log-loss en
+ * validation » sur 90 rencontres. Affiché seul, ce chiffre invite à agir.
+ * Or 224 des 240 combinaisons faisaient PIRE que le taux de base sur la
+ * même période : les 16 gagnantes étaient la queue chanceuse d'un ensemble
+ * globalement perdant. Un pourcentage sans intervalle est une invitation à
+ * se tromper — y compris pour celui qui l'a calculé.
+ *
+ * Méthode : bootstrap apparié. Pour chaque rencontre on mesure de combien
+ * le modèle bat (ou perd contre) le taux de base, puis on rééchantillonne
+ * ces écarts avec remise pour obtenir la distribution de leur moyenne. Si
+ * la borne basse de l'intervalle à 95 % reste au-dessus de zéro, le gain
+ * survit au hasard de l'échantillon.
+ *
+ * Les fréquences de base sont figées sur l'ensemble complet plutôt que
+ * recalculées à chaque tirage : elles sont très stables, et les laisser
+ * bouger ferait varier l'étalon en même temps que la mesure.
+ */
+export function comparerAuTauxDeBase(rows, options = {}) {
+  const { iterations = 2000, graine = 7 } = options;
+  const base = etalonTauxDeBase(rows);
+  if (!base || rows.length < 20) return null;
+
+  // Écart par rencontre : positif = le modèle fait mieux que le taux de base.
+  const ecarts = rows.map(r =>
+    -Math.log(Math.max(base.taux[r.issue], PLANCHER))
+    + Math.log(Math.max(r.probaIssue, PLANCHER)));
+
+  const moyenne = ecarts.reduce((a, b) => a + b, 0) / ecarts.length;
+
+  const rnd = mulberry32(graine);
+  const tirages = new Array(iterations);
+  for (let i = 0; i < iterations; i++) {
+    let somme = 0;
+    for (let j = 0; j < ecarts.length; j++) {
+      somme += ecarts[Math.floor(rnd() * ecarts.length)];
+    }
+    tirages[i] = somme / ecarts.length;
+  }
+  tirages.sort((a, b) => a - b);
+  const q = (p) => tirages[Math.min(iterations - 1, Math.max(0, Math.round(p * (iterations - 1))))];
+
+  const basse = q(0.025), haute = q(0.975);
+  return {
+    n: rows.length,
+    moyenne,
+    basse,
+    haute,
+    // Exprimés en proportion du log-loss de l'étalon, pour se lire en %.
+    gain: moyenne / base.logLoss,
+    gainBasse: basse / base.logLoss,
+    gainHaute: haute / base.logLoss,
+    significatif: basse > 0,
+  };
 }
 
 /** Repères du hasard pur sur un marché à trois issues équiprobables. */
@@ -249,5 +309,5 @@ export function ecartCalibration(paniers) {
 
 export default {
   issueReelle, noterRencontre, resumer, paniersCalibration, ecartCalibration,
-  etalonTauxDeBase, gainRelatif, HASARD_1X2,
+  etalonTauxDeBase, gainRelatif, comparerAuTauxDeBase, HASARD_1X2,
 };

@@ -1,4 +1,4 @@
-sweep
+backtest 5
 
 # ── Comment s'en servir depuis un téléphone ──
 #
@@ -10,6 +10,11 @@ sweep
 #   etat           lecture seule : combien de rencontres, combien d'équipes prêtes
 #   backtest       note le modèle sur le passé (lecture seule)
 #   sweep          cherche de meilleurs réglages, validation hors échantillon
+#
+# Le 1er de chaque mois, le workflow collecte et remesure tout seul, et
+# n'ouvre une issue que si le gain devient significatif. Ce cron ne
+# s'exécutera qu'une fois cette branche fusionnée dans la branche par défaut
+# — GitHub ne planifie que depuis celle-ci.
 #   backtest 10    idem, en n'incluant que les équipes à 10 matchs ou plus
 #                  (le chiffre est le nombre de rencontres préalables exigé
 #                   de CHAQUE équipe pour qu'un match soit notable)

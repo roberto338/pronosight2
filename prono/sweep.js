@@ -21,7 +21,7 @@
 // C'est exactement l'erreur que commet learn.ts dans Prono-App : il ajuste
 // les forces sur les matchs ratés, puis se félicite sur ces mêmes matchs.
 
-import { resumer, etalonTauxDeBase, gainRelatif } from './engine/backtest.js';
+import { resumer, etalonTauxDeBase, gainRelatif, comparerAuTauxDeBase } from './engine/backtest.js';
 import { rejouer } from './engine/rejeu.js';
 import { chargerToutesRencontres } from './data/repository.js';
 import { DEMI_VIE_JOURS, K_SHRINKAGE } from './engine/ratings.js';
@@ -133,13 +133,29 @@ console.log(`│  VALIDATION : log-loss ${retenu.validation.logLoss.toFixed(4)} 
 console.log(`│  Favori ${pct(retenu.validation.tauxFavori)} contre ${pct(retenu.validation.tauxDomicile)} pour « toujours le domicile »`);
 console.log('└──────────────────────────────────────────────────────────────────────────');
 
+// L'intervalle de la combinaison retenue, sur la seule validation.
+const { notees: notesRetenues } = rejouer(rencontres, retenu.params);
+const testValidation = comparerAuTauxDeBase(notesRetenues.filter(r => r.date >= coupure));
+if (testValidation) {
+  console.log(`\nIntervalle à 95 % du gain en validation : ${signe(testValidation.gainBasse)} à ${signe(testValidation.gainHaute)}`);
+  console.log(testValidation.significatif
+    ? '  La borne basse est au-dessus de zéro : le gain survit au hasard de l\'échantillon.'
+    : '  L\'intervalle contient zéro : rien ne permet de conclure.');
+}
+
 // Combien de combinaisons tiennent en validation ? Si une seule, c'est du
 // bruit ; si beaucoup, l'effet est probablement réel.
 const tiennent = resultats.filter(r => r.validation.gain > 0).length;
 console.log(`\n${tiennent} combinaison(s) sur ${resultats.length} gardent un gain positif en validation.`);
 
 console.log('\n── Verdict ──');
-if (retenu.validation.gain <= 0) {
+if (testValidation && !testValidation.significatif) {
+  console.log('⛔ AUCUN GAIN SIGNIFICATIF.');
+  console.log(`   Le meilleur réglage rend ${signe(retenu.validation.gain)} en validation, mais son`);
+  console.log(`   intervalle à 95 % va de ${signe(testValidation.gainBasse)} à ${signe(testValidation.gainHaute)} : il contient zéro.`);
+  console.log(`   Sur ${testValidation.n} rencontres, ce chiffre n'est pas distinguable du hasard.`);
+  console.log('   NE RIEN CHANGER aux réglages sur cette base.');
+} else if (retenu.validation.gain <= 0) {
   console.log('⛔ AUCUN RÉGLAGE NE FONCTIONNE.');
   console.log('   La meilleure combinaison de la période de réglage ne bat pas le taux');
   console.log('   de base sur des données qu\'elle n\'a pas vues. Le problème n\'est donc');

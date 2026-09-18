@@ -46,6 +46,15 @@ on:
         default: ""
   push:
     paths: ["prono/DECLENCHEUR.txt"]
+  # ── Suivi mensuel, sans intervention ──
+  # Le 1er de chaque mois : collecte les nouvelles rencontres, remesure le
+  # modèle, et n'ouvre une issue QUE si le gain devient significatif.
+  #
+  # ⚠️ GitHub n'exécute les déclencheurs planifiés que depuis la branche par
+  # DÉFAUT. Tant que cette branche n'est pas fusionnée dans master, ce cron
+  # ne se déclenchera jamais — l'étape reste lançable à la main entre-temps.
+  schedule:
+    - cron: "0 5 1 * *"
 
 concurrency:
   group: moteur-statistique
@@ -64,6 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write        # nécessaire pour recommiter db/schema_neon.sql
+      issues: write          # le suivi mensuel n'alerte que par une issue
 
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +92,11 @@ jobs:
       # mistape à un doigt près sur un écran de téléphone.
       - id: choix
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ETAPE=mensuel
+            JOURS=180
+            CONFIRME=oui
+          elif [ "${{ github.event_name }}" = "push" ]; then
             CONTENU=$(head -1 prono/DECLENCHEUR.txt | tr -d '\r' | xargs)
             ETAPE=$(echo "$CONTENU" | awk '{print $1}')
             JOURS=$(echo "$CONTENU" | awk '{print $2}')
@@ -119,6 +133,68 @@ jobs:
             node prono/backtest.js --seuil=${{ steps.choix.outputs.jours }}
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
+
+      # ── Suivi mensuel ──
+      # Collecte puis mesure, dans le même job : mesurer sans avoir collecté
+      # rendrait le même verdict que le mois précédent, et laisserait croire
+      # que rien ne bouge alors que personne n'a regardé.
+      - name: Suivi mensuel — collecte puis mesure
+        id: mensuel
+        if: steps.choix.outputs.etape == 'mensuel'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '## Collecte'
+            echo '```'
+            node prono/backfill.js --jours=180 --appliquer
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+          node prono/backtest.js --seuil=5 | tee /tmp/backtest.txt
+          {
+            echo '## Mesure'
+            echo '```'
+            cat /tmp/backtest.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+          echo "verdict=$(sed -n 's/^::VERDICT:://p' /tmp/backtest.txt | tail -1)" >> $GITHUB_OUTPUT
+          echo "gain=$(sed -n 's/^::GAIN:://p' /tmp/backtest.txt | tail -1)"       >> $GITHUB_OUTPUT
+          echo "signif=$(sed -n 's/^::SIGNIFICATIF:://p' /tmp/backtest.txt | tail -1)" >> $GITHUB_OUTPUT
+          echo "n=$(sed -n 's/^::N:://p' /tmp/backtest.txt | tail -1)"             >> $GITHUB_OUTPUT
+
+      # Le silence est le comportement normal. Une issue n'est ouverte que
+      # lorsqu'il y a une décision à prendre — sinon l'alerte devient un
+      # bruit mensuel qu'on finit par ignorer, et elle ne sert plus à rien
+      # le jour où elle compte.
+      - name: Alerter seulement si le modèle devient exploitable
+        if: steps.choix.outputs.etape == 'mensuel' && steps.mensuel.outputs.verdict == 'exploitable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Moteur statistique : gain significatif ($(date +%Y-%m))" \
+            --body "Le suivi mensuel a mesuré un gain **significatif** du moteur statistique par rapport au taux de base.
+
+          | | |
+          |---|---|
+          | Gain de log-loss | ${{ steps.mensuel.outputs.gain }} % |
+          | Significatif | ${{ steps.mensuel.outputs.signif }} |
+          | Rencontres notées | ${{ steps.mensuel.outputs.n }} |
+
+          Le détail chiffré est dans le résumé du run : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Ce n'est pas un feu vert pour publier. C'est le premier moment où la question se pose sérieusement. À vérifier avant toute bascule :
+          - le gain tient-il aussi le mois suivant ?
+          - la courbe de fiabilité est-elle plate, ou penche-t-elle sur les hautes probabilités ?
+          - le favori du modèle bat-il « toujours le domicile » ?
+
+          Aucune de ces réponses ne se lit dans le seul pourcentage ci-dessus." \
+            --label "moteur" 2>/dev/null || gh issue create \
+            --title "Moteur statistique : gain significatif ($(date +%Y-%m))" \
+            --body "Gain ${{ steps.mensuel.outputs.gain }} %, significatif, sur ${{ steps.mensuel.outputs.n }} rencontres. Détail : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Balayage d'hyper-paramètres
         if: steps.choix.outputs.etape == 'sweep'

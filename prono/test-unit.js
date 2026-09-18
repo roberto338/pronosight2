@@ -24,7 +24,7 @@ import {
 } from './data/normalisation.js';
 import {
   issueReelle, noterRencontre, resumer, paniersCalibration,
-  ecartCalibration, etalonTauxDeBase, gainRelatif, HASARD_1X2,
+  ecartCalibration, etalonTauxDeBase, gainRelatif, comparerAuTauxDeBase, HASARD_1X2,
 } from './engine/backtest.js';
 import { rejouer } from './engine/rejeu.js';
 
@@ -689,6 +689,72 @@ vrai('Sans rétrécissement, le modèle s\'engage davantage',
 const fenetreCourte = rejouer(synth, { seuil: 3, fenetreJours: 20 });
 vrai('Une fenêtre courte réduit l\'historique retenu',
   fenetreCourte.notees.length <= rejeuComplet.notees.length);
+
+
+// ══════════════════════════════════════════════
+// Significativité — un pourcentage sans intervalle trompe
+// ══════════════════════════════════════════════
+//
+// Le balayage a rendu « +1,89 % en validation » sur 90 rencontres, alors
+// que 224 combinaisons sur 240 faisaient PIRE que le taux de base sur la
+// même période. Ces contrôles verrouillent l'intervalle qui manquait.
+
+// Un modèle qui annonce exactement les fréquences de base : écart nul, et
+// surtout NON significatif — l'intervalle doit contenir zéro.
+const memeQueBase = [];
+for (let i = 0; i < 120; i++) {
+  const scores = [[2, 0], [3, 1], [1, 1], [0, 2]][i % 4];
+  memeQueBase.push(noterRencontre({ butsDom: scores[0], butsExt: scores[1] },
+    parCleTest(0.5, 0.25, 0.25, 0.5, 0.5)));
+}
+const compBase = comparerAuTauxDeBase(memeQueBase);
+presque('Modèle identique au taux de base : écart nul', compBase.moyenne, 0, 1e-12);
+verifie('Et donc non significatif', compBase.significatif, false);
+vrai('L\'intervalle contient zéro', compBase.basse <= 0 && compBase.haute >= 0);
+
+// Un modèle qui voit juste à chaque fois doit ressortir significatif.
+const clairvoyant = [];
+for (let i = 0; i < 120; i++) {
+  const scores = [[2, 0], [3, 1], [1, 1], [0, 2]][i % 4];
+  const issue = issueReelle(scores[0], scores[1]);
+  const p = { '1': 0.1, 'X': 0.1, '2': 0.1 };
+  p[issue] = 0.8;
+  clairvoyant.push(noterRencontre({ butsDom: scores[0], butsExt: scores[1] },
+    parCleTest(p['1'], p['X'], p['2'], 0.5, 0.5)));
+}
+const compBon = comparerAuTauxDeBase(clairvoyant);
+vrai('Un modèle clairvoyant est significatif', compBon.significatif,
+  `IC [${compBon.basse.toFixed(4)} ; ${compBon.haute.toFixed(4)}]`);
+vrai('Sa borne basse est strictement positive', compBon.basse > 0);
+vrai('Son gain relatif est net', compBon.gain > 0.2, `gain = ${compBon.gain}`);
+
+// Un modèle systématiquement à côté doit ressortir négatif, pas « non concluant ».
+const aCote = [];
+for (let i = 0; i < 120; i++) {
+  const scores = [[2, 0], [3, 1], [1, 1], [0, 2]][i % 4];
+  const issue = issueReelle(scores[0], scores[1]);
+  const p = { '1': 0.45, 'X': 0.45, '2': 0.45 };
+  p[issue] = 0.1;
+  const total = p['1'] + p['X'] + p['2'];
+  aCote.push(noterRencontre({ butsDom: scores[0], butsExt: scores[1] },
+    parCleTest(p['1'] / total, p['X'] / total, p['2'] / total, 0.5, 0.5)));
+}
+const compMauvais = comparerAuTauxDeBase(aCote);
+vrai('Un mauvais modèle a une borne haute négative', compMauvais.haute < 0,
+  `IC [${compMauvais.basse.toFixed(4)} ; ${compMauvais.haute.toFixed(4)}]`);
+verifie('Et n\'est évidemment pas significatif', compMauvais.significatif, false);
+
+// Reproductible : même graine, même intervalle. Sans quoi deux lectures du
+// même backtest donneraient deux verdicts.
+verifie('Bootstrap déterministe',
+  comparerAuTauxDeBase(clairvoyant).basse, compBon.basse);
+
+// Un échantillon minuscule ne doit pas produire de verdict du tout.
+verifie('Trop peu de rencontres : pas de test', comparerAuTauxDeBase(memeQueBase.slice(0, 10)), null);
+
+// L'ordre des rencontres ne change pas la mesure.
+presque('Insensible à l\'ordre',
+  comparerAuTauxDeBase([...clairvoyant].reverse()).moyenne, compBon.moyenne, 1e-12);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);
