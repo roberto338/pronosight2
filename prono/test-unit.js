@@ -27,6 +27,9 @@ import {
   ecartCalibration, etalonTauxDeBase, gainRelatif, comparerAuTauxDeBase, HASARD_1X2,
 } from './engine/backtest.js';
 import { rejouer } from './engine/rejeu.js';
+import {
+  gainPari, resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, BANDES,
+} from './engine/audit.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -755,6 +758,103 @@ verifie('Trop peu de rencontres : pas de test', comparerAuTauxDeBase(memeQueBase
 // L'ordre des rencontres ne change pas la mesure.
 presque('Insensible à l\'ordre',
   comparerAuTauxDeBase([...clairvoyant].reverse()).moyenne, compBon.moyenne, 1e-12);
+
+
+// ══════════════════════════════════════════════
+// Audit de Victor — le rendement, pas le taux de réussite
+// ══════════════════════════════════════════════
+
+presque('Pari gagné à la cote 2,50', gainPari(true, 2.5), 1.5);
+presque('Pari perdu',                gainPari(false, 2.5), -1);
+verifie('Cote invalide',             gainPari(true, 0.9), null);
+verifie('Cote absente',              gainPari(true, null), null);
+
+// Le contrôle qui dit tout : 70 % de réussite à la cote 1,20 FAIT PERDRE.
+// Sept gains de 0,20 contre trois pertes de 1 → −1,60 sur 10 mises.
+const septSurDix = [
+  ...Array.from({ length: 7 }, () => ({ correct: true, cote: 1.20 })),
+  ...Array.from({ length: 3 }, () => ({ correct: false, cote: 1.20 })),
+];
+const resSept = resumerParis(septSurDix);
+presque('70 % de réussite…',            resSept.tauxReussite, 0.7);
+presque('…et pourtant un rendement négatif', resSept.roi, -0.16, 1e-9);
+presque('Gain total',                   resSept.gainTotal, -1.6, 1e-9);
+// À la cote 1,20 il faut gagner 1/1,20 = 83,3 % pour être à l'équilibre.
+presque('Seuil de rentabilité', resSept.tauxRentabilite, 0.8333333, 1e-6);
+vrai('Le taux de réussite est sous le seuil', resSept.tauxReussite < resSept.tauxRentabilite);
+
+// Et l'inverse : 40 % de réussite à la cote 3,00 fait GAGNER.
+const quatreSurDix = [
+  ...Array.from({ length: 4 }, () => ({ correct: true, cote: 3.00 })),
+  ...Array.from({ length: 6 }, () => ({ correct: false, cote: 3.00 })),
+];
+const resQuatre = resumerParis(quatreSurDix);
+presque('40 % de réussite…',                 resQuatre.tauxReussite, 0.4);
+presque('…et un rendement positif', resQuatre.roi, 0.2, 1e-9);
+
+presque('Équilibre exact', resumerParis([
+  { correct: true, cote: 2.0 }, { correct: false, cote: 2.0 },
+]).roi, 0, 1e-12);
+verifie('Ensemble vide', resumerParis([]).n, 0);
+verifie('Paris sans cote écartés', resumerParis([{ correct: true, cote: null }]).n, 0);
+
+// ── Le rendement est-il distinguable de zéro ? ──
+const rnd = () => mulberry32(11)();
+const alea = mulberry32(11);
+const gagnantNet = Array.from({ length: 200 }, (_, i) => ({ correct: i % 2 === 0, cote: 2.6 }));
+const bsGagnant = bootstrapRoi(gagnantNet, { iterations: 500, rnd: mulberry32(3) });
+vrai('Un rendement franchement positif est détecté', bsGagnant.rentable,
+  `IC [${bsGagnant.basse.toFixed(3)} ; ${bsGagnant.haute.toFixed(3)}]`);
+
+const perdantNet = Array.from({ length: 200 }, (_, i) => ({ correct: i % 5 === 0, cote: 1.5 }));
+const bsPerdant = bootstrapRoi(perdantNet, { iterations: 500, rnd: mulberry32(3) });
+vrai('Un rendement franchement négatif est détecté', bsPerdant.perdant,
+  `IC [${bsPerdant.basse.toFixed(3)} ; ${bsPerdant.haute.toFixed(3)}]`);
+vrai('Et il n\'est pas déclaré rentable', bsPerdant.rentable === false);
+
+// À l'équilibre, l'intervalle doit contenir zéro : ni rentable, ni perdant.
+const equilibre = Array.from({ length: 200 }, (_, i) => ({ correct: i % 2 === 0, cote: 2.0 }));
+const bsEquilibre = bootstrapRoi(equilibre, { iterations: 500, rnd: mulberry32(3) });
+verifie('À l\'équilibre : pas rentable', bsEquilibre.rentable, false);
+verifie('À l\'équilibre : pas perdant',  bsEquilibre.perdant, false);
+
+verifie('Trop peu de paris : pas de verdict',
+  bootstrapRoi(equilibre.slice(0, 10), { iterations: 100, rnd: mulberry32(3) }), null);
+verifie('Sans générateur : pas de verdict', bootstrapRoi(equilibre, { iterations: 100 }), null);
+
+// ── Les bandes de confiance tiennent-elles leur promesse ? ──
+const paris = [
+  // « Très élevée » promet ≥ 75 % : 6 sur 10 ne suffit pas.
+  ...Array.from({ length: 6 },  () => ({ correct: true,  cote: 1.5, confianceScore: 5 })),
+  ...Array.from({ length: 4 },  () => ({ correct: false, cote: 1.5, confianceScore: 5 })),
+  // « Élevée » promet 65–75 % : 7 sur 10 tient.
+  ...Array.from({ length: 7 },  () => ({ correct: true,  cote: 2.0, confianceScore: 4 })),
+  ...Array.from({ length: 3 },  () => ({ correct: false, cote: 2.0, confianceScore: 4 })),
+];
+const bandes = verifierBandes(paris);
+const b5 = bandes.find(b => b.score === 5);
+const b4 = bandes.find(b => b.score === 4);
+verifie('Promesse de la bande 5', b5.promesse, '≥ 75 %');
+presque('Réalisé de la bande 5',  b5.realise, 0.6);
+verifie('Bande 5 : promesse NON tenue', b5.tientPromesse, false);
+presque('Écart à la promesse', b5.ecart, -0.15, 1e-9);
+verifie('Bande 4 : promesse tenue', b4.tientPromesse, true);
+verifie('Bandes sans données ignorées', bandes.some(b => b.score === 3), false);
+
+// Faire mieux que promis n'est pas un manquement.
+const surperformante = Array.from({ length: 20 }, (_, i) => ({ correct: i < 19, cote: 1.5, confianceScore: 4 }));
+verifie('Dépasser la promesse la tient', verifierBandes(surperformante)[0].tientPromesse, true);
+
+// L'échelle doit au moins être ordonnée : 5 passe plus souvent que 4.
+verifie('Échelle ordonnée détectée', echelleOrdonnee([
+  { score: 5, n: 20, realise: 0.80 }, { score: 4, n: 20, realise: 0.70 }, { score: 3, n: 20, realise: 0.60 },
+]), true);
+verifie('Échelle inversée détectée', echelleOrdonnee([
+  { score: 5, n: 20, realise: 0.55 }, { score: 4, n: 20, realise: 0.70 },
+]), false);
+verifie('Pas assez de données pour juger l\'échelle', echelleOrdonnee([{ score: 5, n: 3, realise: 0.9 }]), null);
+
+verifie('Bande 5 : borne annoncée', BANDES[5].min, 0.75);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);

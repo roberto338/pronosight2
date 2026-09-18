@@ -17,6 +17,7 @@
 #         etat        → lecture seule
 #         backtest    → note le modèle sur le passé, lecture seule
 #         sweep       → cherche de meilleurs réglages, lecture seule
+#         audit       → note les signaux déjà publiés par Victor, lecture seule
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
@@ -35,7 +36,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -195,6 +196,17 @@ jobs:
             --label "moteur" 2>/dev/null || gh issue create \
             --title "Moteur statistique : gain significatif ($(date +%Y-%m))" \
             --body "Gain ${{ steps.mensuel.outputs.gain }} %, significatif, sur ${{ steps.mensuel.outputs.n }} rencontres. Détail : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Audit de Victor
+        if: steps.choix.outputs.etape == 'audit'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/audit-victor.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
 
       - name: Balayage d'hyper-paramètres
         if: steps.choix.outputs.etape == 'sweep'

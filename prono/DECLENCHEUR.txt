@@ -1,4 +1,4 @@
-backtest 5
+audit
 
 # ── Comment s'en servir depuis un téléphone ──
 #
@@ -10,6 +10,7 @@ backtest 5
 #   etat           lecture seule : combien de rencontres, combien d'équipes prêtes
 #   backtest       note le modèle sur le passé (lecture seule)
 #   sweep          cherche de meilleurs réglages, validation hors échantillon
+#   audit          note les signaux déjà publiés par Victor (lecture seule)
 #
 # Le 1er de chaque mois, le workflow collecte et remesure tout seul, et
 # n'ouvre une issue que si le gain devient significatif. Ce cron ne
