@@ -10,6 +10,8 @@ backtest 5
 #   etat           lecture seule : combien de rencontres, combien d'équipes prêtes
 #   backtest       note le modèle sur le passé (lecture seule)
 #   backtest 10    idem, en n'incluant que les équipes à 10 matchs ou plus
+#                  (le chiffre est le nombre de rencontres préalables exigé
+#                   de CHAQUE équipe pour qu'un match soit notable)
 #   apercu         simulation de la migration, aucune écriture
 #   migration      applique la 014, régénère db/schema_neon.sql et le commite
 #   backfill       collecte 90 jours de résultats

@@ -26,6 +26,71 @@
 // courbe de fiabilité, plus bas. Un modèle peut avoir un bon log-loss et
 // mentir systématiquement de dix points.
 
+/**
+ * ÉTALON DE RÉFÉRENCE — pourquoi « mieux que le hasard » ne veut rien dire.
+ *
+ * Comparer un modèle au hasard uniforme (33/33/33) est trop facile : le
+ * football n'est pas uniforme. Les équipes à domicile gagnent nettement plus
+ * souvent, et un « modèle » qui se contenterait d'annoncer les FRÉQUENCES
+ * OBSERVÉES du championnat, sans rien savoir des équipes, bat déjà le hasard
+ * uniforme sans contenir la moindre information.
+ *
+ * C'est donc lui, le taux de base, qui est la vraie barre à franchir. Un
+ * modèle qui ne le dépasse pas n'apporte rien, quelle que soit sa calibration.
+ *
+ * Premier passage du backtest sur 718 rencontres : log-loss 1,083 contre
+ * 1,099 pour le hasard uniforme — ce que le verdict d'alors saluait d'un ✅.
+ * Sauf qu'aucune probabilité ne dépassait 60 % : le modèle était calibré
+ * parce qu'il ne s'engageait jamais. La calibration sans pouvoir discriminant
+ * est une forme polie de silence.
+ */
+export function etalonTauxDeBase(rows) {
+  const n = rows.length;
+  if (n === 0) return null;
+
+  const compte = { '1': 0, 'X': 0, '2': 0 };
+  let over = 0, btts = 0;
+  for (const r of rows) {
+    compte[r.issue]++;
+    if (r.over.reel) over++;
+    if (r.btts.reel) btts++;
+  }
+  const taux = { '1': compte['1'] / n, 'X': compte['X'] / n, '2': compte['2'] / n };
+  const tauxOver = over / n, tauxBtts = btts / n;
+
+  // Log-loss et Brier d'un prédicteur qui annoncerait CES fréquences partout.
+  let logLoss = 0, brier = 0;
+  for (const r of rows) {
+    logLoss -= Math.log(Math.max(taux[r.issue], PLANCHER));
+    for (const k of ['1', 'X', '2']) brier += (taux[k] - (k === r.issue ? 1 : 0)) ** 2;
+  }
+
+  // Brier binaire d'une constante p sur une base q : q(1−p)² + (1−q)p².
+  const brierConstante = (q) => q * (1 - q) ** 2 + (1 - q) * q ** 2;
+
+  return {
+    taux,
+    tauxOver,
+    tauxBtts,
+    logLoss: logLoss / n,
+    brier: brier / n,
+    brierOver: brierConstante(tauxOver),
+    brierBtts: brierConstante(tauxBtts),
+    // « Toujours parier le domicile » : le réflexe du parieur du dimanche,
+    // et une barre que beaucoup de modèles publiés ne franchissent pas.
+    tauxToujoursDomicile: taux['1'],
+  };
+}
+
+/**
+ * Gain relatif d'un score par rapport à son étalon. Positif = le modèle
+ * apporte quelque chose ; négatif ou nul = il n'apporte rien.
+ */
+export function gainRelatif(score, etalon) {
+  if (!Number.isFinite(score) || !Number.isFinite(etalon) || etalon === 0) return null;
+  return (etalon - score) / etalon;
+}
+
 /** Repères du hasard pur sur un marché à trois issues équiprobables. */
 export const HASARD_1X2 = {
   logLoss: Math.log(3),        // 1,0986
@@ -183,5 +248,6 @@ export function ecartCalibration(paniers) {
 }
 
 export default {
-  issueReelle, noterRencontre, resumer, paniersCalibration, ecartCalibration, HASARD_1X2,
+  issueReelle, noterRencontre, resumer, paniersCalibration, ecartCalibration,
+  etalonTauxDeBase, gainRelatif, HASARD_1X2,
 };

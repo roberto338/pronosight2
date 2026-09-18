@@ -24,7 +24,7 @@ import {
 } from './data/normalisation.js';
 import {
   issueReelle, noterRencontre, resumer, paniersCalibration,
-  ecartCalibration, HASARD_1X2,
+  ecartCalibration, etalonTauxDeBase, gainRelatif, HASARD_1X2,
 } from './engine/backtest.js';
 
 let ok = 0, ko = 0;
@@ -514,6 +514,67 @@ presque('Modèle calibré : annoncé = réalisé', b50.ecart, 0, 1e-9);
 verifie('ECE sur une liste vide', ecartCalibration([]), null);
 presque('ECE pondéré par l\'effectif',
   ecartCalibration([{ n: 90, ecart: 0.01 }, { n: 10, ecart: 0.1 }]), 0.019, 1e-9);
+
+
+// ══════════════════════════════════════════════
+// Étalon du taux de base — la vraie barre à franchir
+// ══════════════════════════════════════════════
+//
+// Le premier passage du backtest a rendu un ✅ sur un modèle qui n'avait
+// aucun pouvoir discriminant : log-loss 1,083 contre 1,099 pour le hasard
+// uniforme, mais aucune probabilité au-dessus de 60 %. Il était calibré
+// parce qu'il ne s'engageait jamais. Ces contrôles verrouillent la mesure
+// qui manquait.
+
+const rencontres4 = [
+  noterRencontre({ butsDom: 2, butsExt: 0 }, parCleTest(0.5, 0.3, 0.2, 0.6, 0.5)),   // 1, over non, btts non
+  noterRencontre({ butsDom: 3, butsExt: 1 }, parCleTest(0.5, 0.3, 0.2, 0.6, 0.5)),   // 1, over oui, btts oui
+  noterRencontre({ butsDom: 1, butsExt: 1 }, parCleTest(0.5, 0.3, 0.2, 0.6, 0.5)),   // X, over non, btts oui
+  noterRencontre({ butsDom: 0, butsExt: 2 }, parCleTest(0.5, 0.3, 0.2, 0.6, 0.5)),   // 2, over non, btts non
+];
+const etalon4 = etalonTauxDeBase(rencontres4);
+
+presque('Fréquence du 1',  etalon4.taux['1'], 0.5);
+presque('Fréquence du X',  etalon4.taux['X'], 0.25);
+presque('Fréquence du 2',  etalon4.taux['2'], 0.25);
+presque('Taux Over relevé',  etalon4.tauxOver, 0.25);
+presque('Taux BTTS relevé',  etalon4.tauxBtts, 0.5);
+
+// Calculé à la main :
+//   log-loss = −(2·ln 0,5 + ln 0,25 + ln 0,25) / 4 = 4,158883 / 4 = 1,039721
+presque('Log-loss du taux de base', etalon4.logLoss, 1.0397208, 1e-6);
+// Brier : victoire dom. → (0,5−1)² + 0,25² + 0,25² = 0,375 (deux fois)
+//         nul          → 0,5² + (0,25−1)² + 0,25² = 0,875
+//         victoire ext.→ 0,5² + 0,25² + (0,25−1)² = 0,875
+//         (0,375×2 + 0,875 + 0,875) / 4 = 2,5 / 4 = 0,625
+presque('Brier du taux de base', etalon4.brier, 0.625, 1e-9);
+// Brier d'une constante p sur une base q : q(1−p)² + (1−q)p², ici q = p.
+//   Over : 0,25×0,5625 + 0,75×0,0625 = 0,1875
+presque('Brier Over du taux de base', etalon4.brierOver, 0.1875, 1e-9);
+presque('Brier BTTS du taux de base', etalon4.brierBtts, 0.25, 1e-9);
+presque('Barre « toujours le domicile »', etalon4.tauxToujoursDomicile, 0.5);
+verifie('Étalon sur ensemble vide', etalonTauxDeBase([]), null);
+
+// LE contrôle qui compte : un modèle qui annonce exactement les fréquences
+// de base ne doit dégager AUCUN gain. C'est la définition de « n'apporte
+// rien », et c'est exactement ce qu'un ECE nul ne sait pas détecter.
+const platEtCalibre = [
+  noterRencontre({ butsDom: 2, butsExt: 0 }, parCleTest(0.5, 0.25, 0.25, 0.5, 0.5)),
+  noterRencontre({ butsDom: 3, butsExt: 1 }, parCleTest(0.5, 0.25, 0.25, 0.5, 0.5)),
+  noterRencontre({ butsDom: 1, butsExt: 1 }, parCleTest(0.5, 0.25, 0.25, 0.5, 0.5)),
+  noterRencontre({ butsDom: 0, butsExt: 2 }, parCleTest(0.5, 0.25, 0.25, 0.5, 0.5)),
+];
+const resPlat = resumer(platEtCalibre);
+const etalonPlat = etalonTauxDeBase(platEtCalibre);
+presque('Modèle plat : log-loss identique à son étalon', resPlat.logLoss, etalonPlat.logLoss, 1e-12);
+presque('Modèle plat : gain nul', gainRelatif(resPlat.logLoss, etalonPlat.logLoss), 0, 1e-12);
+// Et pourtant sa calibration est parfaite — d'où le piège.
+presque('Modèle plat : ECE nul malgré tout',
+  ecartCalibration(paniersCalibration(platEtCalibre)), 0, 1e-9);
+
+presque('Gain positif quand le modèle fait mieux', gainRelatif(0.9, 1.0), 0.1, 1e-12);
+presque('Gain négatif quand il fait moins bien',   gainRelatif(1.1, 1.0), -0.1, 1e-12);
+verifie('Gain indéfini sans étalon', gainRelatif(0.9, 0), null);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);

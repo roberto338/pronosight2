@@ -25,7 +25,10 @@
 import { calculerForces, calculerLambdas } from './engine/ratings.js';
 import { matriceScores } from './engine/poisson.js';
 import { marchesDepuisMatrice } from './engine/markets.js';
-import { noterRencontre, resumer, paniersCalibration, ecartCalibration, HASARD_1X2 } from './engine/backtest.js';
+import {
+  noterRencontre, resumer, paniersCalibration, ecartCalibration,
+  etalonTauxDeBase, gainRelatif, HASARD_1X2,
+} from './engine/backtest.js';
 import { moyennesDepuisLignes } from './data/normalisation.js';
 import { chargerToutesRencontres } from './data/repository.js';
 import { MODEL_VERSION } from './engine/index.js';
@@ -115,21 +118,31 @@ if (notees.length === 0) {
 
 // ── Résultats ──
 const r = resumer(notees);
+const base = etalonTauxDeBase(notees);
 const paniers = paniersCalibration(notees);
 const ece = ecartCalibration(paniers);
 
-console.log('┌─ Performance ────────────────────────────────────────');
+const gain = (x) => {
+  const g = gainRelatif(x.score, x.etalon);
+  if (g == null) return '     ';
+  const signe = g >= 0 ? '+' : '−';
+  return `${signe}${(Math.abs(g) * 100).toFixed(1).padStart(4)} %`;
+};
+
+console.log('┌─ Performance ────────────────────────────────────────────────────────');
 console.log(`│ Rencontres notées          ${String(r.n).padStart(7)}`);
+console.log('│');
+console.log(`│ Fréquences observées       1 : ${pct(base.taux['1'])}   X : ${pct(base.taux['X'])}   2 : ${pct(base.taux['2'])}`);
+console.log('│');
+console.log('│                            modèle   taux de base   hasard    gain');
+console.log(`│ Log-loss                   ${num(r.logLoss)}       ${num(base.logLoss)}     ${num(HASARD_1X2.logLoss)}   ${gain({ score: r.logLoss, etalon: base.logLoss })}`);
+console.log(`│ Brier (1X2)                ${num(r.brier)}       ${num(base.brier)}     ${num(HASARD_1X2.brier)}   ${gain({ score: r.brier, etalon: base.brier })}`);
+console.log(`│ Brier Over 2,5             ${num(r.brierOver)}       ${num(base.brierOver)}     0.250   ${gain({ score: r.brierOver, etalon: base.brierOver })}`);
+console.log(`│ Brier BTTS                 ${num(r.brierBtts)}       ${num(base.brierBtts)}     0.250   ${gain({ score: r.brierBtts, etalon: base.brierBtts })}`);
+console.log('│');
 console.log(`│ Taux de réussite du favori ${pct(r.tauxFavori)}`);
-console.log('│');
-console.log(`│ Log-loss                   ${num(r.logLoss)}   (hasard : ${num(HASARD_1X2.logLoss)})`);
-console.log(`│ Score de Brier (1X2)       ${num(r.brier)}   (hasard : ${num(HASARD_1X2.brier)})`);
-console.log(`│ Brier Over 2,5             ${num(r.brierOver)}   (hasard : 0.250)`);
-console.log(`│ Brier BTTS                 ${num(r.brierBtts)}   (hasard : 0.250)`);
-console.log('│');
-console.log(`│ Over 2,5 réalisés          ${pct(r.tauxOver)}`);
-console.log(`│ BTTS réalisés              ${pct(r.tauxBtts)}`);
-console.log('└──────────────────────────────────────────────────────');
+console.log(`│ « Toujours le domicile »   ${pct(base.tauxToujoursDomicile)}   ← la barre du parieur du dimanche`);
+console.log('└──────────────────────────────────────────────────────────────────────');
 
 console.log('\n┌─ Fiabilité : le modèle dit-il la vérité ? ───────────');
 console.log('│  panier        annoncé   réalisé    écart       n');
@@ -142,19 +155,49 @@ console.log('└─────────────────────�
 console.log(`\nÉcart de calibration moyen (ECE) : ${pct(ece)}`);
 
 // ── Verdict ──
+//
+// Deux questions distinctes, et il faut répondre oui aux DEUX.
+//
+//   DISCRIMINE-T-IL ?  Bat-il le taux de base, c'est-à-dire un prédicteur
+//                      qui ne connaît rien aux équipes et se contente
+//                      d'annoncer les fréquences du championnat ?
+//   MENT-IL ?          Ses pourcentages correspondent-ils au réalisé ?
+//
+// Un modèle peut être parfaitement calibré et parfaitement inutile : celui
+// qui annonce toujours les fréquences de base a un ECE nul par construction.
+// Ne tester que la calibration, c'est se décerner une bonne note pour avoir
+// refusé de s'engager.
 console.log('\n── Verdict ──');
-const mieuxQueHasard = r.logLoss < HASARD_1X2.logLoss && r.brier < HASARD_1X2.brier;
-if (!mieuxQueHasard) {
-  console.log('⛔ Le modèle ne fait pas mieux que le hasard. Rien ne doit être publié.');
-} else if (ece > 0.08) {
-  console.log(`⛔ Mal calibré : ${pct(ece)} d'écart moyen entre annoncé et réalisé.`);
-  console.log('   Le modèle discrimine, mais ses pourcentages mentent. Ne pas publier de %.');
-} else if (ece > 0.04) {
-  console.log(`⚠️  Calibration passable : ${pct(ece)} d'écart moyen.`);
-  console.log('   Utilisable en affichant les intervalles, pas en affichant un chiffre nu.');
+const gainLog = gainRelatif(r.logLoss, base.logLoss);
+const gainBrier = gainRelatif(r.brier, base.brier);
+const discrimine = gainLog > 0.01 && gainBrier > 0;
+const calibre = ece <= 0.04;
+
+console.log(`Pouvoir discriminant : ${gainLog > 0 ? '+' : '−'}${(Math.abs(gainLog) * 100).toFixed(1)} % de log-loss contre le taux de base`);
+console.log(`Calibration          : ${pct(ece)} d'écart moyen`);
+console.log('');
+
+if (!discrimine) {
+  console.log('⛔ LE MODÈLE N\'APPORTE RIEN.');
+  console.log('   Il ne bat pas un prédicteur qui annoncerait simplement les fréquences');
+  console.log('   du championnat sans rien savoir des équipes. Une bonne calibration ne');
+  console.log('   rachète pas cela : annoncer les taux de base est calibré par nature.');
+  console.log('   NE RIEN PUBLIER. Chercher d\'où vient le manque de pouvoir discriminant');
+  console.log('   avant toute autre chose.');
+  process.exitCode = 0;
+} else if (!calibre) {
+  console.log(`⚠️  Discriminant mais mal calibré (${pct(ece)} d'écart).`);
+  console.log('   Le classement des issues est informatif, les pourcentages mentent.');
+  console.log('   Publier un ordre, jamais un chiffre nu.');
 } else {
-  console.log(`✅ Calibré à ${pct(ece)} d'écart moyen, et meilleur que le hasard.`);
+  console.log(`✅ Discriminant (+${(gainLog * 100).toFixed(1)} %) ET calibré (${pct(ece)}).`);
 }
+
+if (r.tauxFavori < base.tauxToujoursDomicile) {
+  console.log(`\n⚠️  Le favori du modèle (${pct(r.tauxFavori)}) fait moins bien que`);
+  console.log(`   « toujours parier le domicile » (${pct(base.tauxToujoursDomicile)}).`);
+}
+
 console.log('\nRappel : ces chiffres portent sur le passé. Ils ne promettent aucun gain futur.');
 
 await pool.end();
