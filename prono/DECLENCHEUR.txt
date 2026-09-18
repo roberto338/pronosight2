@@ -1,4 +1,4 @@
-backtest 5
+sweep
 
 # ── Comment s'en servir depuis un téléphone ──
 #
@@ -9,6 +9,7 @@ backtest 5
 #   rien           ne fait rien (état de repos, laisser ainsi après usage)
 #   etat           lecture seule : combien de rencontres, combien d'équipes prêtes
 #   backtest       note le modèle sur le passé (lecture seule)
+#   sweep          cherche de meilleurs réglages, validation hors échantillon
 #   backtest 10    idem, en n'incluant que les équipes à 10 matchs ou plus
 #                  (le chiffre est le nombre de rencontres préalables exigé
 #                   de CHAQUE équipe pour qu'un match soit notable)

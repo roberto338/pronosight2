@@ -26,6 +26,7 @@ import {
   issueReelle, noterRencontre, resumer, paniersCalibration,
   ecartCalibration, etalonTauxDeBase, gainRelatif, HASARD_1X2,
 } from './engine/backtest.js';
+import { rejouer } from './engine/rejeu.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -575,6 +576,119 @@ presque('Modèle plat : ECE nul malgré tout',
 presque('Gain positif quand le modèle fait mieux', gainRelatif(0.9, 1.0), 0.1, 1e-12);
 presque('Gain négatif quand il fait moins bien',   gainRelatif(1.1, 1.0), -0.1, 1e-12);
 verifie('Gain indéfini sans étalon', gainRelatif(0.9, 0), null);
+
+
+// ══════════════════════════════════════════════
+// Rejeu chronologique — l'invariant qui rend la mesure valable
+// ══════════════════════════════════════════════
+//
+// Ces contrôles tournent sur des données fabriquées, donc sans base : c'est
+// la seule façon de vérifier le rejeu avant de le lancer sur la production.
+
+function rencontresSynthetiques(nEquipes = 8, nJournees = 14) {
+  const out = [];
+  let jour = 0;
+  for (let j = 0; j < nJournees; j++) {
+    for (let e = 0; e < nEquipes; e += 2) {
+      const dom = (e + j) % nEquipes;
+      const ext = (e + j + 1 + Math.floor(j / 2)) % nEquipes;
+      if (dom === ext) continue;
+      jour += 3;
+      out.push({
+        joue_le: new Date(Date.UTC(2026, 2, 1) + jour * 864e5).toISOString().slice(0, 10),
+        competition: 'Test', competition_code: 'TST',
+        equipe_dom_id: `t${dom}`, equipe_ext_id: `t${ext}`,
+        equipe_dom: `Équipe ${dom}`, equipe_ext: `Équipe ${ext}`,
+        // Scores déterministes, avec une force décroissante par indice :
+        // l'équipe 0 marque plus que l'équipe 7.
+        buts_dom: (dom + j) % 4, buts_ext: (ext + j) % 3,
+      });
+    }
+  }
+  return out;
+}
+
+const synth = rencontresSynthetiques();
+vrai('Jeu synthétique non vide', synth.length > 40, `${synth.length} rencontres`);
+
+const rejeuComplet = rejouer(synth, { seuil: 3 });
+vrai('Le rejeu note quelque chose', rejeuComplet.notees.length > 0,
+  `${rejeuComplet.notees.length} notées, ${rejeuComplet.ignorees} ignorées`);
+verifie('Tout est noté ou ignoré, rien ne disparaît',
+  rejeuComplet.notees.length + rejeuComplet.ignorees, synth.length);
+
+// LE contrôle central : aucune fuite du futur. Noter les 30 premières
+// rencontres doit donner EXACTEMENT le même résultat que noter les 30
+// premières d'un rejeu complet. Si une seule valeur diffère, c'est qu'une
+// rencontre postérieure a influencé une prédiction antérieure.
+const rejeuPartiel = rejouer(synth.slice(0, 30), { seuil: 3 });
+const communes = Math.min(rejeuPartiel.notees.length, rejeuComplet.notees.length);
+vrai('Au moins une rencontre commune à comparer', communes > 0, `${communes}`);
+let fuiteDetectee = false;
+for (let i = 0; i < communes; i++) {
+  const a = rejeuPartiel.notees[i], b = rejeuComplet.notees[i];
+  if (a.affiche !== b.affiche || Math.abs(a.probas['1'] - b.probas['1']) > 1e-12) {
+    fuiteDetectee = true;
+    break;
+  }
+}
+verifie('Aucune fuite du futur dans le rejeu', fuiteDetectee, false);
+
+// Le seuil est respecté : rien n'est noté avec moins d'historique qu'exigé.
+const seuilHaut = rejouer(synth, { seuil: 6 });
+vrai('Seuil respecté sur les deux équipes',
+  seuilHaut.notees.every(r => r.nDom >= 6 && r.nExt >= 6));
+vrai('Un seuil plus haut note moins de rencontres',
+  seuilHaut.notees.length < rejeuComplet.notees.length,
+  `${seuilHaut.notees.length} contre ${rejeuComplet.notees.length}`);
+
+// Déterminisme : deux rejeux identiques, au bit près.
+verifie('Rejeu reproductible',
+  JSON.stringify(rejouer(synth, { seuil: 3 }).notees),
+  JSON.stringify(rejeuComplet.notees));
+
+// Séparation domicile / extérieur : le seuil porte alors sur les seuls
+// matchs du bon lieu, donc moins de rencontres franchissent la barre.
+const parLieu = rejouer(synth, { seuil: 3, separerLieu: true });
+vrai('La séparation par lieu est plus exigeante en données',
+  parLieu.notees.length <= rejeuComplet.notees.length,
+  `${parLieu.notees.length} contre ${rejeuComplet.notees.length}`);
+vrai('Les probabilités restent valides avec séparation',
+  parLieu.notees.every(r => Math.abs(r.probas['1'] + r.probas['X'] + r.probas['2'] - 1) < 1e-9));
+
+// Les paramètres changent réellement le résultat — sinon le balayage
+// mesurerait du bruit et retiendrait n'importe quoi.
+const rhoNul = rejouer(synth, { seuil: 3, rho: 0 });
+const rhoFort = rejouer(synth, { seuil: 3, rho: -0.15 });
+vrai('Rho modifie la probabilité du nul',
+  Math.abs(rhoNul.notees[0].probas['X'] - rhoFort.notees[0].probas['X']) > 1e-6);
+// Le rétrécissement ne tire PAS vers 33/33/33 — il tire vers le taux de
+// base du championnat, avantage du terrain compris. La première écriture de
+// ce contrôle supposait l'inverse et a échoué : k=20 donnait P(1) = 0,452
+// contre 0,403 à k=0, soit PLUS loin de 1/3, pas moins.
+//
+// C'est la propriété qui explique le verdict du backtest : plus k est fort,
+// plus le modèle dit la même chose sur tous les matchs, et plus il converge
+// vers le prédicteur sans information qu'il est censé battre. La bonne
+// mesure est donc la DISPERSION des probabilités entre rencontres.
+const ecartType = (xs) => {
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length);
+};
+const kFaible = rejouer(synth, { seuil: 3, k: 0 });
+const kFort = rejouer(synth, { seuil: 3, k: 20 });
+const dispFaible = ecartType(kFaible.notees.map(r => r.probas['1']));
+const dispFort = ecartType(kFort.notees.map(r => r.probas['1']));
+vrai('Un rétrécissement fort uniformise les prédictions',
+  dispFort < dispFaible,
+  `dispersion k=0 : ${dispFaible.toFixed(4)}, k=20 : ${dispFort.toFixed(4)}`);
+vrai('Sans rétrécissement, le modèle s\'engage davantage',
+  dispFaible > 0.02, `dispersion = ${dispFaible.toFixed(4)}`);
+
+// Une fenêtre glissante courte doit écarter les rencontres trop anciennes.
+const fenetreCourte = rejouer(synth, { seuil: 3, fenetreJours: 20 });
+vrai('Une fenêtre courte réduit l\'historique retenu',
+  fenetreCourte.notees.length <= rejeuComplet.notees.length);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);

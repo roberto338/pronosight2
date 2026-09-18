@@ -22,14 +22,11 @@
 // Conséquence assumée : les premières journées de la fenêtre ne sont pas
 // notables, faute d'historique. Elles sont comptées et annoncées.
 
-import { calculerForces, calculerLambdas } from './engine/ratings.js';
-import { matriceScores } from './engine/poisson.js';
-import { marchesDepuisMatrice } from './engine/markets.js';
 import {
   noterRencontre, resumer, paniersCalibration, ecartCalibration,
   etalonTauxDeBase, gainRelatif, HASARD_1X2,
 } from './engine/backtest.js';
-import { moyennesDepuisLignes } from './data/normalisation.js';
+import { rejouer } from './engine/rejeu.js';
 import { chargerToutesRencontres } from './data/repository.js';
 import { MODEL_VERSION } from './engine/index.js';
 import pool from '../db/database.js';
@@ -52,61 +49,7 @@ if (rencontres.length === 0) {
   process.exit(0);
 }
 
-// ── Rejeu chronologique ──
-const historique = new Map();   // equipeId → [{date, butsMarques, butsEncaisses}]
-const ligues = new Map();       // competition_code → [{buts_dom, buts_ext}]
-const notees = [];
-let ignorees = 0;
-
-const pousser = (id, ligne) => {
-  if (!historique.has(id)) historique.set(id, []);
-  historique.get(id).push(ligne);
-};
-
-for (const m of rencontres) {
-  const dom = historique.get(m.equipe_dom_id) ?? [];
-  const ext = historique.get(m.equipe_ext_id) ?? [];
-  const lignesLigue = ligues.get(m.competition_code) ?? [];
-
-  // Note : tout ce qui suit n'utilise QUE les rencontres déjà poussées,
-  // c'est-à-dire strictement antérieures à celle-ci.
-  if (dom.length >= seuil && ext.length >= seuil) {
-    const ligue = moyennesDepuisLignes(lignesLigue);
-    const moyLigue = (ligue.moyButsDom + ligue.moyButsExt) / 2;
-    // La pondération par ancienneté se calcule depuis la date du match noté,
-    // pas depuis aujourd'hui : sinon les rencontres anciennes seraient
-    // dépréciées deux fois.
-    const ctx = { moyLigue, aujourdhui: new Date(m.joue_le) };
-
-    const forcesDom = calculerForces(dom, ctx);
-    const forcesExt = calculerForces(ext, ctx);
-    const { lambdaDom, lambdaExt } = calculerLambdas(forcesDom, forcesExt,
-      { moyButsDom: ligue.moyButsDom, moyButsExt: ligue.moyButsExt });
-    const { parCle } = marchesDepuisMatrice(matriceScores(lambdaDom, lambdaExt));
-
-    notees.push(noterRencontre(
-      { butsDom: Number(m.buts_dom), butsExt: Number(m.buts_ext) },
-      parCle,
-      {
-        date: String(m.joue_le).slice(0, 10),
-        competition: m.competition,
-        affiche: `${m.equipe_dom} — ${m.equipe_ext}`,
-        nDom: dom.length,
-        nExt: ext.length,
-        ligueMesuree: ligue.mesuree,
-      },
-    ));
-  } else {
-    ignorees++;
-  }
-
-  // Ce n'est qu'APRÈS la notation que la rencontre entre dans l'historique.
-  const date = String(m.joue_le).slice(0, 10);
-  pousser(m.equipe_dom_id, { date, butsMarques: Number(m.buts_dom), butsEncaisses: Number(m.buts_ext) });
-  pousser(m.equipe_ext_id, { date, butsMarques: Number(m.buts_ext), butsEncaisses: Number(m.buts_dom) });
-  lignesLigue.push({ buts_dom: m.buts_dom, buts_ext: m.buts_ext });
-  ligues.set(m.competition_code, lignesLigue);
-}
+const { notees, ignorees } = rejouer(rencontres, { seuil });
 
 console.log(`${notees.length} notée(s), ${ignorees} ignorée(s) faute d'historique suffisant.\n`);
 

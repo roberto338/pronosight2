@@ -16,6 +16,7 @@
 #     rien fusionner. Le contenu du fichier donne l'étape à exécuter :
 #         etat        → lecture seule
 #         backtest    → note le modèle sur le passé, lecture seule
+#         sweep       → cherche de meilleurs réglages, lecture seule
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
@@ -34,7 +35,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest]
+        options: [etat, apercu, migration, backfill, backtest, sweep]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -116,6 +117,17 @@ jobs:
           {
             echo '```'
             node prono/backtest.js --seuil=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Balayage d'hyper-paramètres
+        if: steps.choix.outputs.etape == 'sweep'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/sweep.js
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
