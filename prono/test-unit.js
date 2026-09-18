@@ -22,6 +22,10 @@ import {
   MOY_DOM_DEFAUT, MOY_EXT_DEFAUT,
   SOURCES_MEMORISEES,
 } from './data/normalisation.js';
+import {
+  issueReelle, noterRencontre, resumer, paniersCalibration,
+  ecartCalibration, HASARD_1X2,
+} from './engine/backtest.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -408,6 +412,108 @@ const assez = moyennesDepuisLignes(Array.from({ length: 40 }, () => ({ buts_dom:
 verifie('Moyennes mesurées sur 40 matchs',
   [assez.moyButsDom, assez.moyButsExt, assez.mesuree], [2, 1, true]);
 verifie('Aucune donnée : repli', moyennesDepuisLignes([]).moyButsExt, MOY_EXT_DEFAUT);
+
+
+// ══════════════════════════════════════════════
+// Backtest — la notation du modèle contre le réel
+// ══════════════════════════════════════════════
+
+verifie('Victoire domicile',   issueReelle(2, 1), '1');
+verifie('Victoire extérieur',  issueReelle(0, 3), '2');
+verifie('Match nul',           issueReelle(1, 1), 'X');
+
+// Repères du hasard, calculés à la main :
+//   log-loss d'un modèle uniforme sur 3 issues = -ln(1/3) = ln 3 = 1,098612
+//   Brier multiclasse du même = (1/3-1)² + (1/3)² + (1/3)² = 4/9+1/9+1/9 = 2/3
+presque('Log-loss du hasard', HASARD_1X2.logLoss, 1.0986123, 1e-6);
+presque('Brier du hasard',    HASARD_1X2.brier, 0.6666667, 1e-6);
+
+const parCleTest = (p1, pX, p2, over, btts) => ({
+  '1X2:1': p1, '1X2:X': pX, '1X2:2': p2,
+  'OU_2.5:over': over, 'OU_2.5:under': 1 - over,
+  'BTTS:oui': btts, 'BTTS:non': 1 - btts,
+});
+
+const ligneA = noterRencontre({ butsDom: 2, butsExt: 0 }, parCleTest(0.5, 0.3, 0.2, 0.6, 0.55));
+verifie('Issue relevée',            ligneA.issue, '1');
+verifie('Favori identifié',         ligneA.favori, '1');
+verifie('Favori juste',             ligneA.favoriJuste, true);
+presque('Probabilité de l\'issue',  ligneA.probaIssue, 0.5);
+verifie('Over 2,5 : 2 buts = non',  ligneA.over.reel, false);
+verifie('BTTS : 2-0 = non',         ligneA.btts.reel, false);
+
+const ligneB = noterRencontre({ butsDom: 1, butsExt: 1 }, parCleTest(0.2, 0.3, 0.5, 0.4, 0.5));
+verifie('Favori faux quand le nul sort', ligneB.favoriJuste, false);
+verifie('Favori était le 2',             ligneB.favori, '2');
+presque('Probabilité du nul retenue',    ligneB.probaIssue, 0.3);
+verifie('BTTS : 1-1 = oui',              ligneB.btts.reel, true);
+
+const ligneC = noterRencontre({ butsDom: 3, butsExt: 1 }, parCleTest(0.6, 0.25, 0.15, 0.7, 0.6));
+verifie('Over 2,5 : 4 buts = oui', ligneC.over.reel, true);
+
+// ── Agrégats, calculés à la main sur A et B ──
+// log-loss = (−ln 0,5 − ln 0,3) / 2 = (0,693147 + 1,203973) / 2 = 0,948560
+// Brier A  = (0,5−1)² + 0,3² + 0,2²       = 0,25 + 0,09 + 0,04 = 0,38
+// Brier B  = 0,2² + (0,3−1)² + 0,5²       = 0,04 + 0,49 + 0,25 = 0,78
+// Brier    = (0,38 + 0,78) / 2 = 0,58
+const res = resumer([ligneA, ligneB]);
+verifie('Effectif',            res.n, 2);
+presque('Taux du favori',      res.tauxFavori, 0.5);
+presque('Log-loss',            res.logLoss, 0.9485599, 1e-6);
+presque('Brier multiclasse',   res.brier, 0.58, 1e-9);
+// Brier Over : A est un 2-0, donc DEUX buts, donc Over 2,5 faux — comme
+// l'affirme le contrôle plus haut. B est un 1-1, faux également.
+//   ((0,6−0)² + (0,4−0)²) / 2 = (0,36 + 0,16) / 2 = 0,26
+presque('Brier Over 2,5',      res.brierOver, 0.26, 1e-9);
+verifie('Résumé d\'un ensemble vide', resumer([]).n, 0);
+
+// Un modèle parfait doit sortir un log-loss et un Brier nuls.
+const parfait = noterRencontre({ butsDom: 2, butsExt: 0 }, parCleTest(1, 0, 0, 1, 0));
+const resParfait = resumer([parfait]);
+presque('Modèle parfait : log-loss nul', resParfait.logLoss, 0, 1e-9);
+presque('Modèle parfait : Brier nul',    resParfait.brier, 0, 1e-9);
+
+// Un modèle certain ET faux doit être puni lourdement — c'est tout l'intérêt
+// du log-loss, et la raison de ne PAS plafonner la probabilité à 0,04.
+const certainEtFaux = noterRencontre({ butsDom: 0, butsExt: 2 }, parCleTest(0.999, 0.0005, 0.0005, 0.5, 0.5));
+vrai('Certitude fausse lourdement punie', resumer([certainEtFaux]).logLoss > 7,
+  `log-loss = ${resumer([certainEtFaux]).logLoss}`);
+
+// ── Courbe de fiabilité ──
+// Trois sélections par rencontre sont versées, pas seulement le favori.
+const paniersA = paniersCalibration([ligneA]);
+verifie('Trois observations par rencontre',
+  paniersA.reduce((s, b) => s + b.n, 0), 3);
+
+// Les faibles probabilités DOIVENT apparaître : Prono-App les jetait
+// (paniers démarrant à 35 %), ce qui masquait la moitié de la courbe.
+vrai('Les probabilités sous 35 % sont mesurées',
+  paniersA.some(b => b.annonce < 0.35), JSON.stringify(paniersA.map(b => b.libelle)));
+
+// La probabilité annoncée est la MOYENNE du panier, jamais son milieu.
+// Ici deux observations à 0,51 et 0,52 : moyenne 0,515, milieu 0,55.
+const deuxProches = [
+  { probas: { '1': 0.51, 'X': 0.24, '2': 0.25 }, issue: '1' },
+  { probas: { '1': 0.52, 'X': 0.24, '2': 0.24 }, issue: 'X' },
+];
+const panier5060 = paniersCalibration(deuxProches).find(b => b.libelle === '50–60 %');
+presque('Annoncé = moyenne du panier, pas son milieu', panier5060.annonce, 0.515, 1e-9);
+verifie('Effectif du panier', panier5060.n, 2);
+// Une seule des deux sélections à ~51 % s'est réalisée → 50 %.
+presque('Réalisé mesuré sur le panier', panier5060.realise, 0.5, 1e-9);
+
+// Calibration parfaite : sur 100 tirages annoncés à 50 %, 50 se réalisent.
+const calibres = [];
+for (let i = 0; i < 100; i++) {
+  calibres.push({ probas: { '1': 0.5, 'X': 0.3, '2': 0.2 }, issue: i % 2 === 0 ? '1' : 'X' });
+}
+const paniersCal = paniersCalibration(calibres);
+const b50 = paniersCal.find(b => b.libelle === '50–60 %');
+presque('Modèle calibré : annoncé = réalisé', b50.ecart, 0, 1e-9);
+
+verifie('ECE sur une liste vide', ecartCalibration([]), null);
+presque('ECE pondéré par l\'effectif',
+  ecartCalibration([{ n: 90, ecart: 0.01 }, { n: 10, ecart: 0.1 }]), 0.019, 1e-9);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);

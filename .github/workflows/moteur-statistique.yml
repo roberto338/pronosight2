@@ -15,6 +15,7 @@
 #     commiter. Fonctionne immédiatement sur N'IMPORTE QUELLE branche, sans
 #     rien fusionner. Le contenu du fichier donne l'étape à exécuter :
 #         etat        → lecture seule
+#         backtest    → note le modèle sur le passé, lecture seule
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
@@ -33,7 +34,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill]
+        options: [etat, apercu, migration, backfill, backtest]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -104,6 +105,19 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: node prono/etat.js | tee -a $GITHUB_STEP_SUMMARY
+
+      # Lecture seule, donc aucune confirmation exigée : ce qui ne peut rien
+      # abîmer ne doit pas coûter une saisie de plus sur un téléphone.
+      - name: Backtest du modèle
+        if: steps.choix.outputs.etape == 'backtest'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/backtest.js --seuil=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
 
       - name: Aperçu — aucune écriture
         if: steps.choix.outputs.etape == 'apercu'

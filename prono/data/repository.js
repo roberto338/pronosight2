@@ -155,6 +155,26 @@ export async function enregistrerAnalyse(analyse) {
 }
 
 /**
+ * Toutes les rencontres mémorisées, la plus ancienne d'abord.
+ *
+ * Chargées en une fois plutôt qu'interrogées par équipe : le backtest doit
+ * rejouer l'historique dans l'ordre, et 1 500 requêtes successives sur un
+ * free tier Neon coûteraient plus cher que les quelques centaines de
+ * kilo-octets que représente le tout.
+ */
+export async function chargerToutesRencontres(options = {}) {
+  const { fenetreJours = 400 } = options;
+  const { rows } = await query(`
+    SELECT joue_le, competition, competition_code,
+           equipe_dom_id, equipe_ext_id, equipe_dom, equipe_ext,
+           buts_dom, buts_ext
+    FROM pa_match_results
+    WHERE joue_le >= CURRENT_DATE - $1::int
+    ORDER BY joue_le ASC, id ASC`, [fenetreJours]);
+  return rows;
+}
+
+/**
  * Combien d'équipes ont assez d'historique pour que le modèle ait un sens ?
  *
  * C'est la seule mesure qui dit si le moteur est prêt. Un total de
@@ -191,4 +211,5 @@ export default {
   ligneDepuisFixture, versHistorique, moyennesDepuisLignes,
   enregistrerResultats, historiqueEquipe, moyennesLigue,
   contexteMatch, enregistrerAnalyse, etatMemoire, couvertureEquipes,
+  chargerToutesRencontres,
 };
