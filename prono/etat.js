@@ -10,8 +10,25 @@
 import { etatMemoire, couvertureEquipes } from './data/repository.js';
 import pool from '../db/database.js';
 
-const m = await etatMemoire();
-const c = await couvertureEquipes(10);
+let m, c;
+try {
+  m = await etatMemoire();
+  c = await couvertureEquipes(10);
+} catch (err) {
+  // 42P01 = relation inexistante. Avant la migration 014, c'est l'état
+  // NORMAL, pas une panne : le dire en une phrase vaut mieux qu'une trace
+  // d'exception de quarante lignes à déchiffrer sur un écran de téléphone.
+  if (err.code === '42P01') {
+    console.log('\nLes tables du moteur n\'existent pas encore.');
+    console.log('La connexion à la base fonctionne — c\'est déjà vérifié.');
+    console.log('\nÉtape suivante : écrire « migration » dans prono/DECLENCHEUR.txt.');
+    await pool.end();
+    process.exit(0);
+  }
+  console.error(`\n❌ Lecture impossible : ${err.message}`);
+  await pool.end();
+  process.exit(1);
+}
 
 console.log(`\nRencontres mémorisées : ${m.total}`);
 if (m.total > 0) {

@@ -49,6 +49,14 @@ concurrency:
   group: moteur-statistique
   cancel-in-progress: false
 
+# Sans pipefail, `node script.js | tee` renvoie le code de sortie de tee,
+# jamais celui de node. Constate au premier run reel : etat.js a plante sur
+# une table absente, et l'etape s'est affichee en vert. Une migration en
+# echec aurait fait exactement pareil.
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
 jobs:
   executer:
     runs-on: ubuntu-latest
