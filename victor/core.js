@@ -13,6 +13,7 @@ import {
   getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
   getScorers, formatFixturesForPrompt, fetchWithTimeout,
   demarrerBudgetSources, arreterBudgetSources,
+  getContexteApiFootball, couvertureContexte,
 } from './sources.js';
 import { getOdds, getOddsEvents, evaluerValue, cleMarche } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
@@ -553,6 +554,23 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   const codesCompet = [...new Set(aVenir.map(f => f.codeCompet).filter(Boolean))];
   await etape(38, 'classement');
   const classement  = await getStandings(codesCompet).catch(() => new Map());
+
+  // ── Secours : API-Football, pour les équipes que football-data ne couvre pas ──
+  // Du 21/09 au 01/10, football-data ne renvoyait plus aucun match de la
+  // saison en cours : forme et classement vides, et Victor muet onze jours.
+  // On complète désormais avec API-Football, sans jamais écraser ce que
+  // football-data a fourni. Voir getContexteApiFootball dans sources.js.
+  const formeFootballData = forme.size;
+  const classementFootballData = classement.size;
+  let secours = null;
+  if (couvertureContexte(aVenir, forme, classement).sansDonnees > 0) {
+    await etape(40, 'secours API-Football');
+    secours = await getContexteApiFootball(aVenir).catch(err => ({
+      forme: new Map(), classement: new Map(), erreurs: [err.message], rapport: `échec : ${err.message}`,
+    }));
+    for (const [id, v] of secours.forme) if (!forme.has(id)) forme.set(id, v);
+    for (const [id, v] of secours.classement) if (!classement.has(id)) classement.set(id, v);
+  }
   // 4 et non 8 : chaque H2H coûte une requête football-data, et le
   // plafond de 10/min déclenchait une pause de ~54 s en pleine analyse.
   // Moins de temps passé dans le job = moins d'exposition à ce qui le tue.
@@ -564,6 +582,30 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   const cotes       = await getOdds(aVenir).catch(() => new Map());
 
   arreterBudgetSources();
+
+  // ── Couverture du contexte : la vraie raison d'un matin vide ──
+  // Sans aucune donnée, prompt.js:30 interdit tout pari : l'IA renverra une
+  // liste vide, quel que soit le modèle. On s'arrête AVANT de l'appeler, et
+  // la raison annoncée — reprise telle quelle dans l'alerte Telegram par
+  // prematchWorker — désigne les sources, pas le modèle. Pendant onze jours,
+  // l'alerte a dit « aucun pronostic produit par l'IA » : elle accusait le
+  // seul composant qui fonctionnait.
+  const couverture = couvertureContexte(aVenir, forme, classement);
+  const etatSources = `football-data : forme ${formeFootballData} équipe(s), classement ${classementFootballData}`
+    + ` · secours API-Football : ${secours ? secours.rapport : 'non sollicité'}`;
+  console.log(`   📋 Couverture : ${couverture.avecDonnees}/${couverture.equipes} équipe(s) documentée(s) — ${etatSources}`);
+
+  if (couverture.avecDonnees === 0) {
+    console.warn(`⚠️  Aucune donnée de forme ni de classement — analyse annulée, IA non appelée`);
+    return {
+      date: dateISO,
+      generated_at: new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }),
+      events: [],
+      couverture,
+      raison: `sources de données vides : aucune forme ni aucun classement pour les ${couverture.equipes} équipe(s) du jour`
+        + ` (${etatSources}). L'IA n'a pas été appelée`,
+    };
+  }
   await etape(62, 'mise en forme du contexte');
   const matchsReels = formatFixturesForPrompt(aVenir, { forme, classement, h2h, buteurs, cotes });
 
@@ -917,8 +959,9 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     raison: events.length === 0
       ? (rejets.length > 0
           ? `${rejets.length} pronostic(s) rejeté(s) au contrôle qualité`
-          : 'aucun pronostic produit par l\'IA')
+          : `aucun pronostic produit par l'IA (données disponibles pour ${couverture.avecDonnees}/${couverture.equipes} équipe(s))`)
       : undefined,
+    couverture,
   };
 }
 
