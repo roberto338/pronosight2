@@ -35,6 +35,13 @@ const sondes = [
   ['/matches d\'hier, terminés (getResultsOfDay)',     `matches?date=${hier}&status=FINISHED`],
   ['/matches sans paramètre',                          'matches'],
   ['/competitions/PL/matches fenêtre 5 j',             `competitions/PL/matches?dateFrom=${ilYa5j}&dateTo=${aujourdhui}`],
+  // Deuxième passage (01/10) : les six formes ci-dessus renvoient toutes 0,
+  // et /competitions/PL/matches ignore les dates pour n'appliquer que
+  // season=2026. Reste à distinguer deux causes qui n'appellent pas la même
+  // action : un changement de plan (périmètre des compétitions réduit) ou une
+  // saison vidée chez football-data (classement à zéro match joué).
+  ['Compétitions accessibles avec ce plan',            'competitions'],
+  ['/competitions/PL/matches saison précédente',       'competitions/PL/matches?season=2025'],
 ];
 
 for (const [nom, chemin] of sondes) {
@@ -70,6 +77,14 @@ for (const [nom, chemin] of sondes) {
     const statuts = [...new Set(json.matches.map(m => m.status))];
     if (statuts.length) console.log(`  statuts : ${statuts.join(', ')}`);
   } else if (json?.standings) {
-    console.log(`  ${json.standings[0]?.table?.length ?? 0} équipe(s) au classement`);
+    const table = json.standings[0]?.table ?? [];
+    const joues = table.reduce((a, r) => a + (r.playedGames || 0), 0);
+    console.log(`  ${table.length} équipe(s) au classement, ${joues} match(s) joué(s) au total`);
+    console.log(`  saison : ${json.season?.startDate} → ${json.season?.endDate}, journée ${json.season?.currentMatchday}`);
+    for (const r of table.slice(0, 3)) console.log(`    ${r.position}. ${r.team?.shortName} — ${r.playedGames} j, ${r.points} pts`);
+  } else if (json?.competitions) {
+    console.log(`  ${json.competitions.length} compétition(s) : ${json.competitions.map(c => c.code).join(', ')}`);
+    const pl = json.competitions.find(c => c.code === 'PL');
+    if (pl) console.log(`  PL saison courante : ${pl.currentSeason?.startDate} → ${pl.currentSeason?.endDate}, journée ${pl.currentSeason?.currentMatchday}`);
   }
 }
