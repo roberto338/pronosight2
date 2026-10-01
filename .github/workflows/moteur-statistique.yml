@@ -203,6 +203,7 @@ jobs:
         if: steps.choix.outputs.etape == 'sondes'
         env:
           FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           {
             echo '```'

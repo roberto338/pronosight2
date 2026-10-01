@@ -17,6 +17,7 @@
 
 const CLE = process.env.FOOTBALL_DATA_KEY;
 if (!CLE) { console.error('FOOTBALL_DATA_KEY absente.'); process.exit(1); }
+const CLE_AF = process.env.API_FOOTBALL_KEY || process.env.RAPIDAPI_KEY;
 
 const aujourdhui = new Date().toISOString().slice(0, 10);
 const ilYa5j = new Date(Date.now() - 5 * 864e5).toISOString().slice(0, 10);
@@ -86,5 +87,42 @@ for (const [nom, chemin] of sondes) {
     console.log(`  ${json.competitions.length} compétition(s) : ${json.competitions.map(c => c.code).join(', ')}`);
     const pl = json.competitions.find(c => c.code === 'PL');
     if (pl) console.log(`  PL saison courante : ${pl.currentSeason?.startDate} → ${pl.currentSeason?.endDate}, journée ${pl.currentSeason?.currentMatchday}`);
+  }
+}
+
+// ══════════════════════════════════════════════
+// API-Football — le secours de la PR #1 peut-il fonctionner ?
+// ══════════════════════════════════════════════
+// Le correctif complète forme et classement par /standings d'API-Football.
+// Deux conditions à vérifier avant de fusionner : la clé est valide, et le
+// plan gratuit donne accès au classement de la saison EN COURS — certains
+// plans gratuits sont limités aux saisons passées. 2 requêtes sur 100/jour.
+console.log('\n── API-Football ──');
+if (!CLE_AF) {
+  console.log('  Clé absente du dépôt (secret API_FOOTBALL_KEY). Sonde non exécutée.');
+} else {
+  for (const [nom, chemin] of [
+    ['Compte et quota du jour',              'status'],
+    ['Classement Premier League 2026',       'standings?league=39&season=2026'],
+  ]) {
+    try {
+      const res = await fetch(`https://v3.football.api-sports.io/${chemin}`, { headers: { 'x-apisports-key': CLE_AF } });
+      const json = await res.json();
+      console.log(`\n${nom}\n  HTTP ${res.status}`);
+      const errs = json?.errors;
+      const enErreur = Array.isArray(errs) ? errs.length > 0 : Boolean(errs && Object.keys(errs).length);
+      if (enErreur) { console.log(`  REFUS : ${JSON.stringify(errs)}`); continue; }
+      if (chemin === 'status') {
+        const r = json.response || {};
+        console.log(`  plan : ${r.subscription?.plan ?? '?'} · actif : ${r.subscription?.active ?? '?'} · fin : ${r.subscription?.end ?? '?'}`);
+        console.log(`  requêtes aujourd'hui : ${r.requests?.current ?? '?'} / ${r.requests?.limit_day ?? '?'}`);
+      } else {
+        const table = json.response?.[0]?.league?.standings?.[0] ?? [];
+        console.log(`  ${table.length} équipe(s) · ${table.slice(0, 2).map(t => `${t.rank}. ${t.team?.name} (${t.all?.played} j, forme ${t.form})`).join(' · ')}`);
+        console.log(table.length > 0 ? '  ✅ Le secours de la PR #1 fonctionnera.' : '  ⛔ Aucun classement : le secours ne pourra rien fournir.');
+      }
+    } catch (err) {
+      console.log(`\n${nom}\n  ÉCHEC : ${err.message}`);
+    }
   }
 }
