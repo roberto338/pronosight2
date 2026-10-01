@@ -19,6 +19,7 @@
 #         sweep       → cherche de meilleurs réglages, lecture seule
 #         audit       → note les signaux déjà publiés par Victor, lecture seule
 #         diagnostic  → pourquoi Victor ne publie plus, lecture seule
+#         sondes      → football-data répond-il ? 2 requêtes, lecture seule
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
@@ -37,7 +38,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -197,6 +198,17 @@ jobs:
             --label "moteur" 2>/dev/null || gh issue create \
             --title "Moteur statistique : gain significatif ($(date +%Y-%m))" \
             --body "Gain ${{ steps.mensuel.outputs.gain }} %, significatif, sur ${{ steps.mensuel.outputs.n }} rencontres. Détail : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Sondes des sources de données
+        if: steps.choix.outputs.etape == 'sondes'
+        env:
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '```'
+            node scripts/sondes-sources.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
 
       - name: Diagnostic Victor
         if: steps.choix.outputs.etape == 'diagnostic'
