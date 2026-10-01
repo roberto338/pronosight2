@@ -29,3 +29,4 @@ sondes
 # Un commit sur ce fichier vaut confirmation : l'éditer est un geste
 # délibéré, contrairement à un menu déroulant qu'un pouce déclenche par
 # accident. Remettre « rien » après chaque opération.
+

@@ -21,9 +21,20 @@ if (!CLE) { console.error('FOOTBALL_DATA_KEY absente.'); process.exit(1); }
 const aujourdhui = new Date().toISOString().slice(0, 10);
 const ilYa5j = new Date(Date.now() - 5 * 864e5).toISOString().slice(0, 10);
 
+// Premier passage (01/10) : la clé est valide, le classement répond, mais
+// `matches?dateFrom&dateTo&status=FINISHED` renvoie ZÉRO match sur cinq
+// jours en pleine saison — la même requête en rendait 1 449 le 18/09. On
+// teste donc chaque forme d'appel qu'utilise victor/sources.js, pour
+// trouver laquelle a cessé de répondre. 6 requêtes : le throttle maison
+// n'est pas chargé ici, elles restent sous le plafond de 10 par minute.
+const hier = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
 const sondes = [
-  ['Matchs terminés (indice de forme)', `matches?dateFrom=${ilYa5j}&dateTo=${aujourdhui}&status=FINISHED`],
-  ['Classement Premier League',          'competitions/PL/standings'],
+  ['/matches terminés, fenêtre 5 j (buildFormIndex)', `matches?dateFrom=${ilYa5j}&dateTo=${aujourdhui}&status=FINISHED`],
+  ['/matches fenêtre 5 j, SANS filtre de statut',      `matches?dateFrom=${ilYa5j}&dateTo=${aujourdhui}`],
+  ['/matches du jour (getFixturesOfDay)',              `matches?date=${aujourdhui}`],
+  ['/matches d\'hier, terminés (getResultsOfDay)',     `matches?date=${hier}&status=FINISHED`],
+  ['/matches sans paramètre',                          'matches'],
+  ['/competitions/PL/matches fenêtre 5 j',             `competitions/PL/matches?dateFrom=${ilYa5j}&dateTo=${aujourdhui}`],
 ];
 
 for (const [nom, chemin] of sondes) {
@@ -50,6 +61,14 @@ for (const [nom, chemin] of sondes) {
     if (json?.errorCode) console.log(`  errorCode : ${json.errorCode}`);
   } else if (json?.matches) {
     console.log(`  ${json.matches.length} match(s) renvoyé(s)`);
+    // Ce que l'API dit d'elle-même : filtres effectivement appliqués et
+    // compétitions couvertes. C'est là qu'un changement de comportement se voit.
+    if (json.filters) console.log(`  filtres appliqués : ${JSON.stringify(json.filters)}`);
+    if (json.resultSet) console.log(`  resultSet : ${JSON.stringify(json.resultSet)}`);
+    const competitions = [...new Set(json.matches.map(m => m.competition?.code))].filter(Boolean);
+    if (competitions.length) console.log(`  compétitions : ${competitions.join(', ')}`);
+    const statuts = [...new Set(json.matches.map(m => m.status))];
+    if (statuts.length) console.log(`  statuts : ${statuts.join(', ')}`);
   } else if (json?.standings) {
     console.log(`  ${json.standings[0]?.table?.length ?? 0} équipe(s) au classement`);
   }
