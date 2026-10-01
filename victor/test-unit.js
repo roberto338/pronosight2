@@ -18,7 +18,11 @@ import {
   evalPronostic, evalValueBet, matchFixture, repairTruncatedJSON, extractJSON,
   estNotable, validerEvent, normalizeTeam,
 } from './core.js';
-import { heureParis, estHoraireProvisoire } from './sources.js';
+import {
+  heureParis, estHoraireProvisoire, formatFixturesForPrompt,
+  aDesDonnees, couvertureContexte, lireStandingsApiFootball,
+  getContexteApiFootball, MAX_LIGUES_SECOURS,
+} from './sources.js';
 import { cacheLire, cacheEcrire, cacheVider } from './odds.js';
 
 let ok = 0, ko = 0;
@@ -664,6 +668,96 @@ verifie('exact l\'emporte sur le flou',
 // Aucun candidat : null, sans bruit.
 verifie('aucun candidat → null', matchFixture('Ajax vs Feyenoord', [ft('PSV', 'Utrecht')]), null);
 verifie('format invalide → null', matchFixture('Ajax', [ft('Ajax', 'PSV')]), null);
+
+
+// ══════════════════════════════════════════════
+// Incident du 21/09 au 01/10 — Victor muet onze jours
+// ══════════════════════════════════════════════
+//
+// football-data ne renvoyait plus aucun match de la saison 2026-27. Forme et
+// classement vides, chaque équipe « aucune donnée disponible », et prompt.js:30
+// interdit de parier sur un tel match : gemini, groq et gemma ont tous rendu
+// une liste vide. L'alerte disait « aucun pronostic produit par l'IA ».
+
+const fxAf = (home, away, idH, idA, league = 39, season = 2026) => ({
+  sport: 'Football', competition: 'Premier League', home, away,
+  match: `${home} vs ${away}`, homeId: `af:${idH}`, awayId: `af:${idA}`,
+  heure: '21:00', source: 'api-football', afLeagueId: league, afSeason: season,
+});
+
+// ── La couverture applique EXACTEMENT la règle du prompt ──
+// Si ces deux mesures divergeaient, Victor pourrait annoncer des données
+// que l'IA ne voit pas, ou l'inverse.
+const fxVide = [fxAf('Arsenal', 'Chelsea', 42, 49)];
+const couvVide = couvertureContexte(fxVide, new Map(), new Map());
+verifie('couverture : 2 équipes comptées', couvVide.equipes, 2);
+verifie('couverture : aucune documentée', couvVide.avecDonnees, 0);
+verifie('prompt : la même équipe est bien marquée vide',
+  formatFixturesForPrompt(fxVide).includes('Arsenal — aucune donnée disponible'), true);
+
+const classementPartiel = new Map([['af:42', { position: 1, total: 20, points: 15, joues: 6 }]]);
+const couvPartielle = couvertureContexte(fxVide, new Map(), classementPartiel);
+verifie('couverture : classement seul suffit', couvPartielle.avecDonnees, 1);
+verifie('prompt : équipe classée NON marquée vide',
+  formatFixturesForPrompt(fxVide, { classement: classementPartiel }).includes('Arsenal — aucune donnée disponible'), false);
+verifie('prompt : équipe non classée toujours marquée vide',
+  formatFixturesForPrompt(fxVide, { classement: classementPartiel }).includes('Chelsea — aucune donnée disponible'), true);
+
+verifie('aDesDonnees : identifiant absent', aDesDonnees(null, new Map([['x', {}]])), false);
+verifie('aDesDonnees : forme seule', aDesDonnees('af:1', new Map([['af:1', { forme: 'WWDLW' }]])), true);
+
+// ── Lecture d'une réponse /standings ──
+const standingsOk = {
+  errors: [],
+  response: [{ league: { id: 39, name: 'Premier League', season: 2026, standings: [[
+    { rank: 1, team: { id: 42, name: 'Arsenal' }, points: 16, form: 'WWDWW',
+      all: { played: 6, goals: { for: 14, against: 4 } } },
+    { rank: 2, team: { id: 49, name: 'Chelsea' }, points: 13, form: 'WDWLW',
+      all: { played: 6, goals: { for: 11, against: 6 } } },
+  ]] } }],
+};
+const lu = lireStandingsApiFootball(standingsOk);
+verifie('standings : pas d\'erreur', lu.erreur, null);
+verifie('standings : identifiant préfixé af:', lu.classement.has('af:42'), true);
+verifie('standings : rang', lu.classement.get('af:42').position, 1);
+verifie('standings : taille du tableau', lu.classement.get('af:42').total, 2);
+verifie('standings : matchs joués', lu.classement.get('af:49').joues, 6);
+verifie('standings : forme reprise', lu.forme.get('af:42').forme, 'WWDWW');
+verifie('standings : buts marqués', lu.forme.get('af:42').marques, 14);
+
+// Le format attendu par le prompt est respecté : la ligne se construit.
+const ligne = formatFixturesForPrompt(fxVide, { classement: lu.classement, forme: lu.forme });
+verifie('prompt : rang affiché', ligne.includes('1e/2 · 16pts en 6j'), true);
+verifie('prompt : forme affichée', ligne.includes('forme WWDWW · 14 marqués / 4 encaissés sur 6 match(s)'), true);
+verifie('prompt : plus aucune équipe marquée vide', ligne.includes('aucune donnée disponible'), false);
+
+// Refus du plan gratuit : HTTP 200, mais `errors` renseigné.
+const refus = lireStandingsApiFootball({ errors: { plan: 'Free plans do not have access to this season.' }, response: [] });
+verifie('standings : refus du plan détecté', refus.erreur, 'Free plans do not have access to this season.');
+verifie('standings : refus = aucune donnée', refus.classement.size, 0);
+
+// Coupe : pas de classement, sans faire planter.
+verifie('standings : coupe sans tableau', lireStandingsApiFootball({ errors: [], response: [] }).erreur !== null, true);
+verifie('standings : réponse nulle', lireStandingsApiFootball(null).erreur !== null, true);
+
+// Une équipe listée dans deux tableaux : le premier fait foi.
+const doublon = lireStandingsApiFootball({ errors: [], response: [{ league: { name: 'L', standings: [
+  [{ rank: 3, team: { id: 7 }, points: 9, all: { played: 4 } }],
+  [{ rank: 1, team: { id: 7 }, points: 9, all: { played: 4 } }],
+] } }] });
+verifie('standings : premier tableau prioritaire', doublon.classement.get('af:7').position, 3);
+
+// ── Sans clé, le secours le dit au lieu d'échouer en silence ──
+// AF_KEY est lue au chargement du module : en test, elle est absente.
+if (!process.env.API_FOOTBALL_KEY && !process.env.RAPIDAPI_KEY) {
+  const sansCle = await getContexteApiFootball(fxVide);
+  verifie('secours : clé absente annoncée', sansCle.rapport, 'clé API-Football absente');
+  verifie('secours : aucune donnée inventée', sansCle.classement.size, 0);
+}
+
+// Le plafond reste sous la limite de 10 requêtes par minute du plan gratuit,
+// une requête étant déjà consommée par fetchApiFootball.
+verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9, true);
 
 // ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);

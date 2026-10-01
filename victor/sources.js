@@ -337,6 +337,10 @@ export async function fetchApiFootball(dateISO, { status = 'FT' } = {}) {
       awayGoals:   f.goals?.away ?? null,
       venue:       f.fixture?.venue?.name || '',
       source:      'api-football',
+      // Ligue et saison : nécessaires au secours de getContexteApiFootball,
+      // qui interroge le classement par ligue.
+      afLeagueId:  f.league?.id ?? null,
+      afSeason:    f.league?.season ?? null,
     }));
     return { fixtures, error: null };
   } catch (err) {
@@ -569,6 +573,182 @@ export async function getH2H(fixtures = [], max = 8) {
  * @param {Fixture[]} fixtures
  * @param {{forme?:Map, classement?:Map, h2h?:Map}} contexte
  */
+// ══════════════════════════════════════════════
+// COUVERTURE DU CONTEXTE — savoir AVANT d'appeler l'IA
+// ══════════════════════════════════════════════
+//
+// Du 21/09 au 01/10, Victor n'a publié aucun pronostic. football-data ne
+// renvoyait plus un seul match de la saison 2026-27 (clé valide, plan
+// intact, saison 2025-26 toujours complète). Sans ses matchs, l'indice de
+// forme et le classement étaient vides ; formatFixturesForPrompt marquait
+// chaque équipe « aucune donnée disponible » ; prompt.js:30 interdit de
+// parier sur un tel match ; et gemini, groq et gemma ont tous répondu une
+// liste vide — correctement. Le job se terminait sans erreur.
+//
+// L'alerte envoyée chaque matin disait « aucun pronostic produit par
+// l'IA ». Elle accusait le seul composant qui avait bien fait son travail,
+// et a fait perdre onze jours. On mesure donc la couverture explicitement,
+// avec la même règle que le prompt, pour que la raison annoncée désigne la
+// source de données et non le modèle.
+
+/** Une équipe est documentée si l'on connaît sa forme OU son classement. */
+export function aDesDonnees(id, forme = new Map(), classement = new Map()) {
+  return Boolean(id && (forme.get(id) || classement.get(id)));
+}
+
+/** Combien d'équipes du jour l'IA verra-t-elle avec des données ? */
+export function couvertureContexte(fixtures = [], forme = new Map(), classement = new Map()) {
+  let equipes = 0, avecDonnees = 0;
+  for (const f of fixtures) {
+    for (const id of [f.homeId, f.awayId]) {
+      equipes++;
+      if (aDesDonnees(id, forme, classement)) avecDonnees++;
+    }
+  }
+  return { equipes, avecDonnees, sansDonnees: equipes - avecDonnees };
+}
+
+// ══════════════════════════════════════════════
+// SECOURS : forme et classement depuis API-Football
+// ══════════════════════════════════════════════
+//
+// football-data était la SEULE source de forme et de classement. Sa panne
+// suffisait à faire taire Victor. API-Football fournit déjà les matchs du
+// jour (identifiants af:) ; il manquait leur contexte.
+//
+// Une seule requête par ligue suffit : /standings renvoie le rang, les
+// points, les matchs joués, les buts pour et contre ET la forme des cinq
+// derniers matchs. Le plan gratuit limite à 100 requêtes par jour et 10 par
+// minute ; fetchApiFootball en consomme déjà une par run. D'où le plafond de
+// 8 ligues, retenues parmi celles qui comptent le plus de matchs du jour, et
+// un cache de 8 h pour que le run de 13 h réutilise celui de 7 h. Pas 6 :
+// les deux jobs partent à 05:00 et 11:00 UTC, exactement six heures d'écart,
+// et un cache de 6 h expirerait à la seconde près avant le second.
+//
+// Ce secours n'est sollicité que pour les équipes sans données : quand
+// football-data répond, rien ne change.
+
+export const MAX_LIGUES_SECOURS = 8;
+const CACHE_SECOURS_MS = 8 * 3600_000;
+const _cacheSecours = new Map();   // "ligue:saison" → { ts, json }
+
+/** Vide le cache du secours (tests). */
+export function viderCacheSecours() { _cacheSecours.clear(); }
+
+/**
+ * Lit une réponse /standings d'API-Football. Pur : aucun appel réseau.
+ * @returns {{forme:Map, classement:Map, erreur:string|null}}
+ */
+export function lireStandingsApiFootball(json) {
+  const forme = new Map(), classement = new Map();
+
+  // Comme pour /fixtures : HTTP 200 + `errors` non vide = refus. C'est là
+  // qu'apparaît, par exemple, une saison non couverte par le plan gratuit.
+  const errs = json?.errors;
+  const enErreur = Array.isArray(errs) ? errs.length > 0 : Boolean(errs && Object.keys(errs).length > 0);
+  if (enErreur) {
+    const texte = Array.isArray(errs) ? errs.join(' ; ') : Object.values(errs).join(' ; ');
+    return { forme, classement, erreur: texte || JSON.stringify(errs) };
+  }
+
+  const ligue = json?.response?.[0]?.league;
+  const groupes = Array.isArray(ligue?.standings) ? ligue.standings : [];
+  if (groupes.length === 0) {
+    return { forme, classement, erreur: 'aucun classement (coupe, ou saison non couverte)' };
+  }
+
+  for (const groupe of groupes) {
+    if (!Array.isArray(groupe)) continue;
+    for (const r of groupe) {
+      const id = r?.team?.id;
+      if (id == null) continue;
+      const cle = `af:${id}`;
+      if (classement.has(cle)) continue;   // une équipe listée dans plusieurs tableaux : le premier fait foi
+      const joues = r.all?.played ?? 0;
+      const bp = r.all?.goals?.for ?? null;
+      const bc = r.all?.goals?.against ?? null;
+      classement.set(cle, {
+        position: r.rank, points: r.points, joues, bp, bc,
+        compet: ligue?.name || '', total: groupe.length,
+      });
+      if (r.form) {
+        // Buts sur la saison entière, pas sur une fenêtre de 20 jours comme
+        // buildFormIndex : le nombre de matchs affiché permet à l'IA de le lire.
+        forme.set(cle, {
+          nom: r.team?.name || '', forme: r.form, bilan: '',
+          marques: bp ?? 0, encaisses: bc ?? 0, matchs: joues,
+        });
+      }
+    }
+  }
+  return { forme, classement, erreur: null };
+}
+
+/**
+ * Forme et classement des équipes API-Football du jour.
+ * @returns {Promise<{forme:Map, classement:Map, rapport:string, erreurs:string[]}>}
+ */
+export async function getContexteApiFootball(fixtures = [], { maxLigues = MAX_LIGUES_SECOURS } = {}) {
+  const forme = new Map(), classement = new Map(), erreurs = [];
+  if (!AF_KEY) return { forme, classement, erreurs, rapport: 'clé API-Football absente' };
+
+  const parLigue = new Map();
+  for (const f of fixtures) {
+    if (f.source !== 'api-football' || f.afLeagueId == null || f.afSeason == null) continue;
+    const cle = `${f.afLeagueId}:${f.afSeason}`;
+    parLigue.set(cle, (parLigue.get(cle) || 0) + 1);
+  }
+  if (parLigue.size === 0) {
+    return { forme, classement, erreurs, rapport: 'aucun match du jour servi par API-Football' };
+  }
+
+  const retenues = [...parLigue.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxLigues)
+    .map(([cle]) => cle);
+
+  let requetes = 0, depuisCache = 0;
+  for (const cle of retenues) {
+    const [league, season] = cle.split(':');
+    let json = null;
+    const enCache = _cacheSecours.get(cle);
+    if (enCache && Date.now() - enCache.ts < CACHE_SECOURS_MS) {
+      json = enCache.json;
+      depuisCache++;
+    } else {
+      try {
+        requetes++;
+        const resp = await fetchWithTimeout(
+          `https://v3.football.api-sports.io/standings?league=${league}&season=${season}`,
+          { headers: { 'x-apisports-key': AF_KEY } },
+        );
+        if (!resp.ok) { erreurs.push(`ligue ${league} : HTTP ${resp.status}`); continue; }
+        json = await resp.json();
+      } catch (err) {
+        erreurs.push(`ligue ${league} : ${err.name === 'AbortError' ? 'timeout' : err.message}`);
+        continue;
+      }
+    }
+
+    const lu = lireStandingsApiFootball(json);
+    if (lu.erreur) { erreurs.push(`ligue ${league} : ${lu.erreur}`); continue; }
+    // Seul ce qui a été lu avec succès entre en cache : une erreur passagère
+    // ne doit pas être resservie pendant huit heures.
+    if (!enCache || enCache.json !== json) _cacheSecours.set(cle, { ts: Date.now(), json });
+
+    for (const [id, v] of lu.classement) if (!classement.has(id)) classement.set(id, v);
+    for (const [id, v] of lu.forme) if (!forme.has(id)) forme.set(id, v);
+  }
+
+  const ignorees = parLigue.size - retenues.length;
+  const rapport = `${classement.size} équipe(s) documentée(s) sur ${retenues.length} ligue(s)`
+    + ` (${requetes} requête(s), ${depuisCache} depuis le cache`
+    + `${ignorees > 0 ? `, ${ignorees} ligue(s) hors plafond` : ''})`
+    + `${erreurs.length ? ` — ${erreurs.length} erreur(s) : ${erreurs.slice(0, 2).join(' | ')}` : ''}`;
+  console.log(`   🛟 Secours API-Football : ${rapport}`);
+  return { forme, classement, erreurs, rapport };
+}
+
 export function formatFixturesForPrompt(fixtures, contexte = {}) {
   if (fixtures.length === 0) return '(aucun match trouvé pour cette date)';
 
@@ -585,6 +765,8 @@ export function formatFixturesForPrompt(fixtures, contexte = {}) {
   }
 
   const decrire = (nom, id) => {
+    // Même règle que aDesDonnees() : ce qui est compté comme documenté par
+    // couvertureContexte est exactement ce que le prompt montre comme tel.
     const fo = id ? forme.get(id) : null;
     const cl = id ? classement.get(id) : null;
     const bouts = [];
@@ -625,6 +807,7 @@ export function formatFixturesForPrompt(fixtures, contexte = {}) {
 }
 
 export default {
+  aDesDonnees, couvertureContexte, lireStandingsApiFootball, getContexteApiFootball,
   getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
   formatFixturesForPrompt, fetchApiFootball, normalizeTeam, fetchWithTimeout,
 };
