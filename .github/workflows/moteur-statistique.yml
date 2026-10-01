@@ -20,6 +20,7 @@
 #         audit       → note les signaux déjà publiés par Victor, lecture seule
 #         diagnostic  → pourquoi Victor ne publie plus, lecture seule
 #         sondes      → football-data répond-il ? 2 requêtes, lecture seule
+#         publiques   → quelles sources gratuites couvrent la saison en cours
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
@@ -38,7 +39,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -208,6 +209,15 @@ jobs:
           {
             echo '```'
             node scripts/sondes-sources.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Sondes des sources publiques
+        if: steps.choix.outputs.etape == 'publiques'
+        run: |
+          {
+            echo '```'
+            node scripts/sondes-publiques.js
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
