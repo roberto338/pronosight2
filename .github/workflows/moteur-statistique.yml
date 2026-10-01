@@ -21,6 +21,7 @@
 #         diagnostic  → pourquoi Victor ne publie plus, lecture seule
 #         sondes      → football-data répond-il ? 2 requêtes, lecture seule
 #         publiques   → quelles sources gratuites couvrent la saison en cours
+#         prod        → la prod Render tourne-t-elle le dernier commit de master ?
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
@@ -39,7 +40,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, prod]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -218,6 +219,50 @@ jobs:
           {
             echo '```'
             node scripts/sondes-publiques.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # ── Vérifier la prod sans accès à Render ──
+      # Render publie RENDER_GIT_COMMIT, que /api/status expose : on compare au
+      # dernier commit de master, ce qui prouve (ou non) que le déploiement
+      # automatique a suivi la fusion. Aucun secret requis : l'app est
+      # publique. /api/victor/health?sources=0 donne l'état de Victor sans
+      # consommer le quota des API de football.
+      - name: État de la prod Render
+        if: steps.choix.outputs.etape == 'prod'
+        env:
+          APP: https://pronosight2.onrender.com
+        run: |
+          git fetch -q origin master
+          ATTENDU=$(git rev-parse --short=7 origin/master)
+          # Le plan gratuit endort le service : le premier appel peut
+          # prendre une minute, d'où les relances.
+          STATUT=""
+          for i in 1 2 3; do
+            STATUT=$(curl -sS --max-time 90 "$APP/api/status") && break
+            sleep 15
+          done
+          SANTE=$(curl -sS --max-time 120 "$APP/api/victor/health?sources=0" || echo '{"ok":false,"error":"injoignable"}')
+          DEPLOYE=$(echo "$STATUT" | jq -r '.commit // "inconnu"')
+          {
+            echo "## Prod Render"
+            echo
+            echo "- Commit déployé : \`$DEPLOYE\` (branche $(echo "$STATUT" | jq -r '.branche // "?"'))"
+            echo "- Dernier commit de master : \`$ATTENDU\`"
+            echo "- Démarré le : $(echo "$STATUT" | jq -r '.demarre // "?"')"
+            if [ "$DEPLOYE" = "$ATTENDU" ]; then
+              echo "- ✅ La prod exécute le dernier commit de master."
+            else
+              echo "- ❌ La prod n'exécute PAS le dernier commit de master."
+            fi
+            echo
+            echo "### /api/status"
+            echo '```json'
+            echo "$STATUT" | jq . 2>/dev/null || echo "$STATUT"
+            echo '```'
+            echo "### /api/victor/health?sources=0"
+            echo '```json'
+            echo "$SANTE" | jq . 2>/dev/null || echo "$SANTE"
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
