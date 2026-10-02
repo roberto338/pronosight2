@@ -1,4 +1,4 @@
-site 2
+rien
 
 # ── Comment s'en servir depuis un téléphone ──
 #
