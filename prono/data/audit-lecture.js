@@ -19,7 +19,7 @@ export async function chargerPronosticsNotes(options = {}) {
   const { rows } = await query(`
     SELECT date, sport, competition, match, pronostic_principal,
            cote_estimee, cote_confirmee, confiance, confiance_score,
-           pronostic_correct, value_bet, value_bet_correct, moteur, modele
+           pronostic_correct, value_bet, value_bet_correct, moteur, modele, pari_code
     FROM ps_pronostics
     WHERE pronostic_correct IS NOT NULL
       ${depuis ? 'AND date >= $1' : ''}
@@ -35,7 +35,7 @@ export async function chargerPronosticsACote(options = {}) {
   const { depuis = null } = options;
   const { rows } = await query(`
     SELECT id, to_char(date, 'YYYY-MM-DD') AS date, heure, competition,
-           equipe_a, equipe_b, match, pari_code, cote_estimee,
+           equipe_a, equipe_b, match, pari_code, cote_estimee, cote_confirmee,
            confiance_score, pronostic_correct
     FROM ps_pronostics
     WHERE cote_confirmee = true AND pari_code IS NOT NULL AND cote_estimee IS NOT NULL

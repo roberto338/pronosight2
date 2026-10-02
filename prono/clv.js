@@ -19,7 +19,7 @@
 // un CLV calculé sur les seuls matchs faciles à retrouver serait biaisé.
 
 import { clvPari, resumerClv, familleMarche, N_MIN_VERDICT } from './engine/clv.js';
-import { gainPari } from './engine/audit.js';
+import { gainPari, coteFiable } from './engine/audit.js';
 import { mulberry32 } from './engine/montecarlo.js';
 import { fichierPour, chargerFichier, apparier } from './data/football-data-uk.js';
 import { chargerPronosticsACote } from './data/audit-lecture.js';
@@ -45,6 +45,7 @@ const ecarter = (motif, p) => {
 };
 
 for (const p of pronos) {
+  if (!coteFiable(p)) { ecarter('cote fausse : double chance publiée à la cote du nul (bug corrigé le 02/10)', p); continue; }
   if (!familleMarche(p.pari_code)) { ecarter('marché non couvert par les fichiers', p); continue; }
   const fichier = fichierPour(p.competition, p.date);
   if (!fichier) { ecarter('compétition non couverte', p); continue; }

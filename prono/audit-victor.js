@@ -24,7 +24,7 @@
 // performance contre un adversaire imaginaire. Ces pronostics sont comptés
 // pour leur taux de réussite, jamais pour leur rendement.
 
-import { resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee } from './engine/audit.js';
+import { resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, coteFiable } from './engine/audit.js';
 import { mulberry32 } from './engine/montecarlo.js';
 import { chargerPronosticsNotes, etatPronostics } from './data/audit-lecture.js';
 import pool from '../db/database.js';
@@ -54,7 +54,9 @@ if (rows.length === 0) {
 const paris = rows.map(r => ({
   correct: r.pronostic_correct === true,
   cote: Number(r.cote_estimee),
-  coteReelle: r.cote_confirmee === true,
+  // Pas seulement « confirmée » : fiable. Voir coteFiable (bug du 02/10).
+  coteReelle: coteFiable(r),
+  coteFausse: r.cote_confirmee === true && !coteFiable(r),
   confianceScore: r.confiance_score,
   sport: r.sport || 'inconnu',
   moteur: r.moteur || 'inconnu',
@@ -62,6 +64,12 @@ const paris = rows.map(r => ({
 
 const confirmes = paris.filter(p => p.coteReelle);
 const inventes = paris.filter(p => !p.coteReelle);
+const faussees = paris.filter(p => p.coteFausse);
+if (faussees.length) {
+  console.log(`\n⚠️  ${faussees.length} double(s) chance(s) marquée(s) « cote confirmée » écartée(s) du rendement :`);
+  console.log('   leur cote était celle du MATCH NUL (bug corrigé le 02/10). Comptées gagnantes à ces');
+  console.log('   cotes, elles gonflaient le rendement de Victor.');
+}
 
 // ── Taux de réussite : mesurable sur tout ──
 const tous = resumerParis(paris.map(p => ({ ...p, cote: p.cote || 2 })));

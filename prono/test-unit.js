@@ -28,7 +28,7 @@ import {
 } from './engine/backtest.js';
 import { rejouer } from './engine/rejeu.js';
 import {
-  gainPari, resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, BANDES,
+  gainPari, resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, BANDES, coteFiable,
 } from './engine/audit.js';
 
 import {
@@ -907,6 +907,11 @@ verifie('CLV : centré sur zéro', resumerClv(serie(40, i => (i % 2 ? 0.08 : -0.
 const resumeClv = resumerClv(serie(40, i => (i < 30 ? 0.02 : -0.02)), { rnd: rndClv });
 presque('CLV : moyenne', resumeClv.valeurMoyenne, (30 * 0.02 - 10 * 0.02) / 40, 1e-12);
 presque('CLV : part au-dessus du prix juste', resumeClv.partPositive, 0.75, 1e-12);
+
+// Une double chance « confirmée » ne peut venir que du bug du 1X2:DRAW.
+verifie('cote fiable : 1X2 confirmé', coteFiable({ cote_confirmee: true, pari_code: '1X2:HOME' }), true);
+verifie('cote fiable : double chance confirmée = bug', coteFiable({ cote_confirmee: true, pari_code: 'DC:12' }), false);
+verifie('cote fiable : cote écrite par l\'IA', coteFiable({ cote_confirmee: false, pari_code: 'OU:OVER:2.5' }), false);
 
 // ── Fichiers football-data.co.uk ──
 verifie('fd.co.uk : saison d\'août', saisonDe('2026-08-15'), '2627');
