@@ -109,25 +109,39 @@ function moyenne(valeurs) {
 }
 
 /** Agrège les bookmakers d'un évènement en cotes moyennes par marché. */
-function agregerEvenement(ev) {
+export function agregerEvenement(ev) {
   const h2h = { home: [], draw: [], away: [] };
   const totals = new Map(); // seuil -> { over: [], under: [] }
+
+  // ── Meilleure cote, en plus de la moyenne ──
+  // La moyenne porte la marge des bookmakers : le CLV du 02/10 a mesuré
+  // −4,7 % de valeur à la cote moyenne publiée, soit à peu près cette
+  // marge. La meilleure cote du marché la réduit, et elle est déjà dans la
+  // réponse : l'afficher ne coûte aucun crédit. La value reste calculée sur
+  // la MOYENNE — plus prudente — pour ne pas laisser passer davantage de
+  // paris sur la foi d'un seul bookmaker.
+  const meilleures = {};
+  const noter = (cle, prix, bookmaker) => {
+    const c = Number(prix);
+    if (!Number.isFinite(c) || c < 1.01) return;
+    if (!meilleures[cle] || c > meilleures[cle].cote) meilleures[cle] = { cote: c, bookmaker: bookmaker || '?' };
+  };
 
   for (const bk of ev.bookmakers || []) {
     for (const m of bk.markets || []) {
       if (m.key === 'h2h') {
         for (const o of m.outcomes || []) {
-          if (o.name === ev.home_team)      h2h.home.push(o.price);
-          else if (o.name === ev.away_team) h2h.away.push(o.price);
-          else if (o.name === 'Draw')       h2h.draw.push(o.price);
+          if (o.name === ev.home_team)      { h2h.home.push(o.price); noter('1X2:HOME', o.price, bk.title); }
+          else if (o.name === ev.away_team) { h2h.away.push(o.price); noter('1X2:AWAY', o.price, bk.title); }
+          else if (o.name === 'Draw')       { h2h.draw.push(o.price); noter('1X2:DRAW', o.price, bk.title); }
         }
       } else if (m.key === 'totals') {
         for (const o of m.outcomes || []) {
           const seuil = o.point;
           if (seuil == null) continue;
           if (!totals.has(seuil)) totals.set(seuil, { over: [], under: [] });
-          if (o.name === 'Over')       totals.get(seuil).over.push(o.price);
-          else if (o.name === 'Under') totals.get(seuil).under.push(o.price);
+          if (o.name === 'Over')       { totals.get(seuil).over.push(o.price);  noter(`OU:OVER:${seuil}`, o.price, bk.title); }
+          else if (o.name === 'Under') { totals.get(seuil).under.push(o.price); noter(`OU:UNDER:${seuil}`, o.price, bk.title); }
         }
       }
     }
@@ -144,7 +158,7 @@ function agregerEvenement(ev) {
     if (under) marches[`OU:UNDER:${seuil}`] = under;
   }
 
-  return { marches, bookmakers: (ev.bookmakers || []).length };
+  return { marches, meilleures, bookmakers: (ev.bookmakers || []).length };
 }
 
 /** Résumé lisible injecté dans le prompt. */
@@ -229,6 +243,18 @@ export async function getOddsEvents(dateISO) {
   return out;
 }
 
+const sportDe = (f) => SPORT_KEYS[f.codeCompet] || f.sportKey || null;
+
+/** Clés de sport à interroger, les plus fournies d'abord, sous le plafond. Pur. */
+export function sportsAInterroger(fixtures = [], max = MAX_COMPETS) {
+  const parSport = new Map();
+  for (const f of fixtures) {
+    const sp = sportDe(f);
+    if (sp) parSport.set(sp, (parSport.get(sp) || 0) + 1);
+  }
+  return [...parSport.entries()].sort((a, b) => b[1] - a[1]).map(([sp]) => sp).slice(0, max);
+}
+
 /**
  * Récupère les cotes du marché pour les matchs du jour.
  * Silencieux et inoffensif si ODDS_API_KEY est absente.
@@ -243,16 +269,23 @@ export async function getOdds(fixtures = []) {
     return out;
   }
 
-  const codes = [...new Set(fixtures.map(f => f.codeCompet).filter(c => SPORT_KEYS[c]))].slice(0, MAX_COMPETS);
-  if (codes.length === 0) {
+  // ── Quelles compétitions interroger ──
+  // Seuls les matchs football-data (codeCompet) étaient cotés. Depuis que
+  // football-data ne sert plus la saison européenne (21/09), les matchs du
+  // jour viennent de The Odds API… qui n'en recevaient donc AUCUNE cote :
+  // Victor les publiait avec une cote écrite par l'IA, la catégorie la moins
+  // fiable de l'audit. Leur clé de sport est connue : on l'interroge aussi.
+  // Les compétitions qui comptent le plus de matchs passent en premier, sous
+  // le même plafond de crédits qu'avant.
+  const sports = sportsAInterroger(fixtures);
+  if (sports.length === 0) {
     console.log('   💰 Cotes: aucune compétition couverte par The Odds API aujourd\'hui');
     return out;
   }
 
   let restants = null, payees = 0, recyclees = 0;
 
-  for (const code of codes) {
-    const sport = SPORT_KEYS[code];
+  for (const sport of sports) {
     try {
       let evenements = cacheLire(sport);
       if (evenements) {
@@ -277,8 +310,10 @@ export async function getOdds(fixtures = []) {
         const dom = normalizeTeam(ev.home_team), ext = normalizeTeam(ev.away_team);
         const jour = (ev.commence_time || '').slice(0, 10);
 
-        const f = fixtures.find(x => {
-          if (x.codeCompet !== code) return false;
+        // Un match venu de The Odds API porte l'identifiant de l'évènement :
+        // rapprochement exact, sans passer par les noms.
+        const f = fixtures.find(x => x.source === 'odds-api' && x.fixtureId === ev.id) || fixtures.find(x => {
+          if (sportDe(x) !== sport) return false;
           const a = normalizeTeam(x.home), b = normalizeTeam(x.away);
           const memeJour = !x.dateISO || !jour || Math.abs(new Date(x.dateISO) - new Date(jour)) <= 864e5;
           return memeJour
@@ -287,9 +322,9 @@ export async function getOdds(fixtures = []) {
         });
         if (!f || !f.fixtureId) continue;
 
-        const { marches, bookmakers } = agregerEvenement(ev);
+        const { marches, meilleures, bookmakers } = agregerEvenement(ev);
         if (Object.keys(marches).length === 0) continue;
-        out.set(f.fixtureId, { marches, bookmakers, resume: resumer(marches) });
+        out.set(f.fixtureId, { marches, meilleures, bookmakers, resume: resumer(marches) });
       }
     } catch (err) {
       console.warn(`   ⚠️  Cotes ${sport}: ${err.name === 'AbortError' ? 'timeout' : err.message}`);
@@ -303,7 +338,7 @@ export async function getOdds(fixtures = []) {
   // cet en-tête est renvoyé APRÈS la requête, un delta entre la première
   // et la dernière réponse oublierait toujours le coût de la première.
   const consommes = payees * CREDITS_PAR_COMPET;
-  console.log(`   💰 Cotes: ${out.size} match(s) cotés sur ${codes.length} compétition(s)`
+  console.log(`   💰 Cotes: ${out.size} match(s) cotés sur ${sports.length} compétition(s)`
     + ` — ${payees} interrogée(s), ${recyclees} depuis le cache`
     + ` · ${consommes} crédit(s) consommé(s)`
     + (restants != null ? `, ${restants} restant(s) ce mois` : ''));
@@ -372,7 +407,8 @@ export function evaluerValue(ev, cotesDuMatch) {
   const value = calculerValue(ev?.probabilite, cote);
   if (value === null) return null;
 
-  return { cote, value, probaMarche: probaImplicite(cote) };
+  const meilleure = cotesDuMatch.meilleures?.[cle] || null;
+  return { cote, value, probaMarche: probaImplicite(cote), meilleure };
 }
 
 export default { getOdds, calculerValue, probaImplicite, cleMarche, evaluerValue };

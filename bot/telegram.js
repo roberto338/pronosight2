@@ -163,6 +163,15 @@ export async function broadcastDaily(victorData) {
         msgEvents += `ℹ️ ${esc('Cote estimée — non confirmée par le marché')}\n`;
       }
 
+      // ── Meilleure cote du marché ───────────────────────────────
+      // La cote affichée est une MOYENNE de bookmakers, marge comprise.
+      // Mesuré le 02/10 : à cette cote, les pronostics perdaient 4,7 % face
+      // au prix juste de clôture, soit à peu près la marge. Indiquer où se
+      // trouve le meilleur prix réduit ce coût pour l'abonné.
+      if (ev.cote_max && ev.bookmaker_max) {
+        msgEvents += `🏷️ *Meilleure cote :* ${esc(ev.cote_max)} chez ${esc(ev.bookmaker_max)}\n`;
+      }
+
       // ⚠️ Ne JAMAIS échapper les parenthèses : en Markdown v1 Telegram
       // elles ne sont pas spéciales, et « \( » s'affiche littéralement.
       // Le message du 13/08 montrait « aucun \(~0\) » aux abonnés.
@@ -314,6 +323,9 @@ export async function sendHeartbeat(diag) {
   text += `📊 Dernier pronostic : ${esc(diag.dernierPronostic || 'jamais')}\n`;
   text += `⚙️ Jobs — en attente ${diag.jobs.pending} · en cours ${diag.jobs.running} · échoués ${echecs}${scories}\n`;
   text += `🛟 Moteur de secours Groq : ${diag.groqOk ? 'OK' : '⚠️ INDISPONIBLE'}\n`;
+  if (diag.couverture?.equipes > 0) {
+    text += `📡 Données au dernier prematch : ${diag.couverture.avecDonnees}/${diag.couverture.equipes} équipes\n`;
+  }
 
   // "Tout va bien" avec zero pronostic est une contradiction que le
   // lecteur doit trancher seul. On l'explicite : une journee sans cote

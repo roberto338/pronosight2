@@ -52,6 +52,9 @@ export async function prematchProcessor(job) {
     rejets:        result?.rejets ?? [],
     telegramSent,
     raison:        result?.raison ?? null,
+    // Lue par le contrôle de santé : une source qui se dégrade se voit ici
+    // AVANT de couper Victor (le 21/09, rien ne l'annonçait).
+    couverture:    result?.couverture ?? null,
     generatedAt:   new Date().toISOString(),
   };
 }

@@ -770,8 +770,19 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // Le modèle fournit une probabilité ; la cote vient du marché.
     // value = p × cote − 1. Une value négative signifie que le pari
     // est perdant sur la durée, même s'il a des chances de passer.
-    const fx = aVenir.find(f => normalizeTeam(f.home) === normalizeTeam(ev.equipe_a || '')
-                             || normalizeTeam(f.away) === normalizeTeam(ev.equipe_b || ''));
+    // Les DEUX équipes d'abord. L'ancienne recherche acceptait une seule
+    // équipe : le premier match dont le domicile OU l'extérieur
+    // correspondait gagnait, et sa cote, son heure et sa compétition
+    // étaient collées sur le pronostic. Une seule équipe ne sert plus que
+    // de repli, et seulement si elle désigne un match unique.
+    const na = normalizeTeam(ev.equipe_a || ''), nb = normalizeTeam(ev.equipe_b || '');
+    const exacts = aVenir.filter(f => normalizeTeam(f.home) === na && normalizeTeam(f.away) === nb);
+    const inverses = aVenir.filter(f => normalizeTeam(f.home) === nb && normalizeTeam(f.away) === na);
+    const partiels = aVenir.filter(f => normalizeTeam(f.home) === na || normalizeTeam(f.away) === nb);
+    const fx = exacts.length === 1 ? exacts[0]
+             : inverses.length === 1 ? inverses[0]
+             : partiels.length === 1 ? partiels[0]
+             : null;
 
     // ── L'heure vient de la source, pas du modèle ──────────────────
     // Le schéma du prompt demande un champ "heure" au modèle, et c'est
@@ -848,6 +859,11 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
 
     if (vb) {
       ev.cote_estimee = vb.cote;              // cote RÉELLE, plus une estimation
+      // Affichée à côté de la moyenne, jamais à sa place : voir agregerEvenement.
+      if (vb.meilleure && vb.meilleure.cote > vb.cote + 0.005) {
+        ev.cote_max = vb.meilleure.cote;
+        ev.bookmaker_max = vb.meilleure.bookmaker;
+      }
       ev.value_calculee = vb.value;
       ev.proba_marche   = vb.probaMarche;
       if (vb.value <= 0) {
@@ -1274,6 +1290,8 @@ export function normaliserPari(ev) {
  * @param {object} ev
  * @param {Set<string>} clesReelles  clés "domicile|exterieur" des matchs des sources
  */
+export const PROBA_MIN = Number(process.env.VICTOR_PROBA_MIN || 0.65);
+
 export function validerEvent(ev, clesReelles = null) {
   const motifs = [];
 
@@ -1293,6 +1311,16 @@ export function validerEvent(ev, clesReelles = null) {
     motifs.push('pas de pari proposé');
   } else if (!estNotable(ev)) {
     motifs.push(`pronostic non évaluable automatiquement : "${(ev?.pronostic_principal || '').slice(0, 40)}"`);
+  }
+
+  // ── Bande « Moyenne » retirée (audit du 02/10) ──
+  // prompt.js promettait 55 à 65 % de réussite pour la confiance « Moyenne » ;
+  // réalisé : 48 % sur 25 pronostics. Les bandes 4 et 5 tiennent leur
+  // promesse. Sous PROBA_MIN, on ne publie plus. Réglable par variable
+  // d'environnement si un audit futur montre que la bande est tenue.
+  const proba = Number(ev?.probabilite);
+  if ((Number.isFinite(proba) && proba < PROBA_MIN) || Number(ev?.confiance_score) === 3) {
+    motifs.push(`confiance insuffisante (probabilité ${Number.isFinite(proba) ? proba : '?'} < ${PROBA_MIN})`);
   }
 
   // La cote doit rester dans le domaine du plausible
@@ -1579,12 +1607,20 @@ async function calculerStatsPour(dateISO) {
          -- Calculé UNIQUEMENT sur les paris dont la cote est connue : sans
          -- cote, un pari gagnant produisait NULL et disparaissait du SUM,
          -- ce qui sous-estimait le ROI en ne gardant que les pertes.
+         --
+         -- Et UNIQUEMENT sur les cotes confirmées par le marché (02/10). Une
+         -- cote écrite par l'IA n'est pas un prix : sur 64 paris, ceux-là
+         -- passaient à 80 % contre 56 % pour les cotes réelles, et gonflaient
+         -- ce chiffre publié chaque soir. Les doubles chances « confirmées »
+         -- sont exclues aussi : leur cote était celle du nul (bug corrigé).
          ROUND(SUM(CASE
-           WHEN cote_estimee IS NULL          THEN 0
+           WHEN cote_estimee IS NULL OR cote_confirmee IS NOT TRUE
+                OR pari_code LIKE 'DC:%'       THEN 0
            WHEN pronostic_correct = true      THEN (cote_estimee - 1) * 10
            ELSE -10
          END), 2) AS roi,
-         SUM(CASE WHEN cote_estimee IS NOT NULL THEN 1 ELSE 0 END) AS roi_base
+         SUM(CASE WHEN cote_estimee IS NOT NULL AND cote_confirmee IS TRUE
+                   AND pari_code NOT LIKE 'DC:%' THEN 1 ELSE 0 END) AS roi_base
        FROM ps_pronostics
        WHERE date = $1
          AND pronostic_correct IS NOT NULL`,
