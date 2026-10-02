@@ -13,6 +13,7 @@ import { icone, iconeSport, ecusson } from './modules/icones.js';
 import { htmlUne, htmlAAnalyser, ligneMatch, rangCompet, analysable } from './modules/accueil.js';
 import { htmlLive, htmlAujourdhui, htmlCompetitions, htmlMesParis, htmlVictor } from './modules/ecrans.js';
 import { creerPari, bilanParis, courbeBankroll, versCsv } from './modules/paris.js';
+import { htmlCombines, genererCombines, evaluerCombine } from './modules/combines.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -172,6 +173,7 @@ function switchNav(tab) {
     if (tab === 'prono') renderPronoVictor();
     if (tab === 'today') dessinerAujourdhui(true);
     if (tab === 'alerts') dessinerCompetitions(true);
+    if (tab === 'parlay') chargerCombines();
     if (tab === 'parlay' && document.getElementById('parlayLegs')?.children.length === 0) {
       addParlayLeg(); addParlayLeg();
     }
@@ -276,6 +278,52 @@ function saisieLibre() {
   const s2 = document.getElementById('s2l'); if (s2) s2.textContent = 'Saisie libre';
   ['team1', 'team2'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('team1')?.focus();
+}
+
+// ── Combinés honnêtes ──
+const combinesState = { selections: [], choisis: [], charge: false, erreur: false, ts: 0 };
+
+async function chargerCombines(force = false) {
+  dessinerCombines();
+  if (!force && combinesState.charge && Date.now() - combinesState.ts < 5 * 60 * 1000) return;
+  try {
+    const r = await fetch('/api/combines/selections');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    combinesState.selections = Array.isArray(j.selections) ? j.selections : [];
+    const ids = new Set(combinesState.selections.map(x => x.id));
+    combinesState.choisis = combinesState.choisis.filter(c => ids.has(c.id));
+    combinesState.erreur = false;
+  } catch { combinesState.erreur = !combinesState.charge; }
+  combinesState.charge = true; combinesState.ts = Date.now();
+  dessinerCombines();
+}
+
+function dessinerCombines() {
+  const el = document.getElementById('combinesZone');
+  if (!el) return;
+  const b = bilanParis(lireParis(), { bankrollInitiale: bankrollDepart() }).bankroll;
+  const mise = b ? Math.max(0.5, Math.round(b * 0.005 * 2) / 2) : null;
+  el.innerHTML = htmlCombines({ ...combinesState, mise });
+}
+
+function basculerSelection(id) {
+  const s = combinesState.selections.find(x => x.id === id);
+  if (!s) return;
+  const i = combinesState.choisis.findIndex(x => x.id === id);
+  if (i >= 0) combinesState.choisis.splice(i, 1); else combinesState.choisis.push(s);
+  dessinerCombines();
+}
+
+/** i ≥ 0 : une proposition ; −1 : le combiné composé à la main. */
+function jouerCombine(i) {
+  const legs = i >= 0 ? genererCombines(combinesState.selections)[i]?.legs : combinesState.choisis;
+  if (!legs || legs.length < 2) return;
+  const r = evaluerCombine(legs);
+  ouvrirFormPari({
+    match: legs.map(l => l.match).join(' + '), competition: 'Combiné',
+    pari: legs.map(l => l.libelle).join(' + '), cote: r.cote, part: 0.005,
+  });
 }
 
 function ouvrirPlus() {
@@ -1102,7 +1150,7 @@ function arreterDirect() { if (_minuterieDirect) { clearInterval(_minuterieDirec
 function majBadgeDirect() {
   const n = programme.matchs.filter(m => m.statut === 'LIVE').length;
   const b = document.getElementById('badgeDirect');
-  if (b) { b.style.display = n ? '' : 'none'; document.getElementById('badgeDirectN').textContent = n; }
+  if (b) { b.hidden = !n; document.getElementById('badgeDirectN').textContent = n; }
 }
 
 // ── Aujourd'hui ──
@@ -1250,14 +1298,14 @@ function jouerPari(source, i) {
   }
 }
 
-function ouvrirFormPari({ match = '', competition = '', pari = '', cote = '' } = {}) {
+function ouvrirFormPari({ match = '', competition = '', pari = '', cote = '', part = 0.01 } = {}) {
   const val = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
   val('fpMatch', match); val('fpPari', pari); val('fpCote', cote ? Number(cote).toFixed(2) : ''); val('fpCompet', competition);
   const b0 = bankrollDepart(), bilan = bilanParis(lireParis(), { bankrollInitiale: b0 });
-  const conseil = bilan.bankroll ? Math.max(0.5, Math.round(bilan.bankroll * 0.01 * 2) / 2) : null;
+  const conseil = bilan.bankroll ? Math.max(0.5, Math.round(bilan.bankroll * part * 2) / 2) : null;
   val('fpMise', conseil ?? '');
   document.getElementById('fpAide').textContent = conseil
-    ? `Mise proposée : 1 % de ta bankroll (${bilan.bankroll.toFixed(0)} €). Modifie-la si besoin.`
+    ? `Mise proposée : ${String(part * 100).replace('.', ',')} % de ta bankroll (${bilan.bankroll.toFixed(0)} €)${part < 0.01 ? ', un combiné passant plus rarement' : ''}. Modifie-la si besoin.`
     : 'Astuce : définis ta bankroll dans « Mes paris » pour une mise conseillée.';
   document.getElementById('fpErreur').textContent = '';
   document.getElementById('pariFeuille')?.classList.add('ouverte');
@@ -1767,6 +1815,7 @@ window.analyserDepuisAccueil = analyserDepuisAccueil;
 Object.assign(window, {
   filtrerAujourdhui, basculerFavori, activerNotifs, definirBankroll, filtrerParis, reglerPari, supprimerPari,
   effacerParis, exporterParis, ouvrirFormPari, fermerFormPari, enregistrerPari, choisirCompet, saisieLibre, jouerPari,
+  chargerCombines, basculerSelection, jouerCombine,
 });
 window.ouvrirAnalyseLibre = ouvrirAnalyseLibre;
 window.switchPronoMode = switchPronoMode;

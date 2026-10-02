@@ -1148,6 +1148,39 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('fusion : la fiche API-Football l\'emporte', fusion.length === 1 && fusion[0].source === 'api-football', true);
   verifie('fusion : elle garde la clé de cotes', fusion[0].sportKey, 'soccer_epl');
 
+  // ── Combinés honnêtes ──
+  const CBs = await import('./combines.js');
+  const evOdds = (home, away, c) => ({ id: home, home_team: home, away_team: away, commence_time: '2026-10-03T18:00:00Z',
+    bookmakers: Array.from({ length: 6 }, (_, i) => ({ key: `b${i}`, title: `B${i}`, markets: [{ key: 'h2h', outcomes: [
+      { name: home, price: c[0] }, { name: 'Draw', price: c[1] }, { name: away, price: c[2] }] }] })) });
+  const caches = [{ sport: 'soccer_epl', evenements: [evOdds('Arsenal', 'Chelsea', [1.9, 3.6, 4.2]), evOdds('Everton', 'Fulham', [2.5, 3.2, 2.9])] }];
+  verifie('combiné : évènement trouvé par les deux équipes', CBs.trouverEvenement('Arsenal FC', 'Chelsea FC', caches)?.ev.id, 'Arsenal');
+  verifie('combiné : équipe inconnue → rien', CBs.trouverEvenement('Arsenal', 'Spurs', caches), null);
+  verifie('combiné : heure de Paris (été)', CBs.debutVictor({ date: '2026-10-02', heure: '21:00' }), '2026-10-02T19:00:00.000Z');
+  verifie('combiné : heure de Paris (hiver)', CBs.debutVictor({ date: '2026-12-02', heure: '21:00' }), '2026-12-02T20:00:00.000Z');
+  const maint = new Date('2026-10-03T10:00:00Z');
+  const sel = CBs.selectionsDuJour({ maintenant: maint, caches,
+    valeurs: [{ id: 1, match: 'Lens vs Lille', competition: 'Ligue 1', debut_utc: '2026-10-03T19:00:00Z', pari_code: '1X2:HOME', libelle: 'Victoire Lens', cote: '2.45', bookmaker: 'Unibet', proba_juste: '0.42' },
+              { id: 2, match: 'Nice vs Lyon', debut_utc: '2026-10-03T08:00:00Z', pari_code: '1X2:HOME', cote: 2.1, proba_juste: 0.5 }],
+    pronos: [{ id: 9, date: '2026-10-03', heure: '20:00', equipe_a: 'Arsenal', equipe_b: 'Chelsea', pari_code: '1X2:HOME', pronostic_principal: 'Victoire Arsenal', cote_estimee: '1.9', cote_confirmee: true },
+             { id: 10, date: '2026-10-03', heure: '20:00', equipe_a: 'A', equipe_b: 'B', pari_code: 'DC:1X', cote_estimee: 1.3, cote_confirmee: true },
+             { id: 11, date: '2026-10-03', heure: '20:00', equipe_a: 'C', equipe_b: 'D', pari_code: '1X2:AWAY', cote_estimee: 2, cote_confirmee: false }] });
+  verifie('combiné : match commencé, double chance et cote estimée écartés', sel.map(x => x.id).join(','), 'v-1-1X2:HOME,p-9');
+  const pArs = sel.find(x => x.id === 'p-9').proba_juste;
+  verifie('combiné : proba juste de Victor recalculée sur les cotes (marge retirée)', pArs > 1 / 1.9 * 0.9 && pArs < 1 / 1.9, true);
+
+  const CB = await import('../public/js/modules/combines.js');
+  const L = (id, match, cote, pj) => ({ id, source: 'value', match, libelle: 'x', cote, proba_juste: pj });
+  const r2 = CB.evaluerCombine([L('a', 'A – B', 2, 0.55), L('b', 'C – D', 1.8, 0.6)]);
+  verifie('combiné : cote = produit', r2.cote.toFixed(2), '3.60');
+  verifie('combiné : proba = produit', r2.proba.toFixed(2), '0.33');
+  verifie('combiné : valeur espérée', r2.ev.toFixed(3), '0.188');
+  verifie('combiné : proba inconnue → pas de valeur', CB.evaluerCombine([L('a', 'A – B', 2, 0.55), L('c', 'E – F', 2, null)]).ev, null);
+  const props = CB.genererCombines([L('a', 'A – B', 2, 0.55), L('b', 'C – D', 1.8, 0.6), L('c', 'A – B', 3, 0.4), L('d', 'G – H', 1.5, 0.6)]);
+  verifie('combiné : jamais deux sélections du même match', props.every(p => new Set(p.legs.map(l => l.match)).size === p.legs.length), true);
+  verifie('combiné : seulement des valeurs positives', props.length > 0 && props.every(p => p.ev > 0), true);
+  verifie('combiné : aucun combiné sans sélections', CB.htmlCombines({ selections: [] }).includes('Pas de combiné aujourd'), true);
+
   // ── Pictogrammes, écussons, accueil ──
   const I = await import('../public/js/modules/icones.js');
   verifie('icône : SVG au trait', I.icone('loupe').startsWith('<svg') && I.icone('loupe').includes('currentColor'), true);

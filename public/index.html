@@ -32,7 +32,7 @@
   <div class="header-right">
     <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" aria-label="Changer de thème"><i data-ico="lune"></i></button>
     <div class="version-badge">v4.1</div>
-    <button class="live-badge" id="badgeDirect" onclick="switchNav('live')" style="display:none"><div class="live-dot"></div><span id="badgeDirectN">0</span> en direct</button>
+    <button class="live-badge" id="badgeDirect" onclick="switchNav('live')" hidden><div class="live-dot"></div><span id="badgeDirectN">0</span> en direct</button>
   </div>
 </header>
 
@@ -45,7 +45,7 @@
   <button class="nav-btn" id="nav-live" onclick="switchNav('live')">Live</button>
   <button class="nav-btn" id="nav-history" onclick="switchNav('history')">Mes paris <span class="nav-badge" id="histBadge">0</span></button>
   <button class="nav-btn" id="nav-alerts" onclick="switchNav('alerts')">Mes compétitions</button>
-  <button class="nav-btn" id="nav-parlay" onclick="switchNav('parlay')">Calculateur</button>
+  <button class="nav-btn" id="nav-parlay" onclick="switchNav('parlay')">Combinés</button>
 </div>
 
 <!-- Navigation mobile : cinq entrées au pouce, le reste dans « Plus ».
@@ -66,7 +66,7 @@
     <button data-nav="history" onclick="switchNav('history')"><i data-ico="portefeuille"></i><span>Mes paris</span></button>
     <button data-nav="victor" onclick="switchNav('victor')"><i data-ico="stats"></i><span>Bilan Victor</span></button>
     <button data-nav="alerts" onclick="switchNav('alerts')"><i data-ico="cloche"></i><span>Compétitions</span></button>
-    <button data-nav="parlay" onclick="switchNav('parlay')"><i data-ico="calcul"></i><span>Calculateur</span></button>
+    <button data-nav="parlay" onclick="switchNav('parlay')"><i data-ico="couches"></i><span>Combinés</span></button>
   </div>
 </div>
 <div class="combo-panel visible" id="dashView">
@@ -196,9 +196,9 @@
 
 </div><!-- /pronoView -->
 
-<div class="parlay-panel" id="parlayView"><div class="card">
-  <div class="titre-section"><i data-ico="calcul"></i>Calculateur de combiné</div>
-  <div class="vm-intro">Entre tes sélections et leurs cotes : le calculateur donne la cote totale, le gain possible et — si tu indiques tes probabilités — la valeur du combiné. Bon à savoir : chaque sélection ajoute la marge du bookmaker, un combiné est donc presque toujours plus cher qu'un pari simple.</div>
+<div class="parlay-panel" id="parlayView"><div id="combinesZone"></div><div class="card">
+  <div class="titre-section"><i data-ico="calcul"></i>Calculateur libre</div>
+  <div class="vm-intro">Pour un combiné de ton choix, chez ton bookmaker : entre tes sélections et leurs cotes, le calculateur donne la cote totale, le gain possible et — si tu indiques tes probabilités — la valeur du combiné. Bon à savoir : chaque sélection ajoute la marge du bookmaker, un combiné est donc presque toujours plus cher qu'un pari simple.</div>
   <div id="parlayLegs"></div>
   <button class="bouton-discret" style="width:100%;justify-content:center;padding:12px;margin-bottom:12px" id="parlayAddBtn" onclick="addParlayLeg()">+ Ajouter une sélection</button>
   <div class="bk-ligne"><label for="parlayStake">Mise (€)</label><input class="bk-input" id="parlayStake" type="number" min="1" inputmode="decimal" placeholder="10"></div>
