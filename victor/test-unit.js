@@ -1139,6 +1139,15 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('bilan : perte listée', not.includes('vm-res ko') && not.includes('30/09'), true);
   verifie('value : erreur serveur', V.htmlEcranValeurs({ erreur: true }).includes('Réessayer'), true);
 
+  // ── Fusion des doublons : la clé de cotes survit ──
+  const { dedupe } = await import('./sources.js');
+  const fusion = dedupe([
+    { source: 'api-football', home: 'Sunderland', away: 'Leeds United', debutUTC: '2026-10-03T14:00:00Z', codeCompet: '' },
+    { source: 'odds-api', home: 'Sunderland', away: 'Leeds United', debutUTC: '2026-10-03T14:00:00Z', sportKey: 'soccer_epl' },
+  ]);
+  verifie('fusion : la fiche API-Football l\'emporte', fusion.length === 1 && fusion[0].source === 'api-football', true);
+  verifie('fusion : elle garde la clé de cotes', fusion[0].sportKey, 'soccer_epl');
+
   // ── Pictogrammes, écussons, accueil ──
   const I = await import('../public/js/modules/icones.js');
   verifie('icône : SVG au trait', I.icone('loupe').startsWith('<svg') && I.icone('loupe').includes('currentColor'), true);
@@ -1149,23 +1158,26 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('écusson : entité HTML ignorée', I.initiales('Brighton &amp; Hove'), 'BH');
   const A = await import('../public/js/modules/accueil.js');
   const prog = [
-    { sport: 'Football', competition: 'Eredivisie', equipe_a: 'Ajax', equipe_b: 'PSV', heure: '18:00', statut: 'NS' },
-    { sport: 'Football', competition: 'Ligue 1', equipe_a: 'Lens', equipe_b: 'Lille', heure: '21:00', statut: 'NS' },
+    { sport: 'Football', sport_key: 'soccer_netherlands_eredivisie', competition: 'Eredivisie', equipe_a: 'Ajax', equipe_b: 'PSV', heure: '18:00', statut: 'NS' },
+    { sport: 'Football', sport_key: 'soccer_france_ligue_one', competition: 'Ligue 1', equipe_a: 'Lens', equipe_b: 'Lille', heure: '21:00', statut: 'NS' },
     { sport: 'Football', competition: 'Ligue 1', equipe_a: 'Brest', equipe_b: 'Nantes', heure: '15:00', statut: 'FT', score: '1-1' },
-    { sport: 'Soccer', competition: 'Serie A', equipe_a: 'Torino', equipe_b: 'Lecce', heure: '20:45', statut: 'LIVE', score: '0-0' },
+    { sport: 'Soccer', sport_key: 'soccer_italy_serie_a', competition: 'Serie A', equipe_a: 'Torino', equipe_b: 'Lecce', heure: '20:45', statut: 'LIVE', score: '0-0' },
   ];
   const choix = A.matchsAAnalyser(prog);
   verifie('accueil : match terminé écarté', choix.some(m => m.equipe_a === 'Brest'), false);
   verifie('accueil : direct d\'abord, puis grandes ligues', choix.map(m => m.equipe_a).join(','), 'Torino,Lens,Ajax');
   verifie('accueil : index d\'origine conservé', choix[1].index, 1);
-  const liste = A.htmlAAnalyser([{ sport: 'Football', competition: '<x>', equipe_a: '<b>A</b>', equipe_b: 'B', statut: 'NS' }]);
+  const liste = A.htmlAAnalyser([{ sport: 'Football', sport_key: 'soccer_x', competition: '<x>', equipe_a: '<b>A</b>', equipe_b: 'B', statut: 'NS' }]);
   verifie('accueil : noms échappés', liste.includes('&lt;b&gt;A') && !liste.includes('<b>A'), true);
   verifie('accueil : bouton Analyser', liste.includes('analyserDepuisAccueil(0)'), true);
+  const EC0 = await import('../public/js/modules/ecrans.js');
   const hockey = { sport: 'Ice Hockey', competition: 'Czech Extraliga', equipe_a: 'Sparta', equipe_b: 'Slavia', statut: 'NS' };
   verifie('accueil : hockey non proposé à l\'analyse', A.matchsAAnalyser([hockey]).length, 0);
   verifie('accueil : hockey affiché sans bouton', A.ligneMatch({ ...hockey, index: 0 }).includes('bouton-analyser'), false);
-  verifie('accueil : foot sans cotes signalé', A.ligneMatch({ ...prog[1], index: 1 }).includes('sans cotes'), true);
-  verifie('accueil : foot avec cotes avant foot sans', A.matchsAAnalyser([prog[1], { ...prog[1], equipe_a: 'Nice', sport_key: 'soccer_france_ligue_one' }])[0].equipe_a, 'Nice');
+  const sansCotes = { ...prog[1], sport_key: null, equipe_a: 'Kiel II' };
+  verifie('accueil : foot sans cotes sans bouton', A.ligneMatch({ ...sansCotes, index: 1 }).includes('bouton-analyser'), false);
+  verifie('accueil : foot sans cotes non proposé', A.matchsAAnalyser([sansCotes, { ...prog[1], equipe_a: 'Nice' }]).map(m => m.equipe_a).join(','), 'Nice');
+  verifie('aujourd\'hui : filtre « À analyser » = matchs cotés', EC0.filtrerJour([sansCotes, prog[1], prog[2]], 'analysables').length, 1);
   verifie('accueil : journée finie expliquée', A.htmlAAnalyser([prog[2]]).includes('Pas de match de football à venir'), true);
   verifie('accueil : values mises en avant', A.htmlUne({ aVenir: 12, valeurs: 2, pronos: 3 }).includes("switchNav('valeurs')"), true);
 

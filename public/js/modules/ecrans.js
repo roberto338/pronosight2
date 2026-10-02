@@ -11,7 +11,7 @@
 
 import { echapperHtml as e } from './securite.js';
 import { icone } from './icones.js';
-import { ligneMatch, grouperParCompet, rangCompet } from './accueil.js';
+import { ligneMatch, grouperParCompet, rangCompet, analysable } from './accueil.js';
 import { gainNet } from './paris.js';
 
 const avecIndex = (matchs) => matchs.map((m, index) => ({ ...m, index }));
@@ -63,17 +63,18 @@ export function htmlLive(matchs = [], { charge = true, maj = null, favoris = [] 
 
 // ── AUJOURD'HUI ─────────────────────────────────────────
 export const FILTRES_JOUR = [
-  ['tous', 'Tous'], ['avenir', 'À venir'], ['direct', 'En direct'], ['termines', 'Terminés'],
+  ['analysables', 'À analyser'], ['direct', 'En direct'], ['avenir', 'À venir'], ['termines', 'Terminés'], ['tous', 'Tous'],
 ];
 
 export function filtrerJour(matchs = [], filtre = 'tous') {
+  if (filtre === 'analysables') return matchs.filter(analysable);
   if (filtre === 'avenir') return matchs.filter(m => m.statut === 'NS');
   if (filtre === 'direct') return matchs.filter(m => m.statut === 'LIVE');
   if (filtre === 'termines') return matchs.filter(m => m.statut === 'FT');
   return matchs.filter(m => m.statut !== 'OTHER');
 }
 
-export function htmlAujourdhui(matchs = [], { charge = true, filtre = 'tous', favoris = [], jour = new Date() } = {}) {
+export function htmlAujourdhui(matchs = [], { charge = true, filtre = 'analysables', favoris = [], jour = new Date() } = {}) {
   const date = jour.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
   const compte = (f) => filtrerJour(matchs, f).length;
   const puces = FILTRES_JOUR.map(([cle, lib]) =>
@@ -84,8 +85,10 @@ export function htmlAujourdhui(matchs = [], { charge = true, filtre = 'tous', fa
   <div class="sport-tabs" style="margin:12px 0 6px">${puces}</div>
   ${!charge ? vide('calendrier', 'Chargement', 'Récupération du programme…')
     : liste.length ? blocParCompet(liste, { favoris })
-    : vide('calendrier', 'Aucun match', 'Rien ne correspond à ce filtre aujourd\'hui.')}
-  <div class="vm-note">Sources : football-data.org, TheSportsDB, API-Football et The Odds API — le même calendrier que celui qu'analyse Victor.</div>
+    : vide('calendrier', 'Aucun match', filtre === 'analysables'
+      ? 'Aucun match coté par les bookmakers à venir aujourd\'hui. Les autres matchs restent visibles dans « Tous ».'
+      : 'Rien ne correspond à ce filtre aujourd\'hui.')}
+  <div class="vm-note">« À analyser » : les matchs de football cotés par les bookmakers, les seuls où l'analyse peut calculer de vraies probabilités. Sources : football-data.org, API-Football, TheSportsDB et The Odds API — le même calendrier que celui de Victor.</div>
 </div>`;
 }
 

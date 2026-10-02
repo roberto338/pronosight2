@@ -1106,7 +1106,7 @@ function majBadgeDirect() {
 }
 
 // ── Aujourd'hui ──
-let _filtreJour = 'tous';
+let _filtreJour = 'analysables';
 async function dessinerAujourdhui(recharger = false) {
   const el = document.getElementById('todayView');
   const dessiner = () => { if (el) el.innerHTML = htmlAujourdhui(programme.matchs, { charge: programme.charge, filtre: _filtreJour, favoris: getFavs() }); };

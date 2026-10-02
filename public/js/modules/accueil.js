@@ -23,7 +23,10 @@ const simple = (s = '') => String(s).toLowerCase().normalize('NFD').replace(/[̀
  * rien : ces matchs restent visibles (scores réels), sans bouton.
  */
 export const estFootball = (m) => /foot|soccer/i.test(String(m?.sport || ''));
-export const analysable = (m) => estFootball(m) && (m.statut === 'NS' || m.statut === 'LIVE');
+// Sans clé de cotes, l'analyse ne peut rien chiffrer : avec API-Football,
+// /api/matchs compte des centaines de matchs (Oberliga, 4e division
+// tchèque…) qu'aucun bookmaker de The Odds API ne cote. Pas de bouton.
+export const analysable = (m) => estFootball(m) && !!m.sport_key && (m.statut === 'NS' || m.statut === 'LIVE');
 
 export function rangCompet(competition = '') {
   const c = simple(competition);
@@ -39,7 +42,6 @@ export function matchsAAnalyser(matchs = [], { max = 6, favoris = [] } = {}) {
     .filter(m => analysable(m) && m.equipe_a && m.equipe_b)
     .sort((a, b) => (b.statut === 'LIVE') - (a.statut === 'LIVE')
       || fav.has(b.competition) - fav.has(a.competition)
-      || !!b.sport_key - !!a.sport_key
       || rangCompet(a.competition) - rangCompet(b.competition)
       || String(a.heure || '99').localeCompare(String(b.heure || '99')))
     .slice(0, max);
@@ -72,7 +74,7 @@ export function ligneMatch(m) {
   const [s1, s2] = String(m.score || '').split('-');
   const score = (v) => (m.score ? `<span class="match-ligne-score">${e(v)}</span>` : '');
   return `<div class="match-ligne ${bouton ? '' : 'fini'}"${bouton ? ` onclick="analyserDepuisAccueil(${m.index})"` : ''}>
-  <div class="match-ligne-heure ${direct ? 'direct' : ''}">${direct ? 'LIVE' : fini ? 'FIN' : e(m.heure || '—')}<small>${direct ? 'en cours' : fini ? 'terminé' : bouton && !m.sport_key ? 'sans cotes' : 'coup d\'envoi'}</small></div>
+  <div class="match-ligne-heure ${direct ? 'direct' : ''}">${direct ? 'LIVE' : fini ? 'FIN' : e(m.heure || '—')}<small>${direct ? 'en cours' : fini ? 'terminé' : 'coup d\'envoi'}</small></div>
   <div class="match-ligne-equipes">
     <div class="match-ligne-equipe">${ecusson(e(m.equipe_a), { taille: 26 })}<span>${e(m.equipe_a)}</span>${score(s1)}</div>
     <div class="match-ligne-equipe">${ecusson(e(m.equipe_b), { taille: 26 })}<span>${e(m.equipe_b)}</span>${score(s2)}</div>

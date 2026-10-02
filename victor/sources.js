@@ -353,7 +353,7 @@ export async function fetchApiFootball(dateISO, { status = 'FT' } = {}) {
 // ══════════════════════════════════════════════
 
 /** Déduplique sur (équipes normalisées), en gardant la source la plus fiable. */
-function dedupe(fixtures) {
+export function dedupe(fixtures) {
   // Priorité aux sources qui portent des identifiants et des statistiques :
   // en cas de doublon, on garde la version la plus exploitable.
   const rang = { 'football-data': 0, 'api-football': 1, 'thesportsdb': 2, 'odds-api': 3 };
@@ -379,6 +379,11 @@ function dedupe(fixtures) {
       gagnant.heure    = heureParis(perdant.debutUTC);
       gagnant.dateISO  = String(perdant.debutUTC).slice(0, 10);
     }
+    // La clé de cotes ne se perd jamais dans la fusion. Le 02/10, dès que
+    // la clé API-Football est revenue, ses fiches (sans clé The Odds API)
+    // ont écrasé celles de The Odds API : 9 matchs sur 343 restaient
+    // cotables, et Victor n'aurait plus su quels championnats interroger.
+    if (!gagnant.sportKey && perdant.sportKey) gagnant.sportKey = perdant.sportKey;
     map.set(cle, gagnant);
   }
   return [...map.values()];
