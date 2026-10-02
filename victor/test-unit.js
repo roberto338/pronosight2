@@ -1148,6 +1148,20 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('fusion : la fiche API-Football l\'emporte', fusion.length === 1 && fusion[0].source === 'api-football', true);
   verifie('fusion : elle garde la clé de cotes', fusion[0].sportKey, 'soccer_epl');
 
+  // ── Réserve de crédits The Odds API pour Victor ──
+  const QC = await import('./quota-cotes.js');
+  QC.reinitialiserQuota();
+  const entetes = (o) => ({ get: (k) => (k in o ? o[k] : null) });
+  verifie('quota : inconnu → le site peut acheter', QC.sitePeutAcheter(), true);
+  QC.noterQuota(entetes({ 'x-requests-remaining': '320', 'x-requests-used': '180' }));
+  verifie('quota : solde lu dans les en-têtes', [QC.etatQuota().restants, QC.etatQuota().utilises].join(','), '320,180');
+  verifie('quota : au-dessus de la réserve → achat permis', QC.sitePeutAcheter(), true);
+  QC.noterQuota(entetes({ 'x-requests-remaining': String(QC.RESERVE_VICTOR) }));
+  verifie('quota : à la réserve → achat refusé au site', QC.sitePeutAcheter(), false);
+  QC.noterQuota(entetes({}));
+  verifie('quota : réponse sans en-tête → solde conservé', QC.etatQuota().restants, QC.RESERVE_VICTOR);
+  QC.reinitialiserQuota();
+
   // ── Combinés honnêtes ──
   const CBs = await import('./combines.js');
   const evOdds = (home, away, c) => ({ id: home, home_team: home, away_team: away, commence_time: '2026-10-03T18:00:00Z',
