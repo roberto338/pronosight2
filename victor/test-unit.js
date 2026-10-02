@@ -1138,6 +1138,31 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   const not = V.htmlNotees([{ date: '2026-09-30', match: 'A vs B', libelle: 'Nul', cote: 3.4, gagne: false, score_reel: '1-0' }]);
   verifie('bilan : perte listée', not.includes('vm-res ko') && not.includes('30/09'), true);
   verifie('value : erreur serveur', V.htmlEcranValeurs({ erreur: true }).includes('Réessayer'), true);
+
+  // ── Pictogrammes, écussons, accueil ──
+  const I = await import('../public/js/modules/icones.js');
+  verifie('icône : SVG au trait', I.icone('loupe').startsWith('<svg') && I.icone('loupe').includes('currentColor'), true);
+  verifie('icône : nom inconnu → rien', I.icone('inconnu'), '');
+  verifie('écusson : initiales de deux mots', I.initiales('Paris Saint-Germain'), 'PS');
+  verifie('écusson : préfixe juridique ignoré', I.initiales('FC Nantes'), 'NA');
+  verifie('écusson : couleur stable', I.ecusson('Lens') === I.ecusson('Lens'), true);
+  verifie('écusson : entité HTML ignorée', I.initiales('Brighton &amp; Hove'), 'BH');
+  const A = await import('../public/js/modules/accueil.js');
+  const prog = [
+    { competition: 'Eredivisie', equipe_a: 'Ajax', equipe_b: 'PSV', heure: '18:00', statut: 'NS' },
+    { competition: 'Ligue 1', equipe_a: 'Lens', equipe_b: 'Lille', heure: '21:00', statut: 'NS' },
+    { competition: 'Ligue 1', equipe_a: 'Brest', equipe_b: 'Nantes', heure: '15:00', statut: 'FT', score: '1-1' },
+    { competition: 'Serie A', equipe_a: 'Torino', equipe_b: 'Lecce', heure: '20:45', statut: 'LIVE', score: '0-0' },
+  ];
+  const choix = A.matchsAAnalyser(prog);
+  verifie('accueil : match terminé écarté', choix.some(m => m.equipe_a === 'Brest'), false);
+  verifie('accueil : direct d\'abord, puis grandes ligues', choix.map(m => m.equipe_a).join(','), 'Torino,Lens,Ajax');
+  verifie('accueil : index d\'origine conservé', choix[1].index, 1);
+  const liste = A.htmlAAnalyser([{ competition: '<x>', equipe_a: '<b>A</b>', equipe_b: 'B', statut: 'NS' }]);
+  verifie('accueil : noms échappés', liste.includes('&lt;b&gt;A') && !liste.includes('<b>A'), true);
+  verifie('accueil : bouton Analyser', liste.includes('analyserDepuisAccueil(0)'), true);
+  verifie('accueil : journée finie expliquée', A.htmlAAnalyser([prog[2]]).includes('Pas de match à venir'), true);
+  verifie('accueil : values mises en avant', A.htmlUne({ aVenir: 12, valeurs: 2, pronos: 3 }).includes("switchNav('valeurs')"), true);
 }
 
 // ══════════════════════════════════════════════

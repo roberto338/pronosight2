@@ -185,7 +185,7 @@ export async function bilanVictor() {
 /** Values de marché des derniers jours, pour l'app web. Les plus récentes d'abord. */
 export async function valeursRecentes({ jours = 14, limite = 120 } = {}) {
   const { rows } = await query(
-    `SELECT to_char(date, 'YYYY-MM-DD') AS date, match, competition, debut_utc, pari_code, libelle,
+    `SELECT to_char(date, 'YYYY-MM-DD') AS date, match, competition, equipe_a, equipe_b, debut_utc, pari_code, libelle,
             cote, bookmaker, proba_juste, avantage, nb_bookmakers, score_reel, gagne
      FROM ps_valeurs_marche
      WHERE date >= CURRENT_DATE - $1::int

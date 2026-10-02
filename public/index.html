@@ -7,13 +7,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800;900&family=Barlow+Condensed:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/main.css">
 <link rel="stylesheet" href="/css/design.css">
+<link rel="stylesheet" href="/css/theme.css">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PronoSight">
-<meta name="theme-color" content="#00aaff">
+<meta name="theme-color" content="#0a0e0d">
 <link rel="manifest" href="/manifest.json">
 </head>
 <body>
@@ -21,14 +23,14 @@
 
 <header>
   <div class="logo-wrap">
-    <div class="logo-icon">🔮</div>
+    <div class="logo-icon"><i data-ico="cible"></i></div>
     <div>
-      <div class="logo">PronoSight</div>
-      <div class="logo-sub">Analyses sportives, chiffres à l'appui</div>
+      <div class="logo">Prono<b>Sight</b></div>
+      <div class="logo-sub">Lis le match avant de jouer</div>
     </div>
   </div>
   <div class="header-right">
-    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">&#x1F319;</button>
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" aria-label="Changer de thème"><i data-ico="lune"></i></button>
     <div class="version-badge">v4.1</div>
     <div class="live-badge"><div class="live-dot"></div>LIVE</div>
   </div>
@@ -52,31 +54,36 @@
 <!-- Navigation mobile : cinq entrées au pouce, le reste dans « Plus ».
      Onze boutons empilés sur quatre lignes mangeaient la moitié de l'écran. -->
 <nav class="bottom-nav" aria-label="Navigation">
-  <button class="bn-btn active" data-nav="dash" onclick="switchNav('dash')"><span class="bn-ico">🏠</span><span>Accueil</span></button>
-  <button class="bn-btn" data-nav="prono" onclick="switchNav('prono')"><span class="bn-ico">🎙️</span><span>Pronos</span></button>
-  <button class="bn-btn" data-nav="valeurs" onclick="switchNav('valeurs')"><span class="bn-ico">📈</span><span>Value</span><span class="bn-pastille" id="valeursPastille" style="display:none"></span></button>
-  <button class="bn-btn" data-nav="live" onclick="switchNav('live')"><span class="bn-ico">🔴</span><span>Live</span></button>
-  <button class="bn-btn" data-nav="plus" onclick="ouvrirPlus()"><span class="bn-ico">☰</span><span>Plus</span></button>
+  <button class="bn-btn active" data-nav="dash" onclick="switchNav('dash')"><span class="bn-ico"><i data-ico="accueil"></i></span><span>Accueil</span></button>
+  <button class="bn-btn" data-nav="prono" onclick="switchNav('prono')"><span class="bn-ico"><i data-ico="cible"></i></span><span>Pronos</span></button>
+  <button class="bn-btn" data-nav="valeurs" onclick="switchNav('valeurs')"><span class="bn-ico"><i data-ico="hausse"></i></span><span>Value</span><span class="bn-pastille" id="valeursPastille" style="display:none"></span></button>
+  <button class="bn-btn" data-nav="live" onclick="switchNav('live')"><span class="bn-ico"><i data-ico="direct"></i></span><span>Live</span></button>
+  <button class="bn-btn" data-nav="plus" onclick="ouvrirPlus()"><span class="bn-ico"><i data-ico="menu"></i></span><span>Plus</span></button>
 </nav>
 <div class="plus-fond" id="plusFond" onclick="fermerPlus()"></div>
 <div class="plus-feuille" id="plusFeuille" role="dialog" aria-label="Plus de rubriques">
   <div class="plus-poignee"></div>
   <div class="plus-titre">Suivi</div>
   <div class="plus-grille">
-    <button data-nav="today" onclick="switchNav('today')">📅<span>Aujourd'hui</span></button>
-    <button data-nav="victor" onclick="switchNav('victor')">📊<span>Victor</span></button>
-    <button data-nav="bankroll" onclick="switchNav('bankroll')">💰<span>Bankroll</span></button>
-    <button data-nav="history" onclick="switchNav('history')">🗂️<span>Historique</span></button>
-    <button data-nav="alerts" onclick="switchNav('alerts')">🔔<span>Alertes</span></button>
+    <button data-nav="today" onclick="switchNav('today')"><i data-ico="calendrier"></i><span>Aujourd'hui</span></button>
+    <button data-nav="victor" onclick="switchNav('victor')"><i data-ico="stats"></i><span>Victor</span></button>
+    <button data-nav="bankroll" onclick="switchNav('bankroll')"><i data-ico="portefeuille"></i><span>Bankroll</span></button>
+    <button data-nav="history" onclick="switchNav('history')"><i data-ico="historique"></i><span>Historique</span></button>
+    <button data-nav="alerts" onclick="switchNav('alerts')"><i data-ico="cloche"></i><span>Alertes</span></button>
   </div>
   <div class="plus-titre">Outils</div>
   <div class="plus-grille">
-    <button data-nav="quickpick" onclick="switchNav('quickpick')">⚡<span>Quick Pick</span></button>
-    <button data-nav="combo" onclick="switchNav('combo')">🧩<span>Combinés</span></button>
-    <button data-nav="parlay" onclick="switchNav('parlay')">🧮<span>Parlay</span></button>
+    <button data-nav="quickpick" onclick="switchNav('quickpick')"><i data-ico="eclair"></i><span>Quick Pick</span></button>
+    <button data-nav="combo" onclick="switchNav('combo')"><i data-ico="couches"></i><span>Combinés</span></button>
+    <button data-nav="parlay" onclick="switchNav('parlay')"><i data-ico="calcul"></i><span>Parlay</span></button>
   </div>
 </div>
 <div class="combo-panel visible" id="dashView">
+  <div id="dashUne"></div>
+  <div class="card">
+    <div class="titre-section"><i data-ico="eclair"></i>À analyser maintenant</div>
+    <div id="dashAAnalyser" class="a-analyser" style="margin-top:14px"></div>
+  </div>
   <div class="card">
     <div class="dash-grid" id="dashStats">
       <div class="dash-stat">
@@ -121,19 +128,19 @@
 
 <!-- Toggle Victor / Manuel -->
 <div class="sport-tabs" style="margin-bottom:12px">
-  <button class="tab active" id="pronoTabVictor" onclick="switchPronoMode('victor',this)">🎙️ Victor IA</button>
-  <button class="tab"        id="pronoTabManuel" onclick="switchPronoMode('manuel',this)">🔍 Analyse manuelle</button>
+  <button class="tab active" id="pronoTabVictor" onclick="switchPronoMode('victor',this)"><i data-ico="micro"></i>Pronos de Victor</button>
+  <button class="tab"        id="pronoTabManuel" onclick="switchPronoMode('manuel',this)"><i data-ico="loupe"></i>Analyser un match</button>
 </div>
 
 <!-- ── Section Victor ── -->
 <div id="pronoVictorSection">
   <div class="sport-tabs" id="pronoSportTabs">
     <button class="tab active" data-psport="all"        onclick="filterProno('all',this)">Tous</button>
-    <button class="tab"        data-psport="football"   onclick="filterProno('football',this)">⚽ Football</button>
-    <button class="tab"        data-psport="basketball" onclick="filterProno('basketball',this)">🏀 Basketball</button>
-    <button class="tab"        data-psport="tennis"     onclick="filterProno('tennis',this)">🎾 Tennis</button>
-    <button class="tab"        data-psport="mma"        onclick="filterProno('mma',this)">🥊 MMA</button>
-    <button class="tab"        data-psport="f1"         onclick="filterProno('f1',this)">🏎️ F1</button>
+    <button class="tab"        data-psport="football"   onclick="filterProno('football',this)"><i data-ico="ballon"></i>Football</button>
+    <button class="tab"        data-psport="basketball" onclick="filterProno('basketball',this)"><i data-ico="basket"></i>Basketball</button>
+    <button class="tab"        data-psport="tennis"     onclick="filterProno('tennis',this)"><i data-ico="raquette"></i>Tennis</button>
+    <button class="tab"        data-psport="mma"        onclick="filterProno('mma',this)"><i data-ico="gant"></i>MMA</button>
+    <button class="tab"        data-psport="f1"         onclick="filterProno('f1',this)"><i data-ico="drapeau"></i>F1</button>
     <button class="tab"        data-psport="autre"      onclick="filterProno('autre',this)">Autres</button>
   </div>
   <div id="pronoVictorContent"></div>
@@ -144,8 +151,8 @@
 
   <!-- Sport tabs -->
   <div class="sport-tabs">
-    <button class="tab active" data-sport="football"   onclick="selectSport('football')">⚽ Football</button>
-    <button class="tab"        data-sport="basket"     onclick="selectSport('basket')">🏀 Basketball</button>
+    <button class="tab active" data-sport="football"   onclick="selectSport('football')"><i data-ico="ballon"></i>Football</button>
+    <button class="tab"        data-sport="basket"     onclick="selectSport('basket')"><i data-ico="basket"></i>Basketball</button>
   </div>
 
   <!-- Étape 1 : Sélection ligue -->
@@ -155,7 +162,7 @@
       <div style="font-size:12px;font-weight:700;letter-spacing:1px;color:var(--text2)" id="s1l">CHOISIS TA LIGUE</div>
     </div>
     <div id="leagueCats" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
-    <input id="leagueSearch" class="kelly-input" placeholder="🔍 Rechercher... (Ligue 1, NBA, Serie A, Botola...)"
+    <input id="leagueSearch" class="kelly-input" placeholder="Rechercher une ligue : Ligue 1, NBA, Serie A, Botola…"
            oninput="filterLeagues()" style="margin-bottom:10px;width:100%">
     <div class="leagues-grid" id="leaguesGrid"></div>
   </div>
@@ -221,7 +228,7 @@
 
     <!-- Bouton analyser -->
     <button class="analyze-btn" id="analyzeBtn" onclick="analyze()">
-      <span>🔮</span><span>ANALYSER</span>
+      <i data-ico="loupe"></i><span>Analyser ce match</span>
     </button>
 
     <!-- Loading -->
@@ -360,7 +367,7 @@
   </div>
   <div id="comboResults"><div style="text-align:center;padding:40px;color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:12px">Clique sur "Générer" &#x1F3B2;</div></div>
 </div></div>
-<div class="disclaimer">⚠️ PronoSight est un outil d'analyse IA — pas un conseil financier. Jouez de façon responsable. Interdit aux mineurs.</div>
+<div class="disclaimer">PronoSight est un outil d'analyse, pas un conseil financier. Jeu interdit aux mineurs. Jouer comporte des risques : endettement, dépendance… Appelez le 09 74 75 13 13 (appel non surtaxé).</div>
 </div>
 
 
@@ -381,15 +388,15 @@
 <div class="history-panel" id="todayView">
   <div class="today-header">
     <div class="today-title-row">
-      <div class="today-title">📅 MATCHS DU JOUR</div>
+      <div class="today-title"><i data-ico="calendrier"></i>Matchs du jour</div>
       <div class="today-date" id="todayDate"></div>
-      <button class="today-refresh-btn" onclick="fetchTodayMatches(true)">🔄</button>
+      <button class="today-refresh-btn" onclick="fetchTodayMatches(true)" aria-label="Actualiser"><i data-ico="rafraichir"></i></button>
     </div>
     <div class="today-filter-row">
       <button class="today-filter-btn active" onclick="filterToday('all',this)">Tous</button>
-      <button class="today-filter-btn" onclick="filterToday('live',this)">🔴 Live</button>
-      <button class="today-filter-btn" onclick="filterToday('soccer',this)">⚽ Football</button>
-      <button class="today-filter-btn" onclick="filterToday('basketball',this)">🏀 Basket</button>
+      <button class="today-filter-btn" onclick="filterToday('live',this)"><i data-ico="direct"></i>Live</button>
+      <button class="today-filter-btn" onclick="filterToday('soccer',this)"><i data-ico="ballon"></i>Football</button>
+      <button class="today-filter-btn" onclick="filterToday('basketball',this)"><i data-ico="basket"></i>Basket</button>
     </div>
   </div>
   <div id="todayContent" class="today-content">
