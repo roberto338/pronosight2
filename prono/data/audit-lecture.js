@@ -27,6 +27,23 @@ export async function chargerPronosticsNotes(options = {}) {
   return rows;
 }
 
+/**
+ * Pronostics publiés à une cote CONFIRMÉE par le marché, notés ou non : le
+ * CLV n'a pas besoin du résultat, seulement de la cote publiée et du marché.
+ */
+export async function chargerPronosticsACote(options = {}) {
+  const { depuis = null } = options;
+  const { rows } = await query(`
+    SELECT id, to_char(date, 'YYYY-MM-DD') AS date, heure, competition,
+           equipe_a, equipe_b, match, pari_code, cote_estimee,
+           confiance_score, pronostic_correct
+    FROM ps_pronostics
+    WHERE cote_confirmee = true AND pari_code IS NOT NULL AND cote_estimee IS NOT NULL
+      ${depuis ? 'AND date >= $1' : ''}
+    ORDER BY date ASC, id ASC`, depuis ? [depuis] : []);
+  return rows;
+}
+
 /** Vue d'ensemble, y compris ce qui n'est pas encore noté. */
 export async function etatPronostics() {
   const { rows } = await query(`
@@ -39,4 +56,4 @@ export async function etatPronostics() {
   return rows[0];
 }
 
-export default { chargerPronosticsNotes, etatPronostics };
+export default { chargerPronosticsNotes, chargerPronosticsACote, etatPronostics };

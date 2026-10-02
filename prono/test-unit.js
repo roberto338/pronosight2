@@ -31,6 +31,13 @@ import {
   gainPari, resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, BANDES,
 } from './engine/audit.js';
 
+import {
+  familleMarche, prixCloture, clvPari, resumerClv, N_MIN_VERDICT,
+} from './engine/clv.js';
+import {
+  saisonDe, fichierPour, lireCsv, versRencontre, memeEquipe, apparier,
+} from './data/football-data-uk.js';
+
 let ok = 0, ko = 0;
 const echecs = [];
 
@@ -855,6 +862,88 @@ verifie('Échelle inversée détectée', echelleOrdonnee([
 verifie('Pas assez de données pour juger l\'échelle', echelleOrdonnee([{ score: 5, n: 3, realise: 0.9 }]), null);
 
 verifie('Bande 5 : borne annoncée', BANDES[5].min, 0.75);
+
+// ══════════════════════════════════════════════
+// CLV — Victor bat-il la cote de clôture ?
+// ══════════════════════════════════════════════
+verifie('CLV : 1X2 mesurable', familleMarche('1X2:HOME'), '1X2');
+verifie('CLV : double chance mesurable', familleMarche('DC:12'), 'DC');
+verifie('CLV : +2,5 buts mesurable', familleMarche('OU:OVER:2.5'), 'OU2.5');
+verifie('CLV : +3,5 buts absent des fichiers', familleMarche('OU:OVER:3.5'), null);
+verifie('CLV : code vide', familleMarche(''), null);
+
+// Exchange : 2,00 / 3,50 / 4,00 → 0,5 + 0,285714 + 0,25 = 1,035714
+// P(dom) juste = 0,5 / 1,035714 = 0,482759 ; P(ext) = 0,25 / 1,035714 = 0,241379
+const ligneClv = {
+  BFECH: '2.00', BFECD: '3.50', BFECA: '4.00', 'BFEC>2.5': '1.90', 'BFEC<2.5': '2.00',
+  AvgCH: '1.95', AvgCD: '3.40', AvgCA: '3.80', 'AvgC>2.5': '1.85', 'AvgC<2.5': '1.95',
+};
+const pDom = prixCloture(ligneClv, '1X2:HOME');
+presque('CLV : probabilité juste du domicile', pDom.probaJuste, 0.482759, 1e-6);
+verifie('CLV : référence la plus juste retenue', pDom.reference, 'Betfair Exchange');
+presque('CLV : double chance 12 = dom + ext', prixCloture(ligneClv, 'DC:12').probaJuste, 0.482759 + 0.241379, 1e-6);
+// Over 1,90 / Under 2,00 : 0,526316 / (0,526316 + 0,5) = 0,512821
+presque('CLV : +2,5 buts dévigorisé', prixCloture(ligneClv, 'OU:OVER:2.5').probaJuste, 0.512821, 1e-6);
+
+// Cote publiée 2,10 sur le domicile : 2,10 × 0,482759 − 1 = +0,013793 ; mouvement 2,10 / 1,95 − 1
+const cDom = clvPari(2.10, ligneClv, '1X2:HOME');
+presque('CLV : valeur à la cote publiée', cDom.valeur, 0.013793, 1e-6);
+presque('CLV : mouvement du marché', cDom.mouvement, 2.10 / 1.95 - 1, 1e-9);
+presque('CLV : sous le prix juste = négatif', clvPari(1.90, ligneClv, '1X2:HOME').valeur, 1.90 * 0.482759 - 1, 1e-6);
+
+const sansExchange = { AvgCH: '2.00', AvgCD: '3.50', AvgCA: '4.00' };
+verifie('CLV : repli sur la moyenne du marché', prixCloture(sansExchange, '1X2:AWAY').reference, 'moyenne marché');
+verifie('CLV : marché incomplet refusé', prixCloture({ BFECH: '2.0', BFECD: '3.5' }, '1X2:HOME').erreur, 'cote de clôture absente');
+verifie('CLV : marché non couvert', clvPari(2.0, ligneClv, 'OU:OVER:3.5').erreur, 'marché non couvert');
+verifie('CLV : cote publiée invalide', clvPari(null, ligneClv, '1X2:HOME').erreur, 'cote publiée invalide');
+
+// Verdicts : rien sous 30 paris, et seulement si l'intervalle exclut zéro.
+const rndClv = mulberry32(7);
+const serie = (n, f) => Array.from({ length: n }, (_, i) => ({ valeur: f(i), mouvement: f(i) }));
+verifie('CLV : sous 30 paris, pas de verdict', resumerClv(serie(N_MIN_VERDICT - 1, () => 0.05), { rnd: rndClv }).verdict, 'insuffisant');
+verifie('CLV : nettement positif', resumerClv(serie(40, i => 0.03 + (i % 5) * 0.01), { rnd: rndClv }).verdict, 'bat le marché');
+verifie('CLV : nettement négatif', resumerClv(serie(40, i => -0.03 - (i % 5) * 0.01), { rnd: rndClv }).verdict, 'ne bat pas le marché');
+verifie('CLV : centré sur zéro', resumerClv(serie(40, i => (i % 2 ? 0.08 : -0.08)), { rnd: rndClv }).verdict, 'non concluant');
+const resumeClv = resumerClv(serie(40, i => (i < 30 ? 0.02 : -0.02)), { rnd: rndClv });
+presque('CLV : moyenne', resumeClv.valeurMoyenne, (30 * 0.02 - 10 * 0.02) / 40, 1e-12);
+presque('CLV : part au-dessus du prix juste', resumeClv.partPositive, 0.75, 1e-12);
+
+// ── Fichiers football-data.co.uk ──
+verifie('fd.co.uk : saison d\'août', saisonDe('2026-08-15'), '2627');
+verifie('fd.co.uk : saison d\'avril', saisonDe('2026-04-24'), '2526');
+verifie('fd.co.uk : Serie A = Italie', fichierPour('Serie A', '2026-09-01')?.cle, '2627/I1');
+verifie('fd.co.uk : Primera Division = Espagne', fichierPour('Primera Division', '2026-05-01')?.cle, '2526/SP1');
+verifie('fd.co.uk : Brésil, fichier unique', fichierPour('Campeonato Brasileiro Série A', '2026-09-01')?.cle, 'BRA');
+verifie('fd.co.uk : coupe d\'Europe non couverte', fichierPour('UEFA Champions League', '2026-09-01'), null);
+
+const csv = 'Div,Date,Time,HomeTeam,AwayTeam,BFECH\nI1,20/09/2026,15:00,Frosinone,Como,2.1\nE1,"19/09/26",16:00,"Hull, City",Newcastle,3\n';
+const lignesCsv = lireCsv(csv);
+verifie('fd.co.uk : lignes lues', lignesCsv.length, 2);
+verifie('fd.co.uk : guillemets respectés', lignesCsv[1].HomeTeam, 'Hull, City');
+verifie('fd.co.uk : date à quatre chiffres', versRencontre(lignesCsv[0])?.date, '2026-09-20');
+verifie('fd.co.uk : date à deux chiffres', versRencontre(lignesCsv[1])?.date, '2026-09-19');
+verifie('fd.co.uk : fichier « autres ligues »', versRencontre({ Date: '20/09/2026', Home: 'Bahia', Away: 'Vasco' })?.home, 'Bahia');
+verifie('fd.co.uk : date illisible', versRencontre({ Date: '2026-09-20', HomeTeam: 'A', AwayTeam: 'B' }), null);
+
+verifie('équipe : surnom (Atleti)', memeEquipe('Atleti', 'Ath Madrid'), true);
+verifie('équipe : année du club', memeEquipe('Como 1907', 'Como'), true);
+verifie('équipe : préfixe juridique', memeEquipe('RC Lens', 'Lens'), true);
+verifie('équipe : nom court', memeEquipe('Hull City', 'Hull'), true);
+verifie('équipe : Frankfurt', memeEquipe('Frankfurt', 'Ein Frankfurt'), true);
+verifie('équipe : AZ', memeEquipe('AZ', 'AZ Alkmaar'), true);
+verifie('équipe : City n\'est pas United', memeEquipe('Man City', 'Man United'), false);
+verifie('équipe : Inter n\'est pas Milan', memeEquipe('Inter', 'Milan'), false);
+
+const journee = [
+  { date: '2026-09-20', home: 'Frosinone', away: 'Como', ligne: {} },
+  { date: '2026-09-20', home: 'Milan', away: 'Lecce', ligne: {} },
+  { date: '2026-09-19', home: 'Roma', away: 'Inter', ligne: {} },
+];
+verifie('apparier : bon match', apparier({ date: '2026-09-20', equipe_a: 'Frosinone', equipe_b: 'Como 1907' }, journee)?.away, 'Como');
+verifie('apparier : décalage d\'un jour toléré', apparier({ date: '2026-09-20', equipe_a: 'Roma', equipe_b: 'Inter' }, journee)?.home, 'Roma');
+verifie('apparier : une seule équipe ne suffit pas', apparier({ date: '2026-09-20', equipe_a: 'Milan', equipe_b: 'Juventus' }, journee), null);
+verifie('apparier : domicile et extérieur non inversés', apparier({ date: '2026-09-20', equipe_a: 'Como', equipe_b: 'Frosinone' }, journee), null);
+verifie('apparier : trop loin dans le temps', apparier({ date: '2026-09-25', equipe_a: 'Frosinone', equipe_b: 'Como' }, journee), null);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);
