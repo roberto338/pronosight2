@@ -26,6 +26,8 @@
 #         espn        → format réel des réponses ESPN (secours de Victor)
 #         essai-espn  → le secours ESPN sur les vrais matchs des 3 prochains jours
 #         sonde-clv   → données disponibles pour mesurer le CLV de Victor
+#         corriger-dc → aperçu des 7 doubles chances à la cote du nul ;
+#                       « corriger-dc appliquer » pour les corriger
 #         prod        → la prod Render tourne-t-elle le dernier commit de master ?
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
@@ -45,7 +47,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, prod]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -265,6 +267,24 @@ jobs:
           {
             echo '```'
             node scripts/sonde-clv.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # Écriture dans ps_pronostics : seulement si le 2e mot du déclencheur est
+      # « appliquer ». Sinon, aperçu.
+      - name: Corriger les cotes des doubles chances
+        if: steps.choix.outputs.etape == 'corriger-dc'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MODE: ${{ steps.choix.outputs.jours }}
+        run: |
+          {
+            echo '```'
+            if [ "$MODE" = "appliquer" ]; then
+              node scripts/corriger-cotes-dc.js --appliquer
+            else
+              node scripts/corriger-cotes-dc.js
+            fi
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
