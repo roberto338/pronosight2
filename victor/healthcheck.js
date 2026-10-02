@@ -44,6 +44,15 @@ export async function verifierModeleGroq() {
   }
 }
 
+export const SEUIL_COUVERTURE = 1 / 3;
+
+/** Message d'alerte si trop peu d'équipes étaient documentées, sinon null. Pur. */
+export function alerteCouverture(c) {
+  if (!c || !(c.equipes > 0)) return null;
+  if (c.avecDonnees / c.equipes >= SEUIL_COUVERTURE) return null;
+  return `Données de forme/classement pour ${c.avecDonnees}/${c.equipes} équipe(s) seulement au dernier prematch`;
+}
+
 /**
  * @returns {Promise<{date:string, pronosticsAujourdhui:number, dernierPronostic:string|null,
  *                    jobs:{pending:number,running:number,done:number,failed:number},
@@ -149,6 +158,25 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
     problemes.push(`File inaccessible : ${err.message}`);
   }
 
+  // ── Couverture des données au dernier prematch ──────────────
+  // Du 21/09 au 02/10, Victor a eu des matchs mais aucune donnée de forme
+  // ni de classement : rien, dans ce diagnostic, ne le montrait avant la
+  // panne complète. Le dernier prematch enregistre combien d'équipes il a
+  // pu documenter ; sous un tiers, on le signale.
+  let couverture = null;
+  try {
+    const { rows } = await query(
+      `SELECT result->'couverture' AS c FROM victor_jobs
+       WHERE name = 'prematch' AND status = 'done' AND result->'couverture' IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`
+    );
+    couverture = rows[0]?.c ?? null;
+    const alerte = alerteCouverture(couverture);
+    if (alerte) problemes.push(alerte);
+  } catch (err) {
+    console.warn(`   ⚠️  Couverture illisible : ${err.message}`);
+  }
+
   // ── Disponibilité des sources de données ────────────────────
   let matchsDuJour = null;
   if (verifierSources) {
@@ -179,7 +207,7 @@ export async function runHealthcheck({ verifierSources = true } = {}) {
 
   return {
     date: dateISO, pronosticsAujourdhui, dernierPronostic,
-    jobs, jobsBloques, appariementsAmbigus, matchsDuJour,
+    jobs, jobsBloques, appariementsAmbigus, matchsDuJour, couverture,
     groqOk: groq.ok,
     problemes,
   };

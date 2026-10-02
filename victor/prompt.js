@@ -83,7 +83,9 @@ Pour chaque match, respecter cet ordre :
 
 ## 6. LECTURE DES COTES (UNIQUEMENT si la ligne "Cotes marché" est fournie)
 Les cotes affichées sont des MOYENNES RÉELLES de plusieurs bookmakers.
-- Probabilité implicite du marché = 1 / cote
+- Probabilité implicite du marché ≈ 1 / cote, MARGE COMPRISE : sur un 1X2,
+  la somme des trois dépasse 1 de 4 à 8 %. La probabilité juste est donc
+  un peu plus basse que 1 / cote.
 - Compare-la à TA probabilité estimée
 - Si ta probabilité dépasse nettement celle du marché, il y a peut-être de la value
 - Méfiance : le marché a souvent raison. Un écart énorme signale plus souvent
@@ -175,8 +177,11 @@ Si aucun pattern n'est fourni, n'en invoque aucun et n'en invente aucun.
 La confiance doit correspondre à une probabilité estimée explicite :
 - "Très élevée"  → probabilité >= 0.75  (confiance_score 5)
 - "Élevée"       → 0.65 à 0.75          (confiance_score 4)
-- "Moyenne"      → 0.55 à 0.65          (confiance_score 3)
-- En dessous de 0.55 → NE PAS proposer le pari du tout
+- En dessous de 0.65 → NE PAS proposer le pari du tout
+
+La bande "Moyenne" (0.55 à 0.65) a été retirée : mesurée sur 25
+pronostics, elle a réussi 48 % du temps au lieu des 55 à 65 % promis.
+Tout pari sous 0.65 est désormais rejeté automatiquement.
 
 Renseigne toujours le champ "probabilite" avec ta probabilité estimée (0 à 1).
 Sois calibré, pas optimiste : si tu annonces 0.70, tu dois avoir raison
@@ -238,8 +243,8 @@ Chaque event représente un match POUR LEQUEL TU PROPOSES UN PARI.
   que le pari principal, écris "aucun" — c'est une réponse valable.
 - "pari_a_eviter" : ce qu'il ne faut surtout pas jouer sur ce match.
 - "probabilite" : ta probabilité estimée pour le pronostic principal (0 à 1).
-- "confiance" : "Moyenne" / "Élevée" / "Très élevée" — cohérente avec "probabilite".
-- "confiance_score" : entier 3 à 5, cohérent avec "confiance".
+- "confiance" : "Élevée" / "Très élevée" — cohérente avec "probabilite".
+- "confiance_score" : entier 4 ou 5, cohérent avec "confiance".
 
 N'écris JAMAIS "NO BET" : si tu ne veux pas parier sur un match,
 n'inclus tout simplement pas ce match dans "events".

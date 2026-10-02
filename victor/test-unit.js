@@ -923,6 +923,56 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// AMÉLIORATIONS DU 02/10 — meilleure cote, cotes The Odds API, confiance, couverture
+// ══════════════════════════════════════════════
+{
+  const { agregerEvenement, sportsAInterroger } = await import('./odds.js');
+  const { validerEvent, PROBA_MIN } = await import('./core.js');
+  const { alerteCouverture } = await import('./healthcheck.js');
+
+  const evOdds = {
+    home_team: 'Lens', away_team: 'Lille', bookmakers: [
+      { title: 'Unibet', markets: [{ key: 'h2h', outcomes: [
+        { name: 'Lens', price: 2.10 }, { name: 'Lille', price: 3.40 }, { name: 'Draw', price: 3.30 }] },
+        { key: 'totals', outcomes: [{ name: 'Over', point: 2.5, price: 1.95 }, { name: 'Under', point: 2.5, price: 1.85 }] }] },
+      { title: 'Betclic', markets: [{ key: 'h2h', outcomes: [
+        { name: 'Lens', price: 2.20 }, { name: 'Lille', price: 3.20 }, { name: 'Draw', price: 3.25 }] }] },
+    ],
+  };
+  const agr = agregerEvenement(evOdds);
+  verifie('meilleure cote : domicile', agr.meilleures['1X2:HOME'].cote, 2.20);
+  verifie('meilleure cote : bookmaker', agr.meilleures['1X2:HOME'].bookmaker, 'Betclic');
+  verifie('meilleure cote : extérieur chez l\'autre bookmaker', agr.meilleures['1X2:AWAY'].bookmaker, 'Unibet');
+  verifie('meilleure cote : over 2.5', agr.meilleures['OU:OVER:2.5'].cote, 1.95);
+  verifie('la moyenne reste la cote de référence', agr.marches['1X2:HOME'], 2.15);
+  const vbMeilleure = evaluerValue({ pari_code: '1X2:HOME', probabilite: 0.6 }, { marches: agr.marches, meilleures: agr.meilleures });
+  verifie('value calculée sur la moyenne', vbMeilleure.cote, 2.15);
+  verifie('meilleure cote transmise', vbMeilleure.meilleure.cote, 2.20);
+
+  // Les matchs de The Odds API sont désormais cotés, sous le même plafond.
+  const fxOdds = [
+    { codeCompet: 'PL' }, { codeCompet: '', sportKey: 'soccer_usa_mls' }, { codeCompet: '', sportKey: 'soccer_usa_mls' },
+    { codeCompet: '', sportKey: null, source: 'thesportsdb' },
+  ];
+  verifie('cotes : clés The Odds API interrogées', sportsAInterroger(fxOdds, 6).join(','), 'soccer_usa_mls,soccer_epl');
+  verifie('cotes : plafond respecté', sportsAInterroger(fxOdds, 1).join(','), 'soccer_usa_mls');
+  verifie('cotes : rien à interroger', sportsAInterroger([{ codeCompet: '' }]).length, 0);
+
+  // Bande « Moyenne » retirée : sous 0.65, plus de publication.
+  const evBase65 = { match: 'Lens vs Lille', equipe_a: 'Lens', equipe_b: 'Lille', pari_code: '1X2:HOME',
+                     pronostic_principal: 'Victoire Lens' };
+  verifie('confiance : seuil par défaut', PROBA_MIN, 0.65);
+  verifie('confiance : 0.60 rejeté', validerEvent({ ...evBase65, probabilite: 0.60 }).some(m => /confiance insuffisante/.test(m)), true);
+  verifie('confiance : score 3 rejeté', validerEvent({ ...evBase65, confiance_score: 3 }).some(m => /confiance insuffisante/.test(m)), true);
+  verifie('confiance : 0.70 accepté', validerEvent({ ...evBase65, probabilite: 0.70, confiance_score: 4 }).some(m => /confiance insuffisante/.test(m)), false);
+
+  // Couverture des données : alerte sous un tiers d'équipes documentées.
+  verifie('couverture : 0/68 alerte', /0\/68/.test(alerteCouverture({ equipes: 68, avecDonnees: 0 }) || ''), true);
+  verifie('couverture : 30/40 sans alerte', alerteCouverture({ equipes: 40, avecDonnees: 30 }), null);
+  verifie('couverture : absente sans alerte', alerteCouverture(null), null);
+}
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);
