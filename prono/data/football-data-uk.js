@@ -171,4 +171,51 @@ export async function chargerFichier(url) {
   return promesse;
 }
 
-export default { saisonDe, fichierPour, lireCsv, versRencontre, nomCanonique, memeEquipe, apparier, chargerFichier };
+// ── Historique pour le moteur statistique ─────────────────────
+
+/** Pays d'une division : E0 et E1 partagent « E », pour qu'une équipe promue garde son passé. */
+export const paysDe = (div) => String(div).replace(/\d+$/, '');
+
+/**
+ * Rencontre football-data.co.uk → ligne au format attendu par rejouer()
+ * (celui de pa_match_results). La ligne CSV complète voyage dans `extra`
+ * pour la comparaison au marché ; le modèle ne la lit jamais.
+ */
+export function versRencontreModele(r, div) {
+  const l = r?.ligne || {};
+  const hg = l.FTHG ?? l.HG, ag = l.FTAG ?? l.AG;
+  if (hg == null || ag == null || String(hg).trim() === '' || String(ag).trim() === '') return null;
+  const bd = Number(hg), be = Number(ag);
+  if (!Number.isInteger(bd) || !Number.isInteger(be) || bd < 0 || be < 0) return null;
+  const heure = /^\d{2}:\d{2}$/.test(l.Time || '') ? l.Time : '15:00';
+  const pays = paysDe(div);
+  return {
+    joue_le: `${r.date}T${heure}:00Z`,
+    competition: div, competition_code: div,
+    equipe_dom: r.home, equipe_ext: r.away,
+    equipe_dom_id: `uk:${pays}:${r.home}`, equipe_ext_id: `uk:${pays}:${r.away}`,
+    buts_dom: bd, buts_ext: be,
+    extra: { ligne: l },
+  };
+}
+
+/** Toutes les rencontres jouées de plusieurs saisons et divisions, triées dans le temps. */
+export async function chargerHistorique({ saisons = [], divisions = [] } = {}) {
+  const rencontres = [], rapport = [];
+  for (const saison of saisons) {
+    for (const div of divisions) {
+      try {
+        const liste = await chargerFichier(`${BASE}/mmz4281/${saison}/${div}.csv`);
+        const lignes = liste.map(r => versRencontreModele(r, div)).filter(Boolean);
+        rencontres.push(...lignes);
+        rapport.push({ saison, div, n: lignes.length });
+      } catch (err) {
+        rapport.push({ saison, div, n: 0, erreur: err.message });
+      }
+    }
+  }
+  rencontres.sort((a, b) => (a.joue_le < b.joue_le ? -1 : a.joue_le > b.joue_le ? 1 : 0));
+  return { rencontres, rapport };
+}
+
+export default { paysDe, versRencontreModele, chargerHistorique, saisonDe, fichierPour, lireCsv, versRencontre, nomCanonique, memeEquipe, apparier, chargerFichier };

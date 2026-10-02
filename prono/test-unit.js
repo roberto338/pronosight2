@@ -35,8 +35,9 @@ import {
   familleMarche, prixCloture, clvPari, resumerClv, N_MIN_VERDICT,
 } from './engine/clv.js';
 import {
-  saisonDe, fichierPour, lireCsv, versRencontre, memeEquipe, apparier,
+  saisonDe, fichierPour, lireCsv, versRencontre, memeEquipe, apparier, versRencontreModele, paysDe,
 } from './data/football-data-uk.js';
+import { probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, bilanParis, AVANT_MATCH } from './engine/marche.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -949,6 +950,59 @@ verifie('apparier : décalage d\'un jour toléré', apparier({ date: '2026-09-20
 verifie('apparier : une seule équipe ne suffit pas', apparier({ date: '2026-09-20', equipe_a: 'Milan', equipe_b: 'Juventus' }, journee), null);
 verifie('apparier : domicile et extérieur non inversés', apparier({ date: '2026-09-20', equipe_a: 'Como', equipe_b: 'Frosinone' }, journee), null);
 verifie('apparier : trop loin dans le temps', apparier({ date: '2026-09-25', equipe_a: 'Frosinone', equipe_b: 'Como' }, journee), null);
+
+// ══════════════════════════════════════════════
+// Le modèle face au marché (historique football-data.co.uk)
+// ══════════════════════════════════════════════
+const ligneM = {
+  AvgH: '2.00', AvgD: '3.50', AvgA: '4.00', MaxH: '2.20', MaxD: '3.70', MaxA: '4.40',
+  'Max>2.5': '2.10', 'Max<2.5': '1.95',
+  PSCH: '1.90', PSCD: '3.60', PSCA: '4.50', 'PC>2.5': '1.95', 'PC<2.5': '1.95',
+  BFECH: '2.00', BFECD: '3.50', BFECA: '4.00',
+};
+presque('marché : avant-match dévigorisé', probasJustes(ligneM, AVANT_MATCH.moyenne).x12['1'], 0.482759, 1e-6);
+verifie('marché : Pinnacle prioritaire à la clôture', clotureJuste(ligneM).refX12, 'Pinnacle');
+presque('marché : over à la clôture (1,95 / 1,95)', clotureJuste(ligneM).ou.over, 0.5, 1e-12);
+verifie('marché : clôture absente', clotureJuste({}).x12, null);
+
+const noteeM = (probas, issue, overProba, overReel) => ({
+  date: '2026-09-20', competition: 'E0', probas, issue,
+  over: { proba: overProba, reel: overReel }, extra: { ligne: ligneM },
+});
+const llM = comparerLogLoss([noteeM({ '1': 0.5, 'X': 0.25, '2': 0.25 }, '1', 0.5, true)]);
+presque('marché : log-loss du modèle', llM.modele, -Math.log(0.5), 1e-12);
+presque('marché : log-loss avant-match', llM.avantMatch, -Math.log(0.482759), 1e-6);
+verifie('marché : sans cotes, rencontre exclue de la comparaison', comparerLogLoss([{ probas: { '1': 0.5 }, issue: '1', extra: {} }]).n, 0);
+
+// Modèle à 60 % sur le domicile, meilleure cote 2,20 : espérance +32 % → pari.
+// Clôture Pinnacle 1,90 / 3,60 / 4,50 : P juste = 0,526316 / 1,026316... calculée ci-dessous.
+const pariM = parisDuModele([noteeM({ '1': 0.6, 'X': 0.2, '2': 0.2 }, '1', 0.4, false)], { seuilEdge: 0.05 });
+const dom = pariM.find(p => p.issue === '1');
+verifie('marché : value prise sur le domicile', dom?.cote, 2.20);
+verifie('marché : pari gagné', dom?.gain, 1.2000000000000002);
+const sommeP = 1 / 1.9 + 1 / 3.6 + 1 / 4.5;
+presque('marché : CLV face à la clôture Pinnacle', dom?.clv, 2.20 * ((1 / 1.9) / sommeP) - 1, 1e-9);
+verifie('marché : under pris quand le modèle sous-estime l\'over', pariM.some(p => p.issue === 'under'), true);
+verifie('marché : pas de pari sans value', parisDuModele([noteeM({ '1': 0.45, 'X': 0.27, '2': 0.22 }, '1', 0.5, true)], { seuilEdge: 0.05 }).filter(p => p.marche === '1X2').length, 0);
+verifie('marché : cote au-delà du plafond ignorée', parisDuModele([noteeM({ '1': 0.1, 'X': 0.1, '2': 0.8 }, '2', 0.5, true)], { seuilEdge: 0.05, coteMax: 4 }).some(p => p.issue === '2'), false);
+verifie('marché : sous 100 paris, pas de verdict', bilanParis(pariM, { rnd: mulberry32(3) }).verdict, 'insuffisant');
+
+// Un modèle identique au marché n'apporte rien : le poids retenu est nul.
+const commeMarche = Array.from({ length: 40 }, (_, i) => noteeM(probasJustes(ligneM, AVANT_MATCH.moyenne).x12, i % 3 === 0 ? 'X' : '1', 0.5, true));
+verifie('apport : modèle identique au marché, poids nul', apportAuMarche(commeMarche).poidsRetenu, 0);
+// Un modèle qui connaît l'issue apporte forcément : le poids retenu est positif.
+const devin = Array.from({ length: 40 }, (_, i) => {
+  const issue = i % 3 === 0 ? 'X' : '1';
+  return noteeM({ '1': issue === '1' ? 0.9 : 0.05, 'X': issue === 'X' ? 0.9 : 0.05, '2': 0.05 }, issue, 0.5, true);
+});
+verifie('apport : modèle informatif, poids positif', apportAuMarche(devin).poidsRetenu > 0, true);
+verifie('apport : gain mesuré sur la moitié de vérification', apportAuMarche(devin).gainValidation > 0, true);
+
+verifie('historique : pays commun E0 / E1', paysDe('E1'), 'E');
+const rM = versRencontreModele({ date: '2026-09-20', home: 'Fulham', away: 'Man United', ligne: { FTHG: '1', FTAG: '2', Time: '16:30' } }, 'E0');
+verifie('historique : rencontre convertie', [rM.joue_le, rM.equipe_dom_id, rM.buts_ext].join('|'), '2026-09-20T16:30:00Z|uk:E:Fulham|2');
+verifie('historique : match non joué écarté', versRencontreModele({ date: '2026-10-04', home: 'A', away: 'B', ligne: { FTHG: '', FTAG: '' } }, 'E0'), null);
+verifie('historique : fichier « autres ligues » (HG/AG)', versRencontreModele({ date: '2026-09-20', home: 'A', away: 'B', ligne: { HG: '0', AG: '0' } }, 'BRA')?.buts_dom, 0);
 
 // ══════════════════════════════════════════════
 console.log(`\nprono/test-unit.js — ${ok} contrôle(s) passé(s), ${ko} en échec`);
