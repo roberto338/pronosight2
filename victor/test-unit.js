@@ -1070,6 +1070,51 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// SITE WEB — probabilités calculées, échappement, quota des cotes
+// ══════════════════════════════════════════════
+{
+  const P = await import('../public/js/modules/probabilites.js');
+  const { echapperHtml, assainir } = await import('../public/js/modules/securite.js');
+  const { creerCacheProxyCotes } = await import('./cache-proxy-cotes.js');
+  const proche = (a, b, t) => Math.abs(a - b) <= t;
+
+  const ro = { bookmakers: { a: { home: 2.10, draw: 3.40, away: 3.60 }, b: { home: 2.05, draw: 3.50, away: 3.70 },
+                             c: { home: null, draw: 3.4, away: 3.6 } } };
+  verifie('cotes moyennes : lignes incomplètes ignorées', P.cotesMoyennes(ro).n, 2);
+  const r = P.probabilitesDepuisCotes(ro);
+  verifie('site : 1X2 somme à 1', proche(r.proba.home + r.proba.draw + r.proba.away, 1, 1e-9), true);
+  // Les intensités doivent reproduire les probabilités de victoire du marché.
+  const m = P.matriceScores(r.lambdaDom, r.lambdaExt);
+  let h = 0, a = 0; m.forEach((l, i) => l.forEach((q, j) => { if (i > j) h += q; if (i < j) a += q; }));
+  verifie('site : Poisson reproduit P(domicile)', proche(h, r.proba.home, 0.005), true);
+  verifie('site : Poisson reproduit P(extérieur)', proche(a, r.proba.away, 0.005), true);
+  verifie('site : favori domicile → plus de buts attendus', r.lambdaDom > r.lambdaExt, true);
+  verifie('site : trois scores, du plus probable au moins', r.scores.length === 3 && r.scores[0].p >= r.scores[2].p, true);
+  verifie('site : over et BTTS sont des probabilités', r.over25 > 0 && r.over25 < 1 && r.btts > 0 && r.btts < 1, true);
+  verifie('site : sans cotes, rien n\'est inventé', P.probabilitesDepuisCotes(null), null);
+  verifie('site : pourcentages à 100 exactement', P.pourcentages100([0.4667, 0.2745, 0.2588]).reduce((x, y) => x + y, 0), 100);
+  verifie('site : pourcentages arrondis au plus juste', P.pourcentages100([0.4667, 0.2745, 0.2588]).join(','), '47,27,26');
+
+  verifie('XSS : balise échappée', echapperHtml('<img src=x onerror=alert(1)>'), '&lt;img src=x onerror=alert(1)&gt;');
+  verifie('XSS : guillemets échappés', echapperHtml(`"'`), '&quot;&#39;');
+  const sain = assainir({ nom: '<b>Lens</b>', n: 3, ok: true, liste: ['<i>'], sous: { t: '&' } });
+  verifie('XSS : copie profonde assainie', [sain.nom, sain.n, sain.ok, sain.liste[0], sain.sous.t].join('|'), '&lt;b&gt;Lens&lt;/b&gt;|3|true|&lt;i&gt;|&amp;');
+
+  let t = Date.parse('2026-10-02T10:00:00Z');
+  const cache = creerCacheProxyCotes({ ttlMs: 3600_000, maxParJour: 2, maintenant: () => t });
+  verifie('quota : vide au départ', cache.frais('epl'), null);
+  verifie('quota : appel permis', cache.peutPayer(), true);
+  cache.enregistrer('epl', [1]); cache.enregistrer('l1', [2]);
+  verifie('quota : réponse servie depuis le cache', cache.frais('epl')?.[0], 1);
+  verifie('quota : budget du jour épuisé', cache.peutPayer(), false);
+  t += 2 * 3600_000;
+  verifie('quota : cache périmé', cache.frais('epl'), null);
+  verifie('quota : réponse périmée encore servie', cache.perime('epl')?.[0], 1);
+  t += 24 * 3600_000;
+  verifie('quota : nouveau jour, budget rechargé', cache.peutPayer(), true);
+}
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

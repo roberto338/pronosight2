@@ -9,6 +9,8 @@ import { state, MATCH_CACHE, getCachedAnalysis, setCachedAnalysis,
          getBankrollData, saveBankrollData } from './modules/state.js';
 import { callClaude, callGemini, extractText, extractJSON, tsdbFetch, getLeagueEvents,
          tsdbToMatch, fdFetch, fdToMatch, fetchRealOdds, fetchApiStatus, fetchMatchDetails, fetchLeagueStandings, fetchLiveStats, fetchH2H, fetchRealStats } from './modules/api.js';
+import { probabilitesDepuisCotes, pourcentages100 } from './modules/probabilites.js';
+import { assainir } from './modules/securite.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -521,7 +523,8 @@ async function analyze() {
       ).join('\n');
       h2hCtx = `\nHISTORIQUE H2H (${h2hEvents.length} derniers face-à-face):\n${h2hLines}`;
     } else {
-      h2hCtx = `\nH2H: Utilise tes connaissances des confrontations directes récentes entre ${t1} et ${t2}.`;
+      // Aucun historique fourni : on ne demande pas à l'IA d'en inventer un.
+      h2hCtx = `\nH2H: non disponible — n'invente aucune confrontation directe.`;
     }
 
     // ── Forme réelle via Google Search (fallback si API-Football indisponible) ──
@@ -658,10 +661,10 @@ Retourne EXACTEMENT cet objet JSON avec toutes ces clés, en remplaçant chaque 
   "traffic_light": "<vert, orange ou rouge>",
   "analysis": "<analyse experte en 3-4 phrases, en français>",
   "simple_explanation": "<explication simple avec emojis, en français>",
-  "team1_form": ["W","D","L","W","W"],
-  "team2_form": ["L","W","D","L","W"],
-  "blessures_team1": ["<joueur blessé si connu>"],
-  "blessures_team2": ["<joueur blessé si connu>"],
+  "team1_form": [<5 derniers résultats W/D/L UNIQUEMENT s'ils figurent dans les données ci-dessus, sinon tableau vide>],
+  "team2_form": [<idem pour ${t2}>],
+  "blessures_team1": [<joueurs blessés UNIQUEMENT s'ils figurent dans les données ci-dessus, sinon tableau vide>],
+  "blessures_team2": [<idem pour ${t2}>],
   "key_factors": [
     {"icon": "🏠", "text": "<facteur clé 1>"},
     {"icon": "📊", "text": "<facteur clé 2>"},
@@ -685,7 +688,9 @@ RÈGLES ABSOLUES:
 - traffic_light = "vert" si best_bet_confidence >= 70, "orange" si >= 55, "rouge" sinon
 - stars = 1 si confidence < 55, 2 si < 65, 3 si < 75, 4 si < 85, 5 si >= 85
 - Toutes les chaînes en français sauf team1_form/team2_form (W/D/L)
-${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, la forme (team1_form/team2_form) et les blessures à partir des DONNÉES RÉELLES fournies ci-dessus. Ces données sont factuelles et récentes.' : '- Base ton analyse sur tes connaissances à jour de ces équipes.'}`;
+- N'invente AUCUN fait : ni résultat, ni blessé, ni cote, ni confrontation. Une donnée absente reste absente.
+- Les probabilités et les cotes seront recalculées par PronoSight à partir des cotes réelles des bookmakers quand elles existent : donne ta meilleure estimation, sans plus.
+${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE : appuie ton analyse sur les DONNÉES RÉELLES fournies ci-dessus.' : '- Peu de données réelles sont disponibles pour ce match : dis-le clairement dans l\'analyse et reste prudent.'}`;
 
     document.getElementById('ls3')?.classList.add('show');
     const data = await callGemini([{ role: 'user', content: prompt }], { maxTokens: 6000, jsonMode: true, cacheKey: `${t1}|${t2}|${league}` });
@@ -744,6 +749,46 @@ ${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, l
     if (liveForm1?.length === 5) d.team1_form = liveForm1;
     if (liveForm2?.length === 5) d.team2_form = liveForm2;
 
+    // ── Probabilités calculées, pas écrites par l'IA ──
+    // Voir modules/probabilites.js. Les chiffres de l'IA ne sont gardés que
+    // faute de cotes réelles, et l'écran le signale alors explicitement.
+    if (!realStats && !liveForm1) d.team1_form = [];
+    if (!realStats && !liveForm2) d.team2_form = [];
+    const marche = sport === 'football' ? probabilitesDepuisCotes(realOdds) : null;
+    if (marche) {
+      const [ph, pd, pa] = pourcentages100([marche.proba.home, marche.proba.draw, marche.proba.away]);
+      d.proba_home = ph; d.proba_draw = pd; d.proba_away = pa;
+      const [s1, s2, s3] = marche.scores;
+      d.score_pred = s1.score;  d.score_pred_pct = Math.round(s1.p * 100);
+      d.alt_score1 = s2.score;  d.alt_score1_pct = Math.round(s2.p * 100);
+      d.alt_score2 = s3.score;  d.alt_score2_pct = Math.round(s3.p * 100);
+      d.market_over_line = '2.5';
+      d.market_over = marche.over25 >= 0.5 ? 'Over' : 'Under';
+      d.market_over_conf = Math.round(Math.max(marche.over25, 1 - marche.over25) * 100);
+      d.market_btts = marche.btts >= 0.5 ? 'Oui' : 'Non';
+      d.market_btts_conf = Math.round(Math.max(marche.btts, 1 - marche.btts) * 100);
+      d.odds_home = +marche.cotes.home.toFixed(2);
+      d.odds_draw = +marche.cotes.draw.toFixed(2);
+      d.odds_away = +marche.cotes.away.toFixed(2);
+      d.odds_source = marche.source;
+      d.proba_source = 'marche';
+      d.marche = { over25: marche.over25, btts: marche.btts, proba: marche.proba };
+      // La confiance du meilleur pari devient sa probabilité de marché quand
+      // le pari correspond à une ligne calculée.
+      const m = String(d.best_bet_market || '').toLowerCase().trim();
+      const pMarche = m === '1' ? marche.proba.home : m === 'x' ? marche.proba.draw : m === '2' ? marche.proba.away
+        : /over\s*2[.,]5/.test(m) ? marche.over25 : /under\s*2[.,]5/.test(m) ? 1 - marche.over25
+        : /btts|deux .quipes/.test(m) ? marche.btts : null;
+      if (pMarche != null) {
+        d.best_bet_confidence = Math.round(pMarche * 100);
+        d.stars = d.best_bet_confidence < 55 ? 1 : d.best_bet_confidence < 65 ? 2 : d.best_bet_confidence < 75 ? 3 : d.best_bet_confidence < 85 ? 4 : 5;
+        d.traffic_light = d.best_bet_confidence >= 70 ? 'vert' : d.best_bet_confidence >= 55 ? 'orange' : 'rouge';
+      }
+    } else {
+      d.proba_source = 'ia';
+      d.odds_source = 'estimation IA — non vérifiée';
+    }
+
     // Sauvegarder dans le cache
     setCachedAnalysis(t1, t2, league, d);
 
@@ -756,12 +801,19 @@ ${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, l
     let evData = null, kellyData = null;
     
     if (bookOdds > 1 && evMarket) {
+      // Espérance et Kelly uniquement sur des probabilités de MARCHÉ. Sur une
+      // estimation de l'IA, elles affichaient une précision qui n'existe pas
+      // — et une mise conseillée en conséquence.
       let trueProb = 0;
       const mLow = evMarket.toLowerCase();
-      if (mLow === '1') trueProb = d.proba_home / 100;
-      else if (mLow === 'x' || mLow === 'nul') trueProb = (d.proba_draw || 0) / 100;
-      else if (mLow === '2') trueProb = d.proba_away / 100;
-      else trueProb = (d.best_bet_confidence || 60) / 100;
+      if (d.proba_source === 'marche') {
+        if (mLow === '1') trueProb = d.marche.proba.home;
+        else if (mLow === 'x' || mLow === 'nul') trueProb = d.marche.proba.draw;
+        else if (mLow === '2') trueProb = d.marche.proba.away;
+        else if (/over\s*2[.,]5/.test(mLow)) trueProb = d.marche.over25;
+        else if (/under\s*2[.,]5/.test(mLow)) trueProb = 1 - d.marche.over25;
+        else if (/btts/.test(mLow)) trueProb = d.marche.btts;
+      }
       
       if (trueProb > 0) {
         const ev = calcEV(bookOdds, trueProb);
@@ -832,7 +884,10 @@ ${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE: Calibre les probabilités, l
   }
 }
 
-function renderResults(d, evData, kellyData, leg1Score) {
+function renderResults(dBrut, evData, kellyData, leg1Score) {
+  // Toute chaîne venue de l'IA, d'une API ou de la saisie est échappée
+  // avant d'entrer dans le HTML. Voir modules/securite.js.
+  const d = assainir(dBrut);
   const isBk = d.sport === 'basketball';
   let wi = 0;
   if (d.proba_away > d.proba_home && d.proba_away > (d.proba_draw || 0)) wi = 2;
@@ -943,6 +998,9 @@ function renderResults(d, evData, kellyData, leg1Score) {
       <div class="winner-card ${wi === 2 ? wTop : ''}"><div class="winner-icon">${d.team2_emoji || '⚽'}</div><div class="winner-label">${(d.team2 || '').substring(0, 12)}</div><div class="winner-pct">${d.proba_away}%</div><div class="winner-fav">${wi === 2 ? '⭐ Favori' : ''}</div></div>
     </div>
     <div class="proba-section"><div class="section-title">📊 Probabilités</div>
+      <div class="proba-source" style="font-size:11px;opacity:.8;margin-bottom:6px">${d.proba_source === 'marche'
+        ? `✅ Calculées depuis les cotes réelles — ${d.odds_source}, marge retirée`
+        : `⚠️ Estimation IA, non vérifiée par le marché : aucune cote réelle disponible pour ce match`}</div>
       <div class="proba-row"><div class="proba-label">${d.team1}</div><div class="proba-bar-bg"><div class="proba-bar ${isBk ? 'pb-bk-home' : 'pb-home'}" style="width:0%" data-w="${d.proba_home}"></div></div><div class="proba-pct">${d.proba_home}%</div></div>
       ${drawRow}
       <div class="proba-row"><div class="proba-label">${d.team2}</div><div class="proba-bar-bg"><div class="proba-bar ${isBk ? 'pb-bk-away' : 'pb-away'}" style="width:0%" data-w="${d.proba_away}"></div></div><div class="proba-pct">${d.proba_away}%</div></div>
@@ -2133,10 +2191,11 @@ async function loadVictorData({ force = false } = {}) {
       fetch('/api/victor/patterns',     { signal }).then(r => r.json()),
       fetch('/api/victor/history?days=30', { signal }).then(r => r.json())
     ]);
-    victorState.today       = todayRes;
-    victorState.stats       = statsRes;
-    victorState.patterns    = patternsRes;
-    victorState.history     = historyRes;
+    // Textes écrits par l'IA et noms venus des API : échappés avant tout rendu.
+    victorState.today       = assainir(todayRes);
+    victorState.stats       = assainir(statsRes);
+    victorState.patterns    = assainir(patternsRes);
+    victorState.history     = assainir(historyRes);
     victorState.loaded      = true;
     victorState.lastUpdated = new Date();
     victorLastFetch         = Date.now();

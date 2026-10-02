@@ -19,6 +19,7 @@ import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
 import { getFixturesOfDay }         from './victor/sources.js';
 import { getOddsEvents }            from './victor/odds.js';
+import { creerCacheProxyCotes }     from './victor/cache-proxy-cotes.js';
 import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
 import { installerSurveillanceProcess } from './victor/mortalite.js';
@@ -282,6 +283,10 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
 
 
 
+// Cache et budget quotidien : voir victor/cache-proxy-cotes.js. Sans eux,
+// chaque visiteur consommait les crédits dont Victor a besoin pour publier.
+const cacheProxyCotes = creerCacheProxyCotes();
+
 app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
   const apiKey = process.env.ODDS_API_KEY;
   if (!apiKey) {
@@ -296,6 +301,15 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
       return res.status(400).json({ error: 'sportKey invalide' });
     }
     const { bookmakers } = req.query;
+
+    const cle = `${sportKey}|${bookmakers && bookmakersValides(bookmakers) ? bookmakers : ''}`;
+    const frais = cacheProxyCotes.frais(cle);
+    if (frais) return res.set('X-Cotes-Cache', 'frais').json(frais);
+    if (!cacheProxyCotes.peutPayer()) {
+      const perime = cacheProxyCotes.perime(cle);
+      if (perime) return res.set('X-Cotes-Cache', 'perime').json(perime);
+      return res.status(503).json({ error: 'Cotes momentanément indisponibles (quota du jour atteint)' });
+    }
 
     const params = new URLSearchParams({
       apiKey,
@@ -314,6 +328,7 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
     }
 
     const data = await response.json();
+    cacheProxyCotes.enregistrer(cle, data);
     res.json(data);
   } catch (err) {
     console.error('[Odds Proxy]', err.message);
