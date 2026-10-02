@@ -18,7 +18,7 @@
 //
 // Pur : aucune base, aucun réseau.
 
-import { devigoriser } from './odds.js';
+import { devigoriser, probasPuissance } from './odds.js';
 import { bootstrapMoyenne } from './clv.js';
 
 // Colonnes football-data.co.uk.
@@ -45,10 +45,24 @@ export function cotesDe(ligne = {}, cols) {
            over: cote(ligne[cols.over]), under: cote(ligne[cols.under]) };
 }
 
-/** Probabilités sans marge : { '1','X','2' } et { over, under }, chacun null si incomplet. */
-export function probasJustes(ligne = {}, cols) {
+/**
+ * Probabilités sans marge : { '1','X','2' } et { over, under }, chacun null si incomplet.
+ * @param {'proportionnelle'|'puissance'} methode  voir probasPuissance
+ */
+export function probasJustes(ligne = {}, cols, methode = 'proportionnelle') {
   const c = cotesDe(ligne, cols);
   let x12 = null, ou = null;
+  if (methode === 'puissance') {
+    if (c['1'] && c['X'] && c['2']) {
+      const p = probasPuissance([c['1'], c['X'], c['2']]);
+      if (p) x12 = { '1': p[0], 'X': p[1], '2': p[2] };
+    }
+    if (c.over && c.under) {
+      const p = probasPuissance([c.over, c.under]);
+      if (p) ou = { over: p[0], under: p[1] };
+    }
+    return { x12, ou };
+  }
   if (c['1'] && c['X'] && c['2']) {
     const { probaMarche: p } = devigoriser({ '1X2:1': c['1'], '1X2:X': c['X'], '1X2:2': c['2'] });
     x12 = { '1': p['1X2:1'], 'X': p['1X2:X'], '2': p['1X2:2'] };
@@ -61,10 +75,10 @@ export function probasJustes(ligne = {}, cols) {
 }
 
 /** Clôture la plus juste disponible pour une ligne, marché par marché. */
-export function clotureJuste(ligne = {}) {
+export function clotureJuste(ligne = {}, methode = 'proportionnelle') {
   let x12 = null, ou = null, refX12 = null, refOu = null;
   for (const ref of CLOTURES) {
-    const p = probasJustes(ligne, ref);
+    const p = probasJustes(ligne, ref, methode);
     if (!x12 && p.x12) { x12 = p.x12; refX12 = ref.nom; }
     if (!ou && p.ou) { ou = p.ou; refOu = ref.nom; }
   }
@@ -155,6 +169,50 @@ export function parisDuModele(notees = [], { seuilEdge = 0.05, coteMax = 10 } = 
   return paris;
 }
 
+/**
+ * Value DE MARCHÉ, sans aucun modèle : un bookmaker propose-t-il plus que
+ * le prix juste du consensus ?
+ *
+ * Le consensus est la moyenne de tous les bookmakers, marge retirée. Quand
+ * la meilleure cote dépasse la cote juste de ce consensus de plus de
+ * `seuilEdge`, ce bookmaker est en retard sur les autres. Victor peut faire
+ * exactement ce calcul en direct avec The Odds API (moyenne et meilleure
+ * cote par issue) : c'est donc une stratégie testable ET exploitable.
+ *
+ * @param {Array} rencontres  lignes au format rejouer(), avec extra.ligne
+ */
+export function parisValeurMarche(rencontres = [], { seuilEdge = 0.02, coteMax = 10, methode = 'proportionnelle' } = {}) {
+  const paris = [];
+  for (const m of rencontres) {
+    const ligne = m.extra?.ligne;
+    if (!ligne) continue;
+    const juste = probasJustes(ligne, AVANT_MATCH.moyenne, methode);
+    const best = cotesDe(ligne, AVANT_MATCH.meilleure);
+    const clo = clotureJuste(ligne, methode);
+    const bd = Number(m.buts_dom), be = Number(m.buts_ext);
+    const issue = bd > be ? '1' : bd < be ? '2' : 'X';
+    const over = bd + be >= 3;
+    const candidats = [
+      ['1X2', '1', juste.x12?.['1'], best['1'], clo.x12?.['1'], issue === '1'],
+      ['1X2', 'X', juste.x12?.['X'], best['X'], clo.x12?.['X'], issue === 'X'],
+      ['1X2', '2', juste.x12?.['2'], best['2'], clo.x12?.['2'], issue === '2'],
+      ['OU2.5', 'over', juste.ou?.over, best.over, clo.ou?.over, over],
+      ['OU2.5', 'under', juste.ou?.under, best.under, clo.ou?.under, !over],
+    ];
+    for (const [marche, iss, p, k, pClo, gagne] of candidats) {
+      if (!(p > 0) || !k || k > coteMax) continue;
+      if (p * k - 1 <= seuilEdge) continue;
+      paris.push({
+        marche, issue: iss, cote: k, pModele: p, gagne,
+        gain: gagne ? k - 1 : -1,
+        clv: pClo ? k * pClo - 1 : null,
+        date: String(m.joue_le).slice(0, 10), competition: m.competition,
+      });
+    }
+  }
+  return paris;
+}
+
 /** Rendement et CLV d'un ensemble de paris, avec intervalles à 95 %. */
 export function bilanParis(paris = [], { rnd } = {}) {
   const gains = paris.map(p => p.gain);
@@ -176,4 +234,4 @@ export function bilanParis(paris = [], { rnd } = {}) {
   };
 }
 
-export default { AVANT_MATCH, CLOTURES, cotesDe, probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, bilanParis };
+export default { AVANT_MATCH, CLOTURES, cotesDe, probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, parisValeurMarche, bilanParis };

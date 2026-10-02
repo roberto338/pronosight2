@@ -14,7 +14,7 @@ import { poidsAnciennete, calculerForces, calculerLambdas } from './engine/ratin
 import { poissonPmf, matriceScores } from './engine/poisson.js';
 import { marchesDepuisMatrice } from './engine/markets.js';
 import { simuler, mulberry32, quantile } from './engine/montecarlo.js';
-import { devigoriser, edge, kelly, estValue } from './engine/odds.js';
+import { devigoriser, edge, kelly, estValue, probasPuissance } from './engine/odds.js';
 import { scoreConfiance } from './engine/confidence.js';
 import { analyserMatch } from './engine/index.js';
 import {
@@ -37,7 +37,7 @@ import {
 import {
   saisonDe, fichierPour, lireCsv, versRencontre, memeEquipe, apparier, versRencontreModele, paysDe,
 } from './data/football-data-uk.js';
-import { probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, bilanParis, AVANT_MATCH } from './engine/marche.js';
+import { probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, parisValeurMarche, bilanParis, AVANT_MATCH } from './engine/marche.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -997,6 +997,23 @@ const devin = Array.from({ length: 40 }, (_, i) => {
 });
 verifie('apport : modèle informatif, poids positif', apportAuMarche(devin).poidsRetenu > 0, true);
 verifie('apport : gain mesuré sur la moitié de vérification', apportAuMarche(devin).gainValidation > 0, true);
+
+// Méthode de la puissance : somme à 1, et charge plus la marge sur l'outsider.
+const pp = probasPuissance([1.50, 4.00, 7.00]);
+presque('puissance : somme à 1', pp[0] + pp[1] + pp[2], 1, 1e-9);
+const prop = [1 / 1.5, 1 / 4, 1 / 7].map((x, _, t) => x / (1 / 1.5 + 1 / 4 + 1 / 7));
+vrai('puissance : outsider moins probable qu\'en proportionnel', pp[2] < prop[2]);
+vrai('puissance : favori plus probable qu\'en proportionnel', pp[0] > prop[0]);
+verifie('puissance : cote invalide refusée', probasPuissance([1.0, 2.0]), null);
+presque('puissance : marché sans marge inchangé', probasPuissance([2, 2])[0], 0.5, 1e-12);
+
+// Value de marché : meilleure cote 2,20 contre prix juste du consensus
+// 1 / 0,482759 = 2,0714 → espérance +6,2 % : pari. Le nul (3,70 contre
+// 3,625) n'atteint pas 3 %.
+const vm = parisValeurMarche([{ joue_le: '2026-09-20T15:00:00Z', competition: 'E0', buts_dom: 2, buts_ext: 0, extra: { ligne: ligneM } }], { seuilEdge: 0.03 });
+verifie('value de marché : domicile retenu', vm.some(p => p.issue === '1' && p.cote === 2.20 && p.gagne), true);
+verifie('value de marché : nul sous le seuil', vm.some(p => p.issue === 'X'), false);
+verifie('value de marché : sans ligne, aucun pari', parisValeurMarche([{ buts_dom: 1, buts_ext: 0 }]).length, 0);
 
 verifie('historique : pays commun E0 / E1', paysDe('E1'), 'E');
 const rM = versRencontreModele({ date: '2026-09-20', home: 'Fulham', away: 'Man United', ligne: { FTHG: '1', FTAG: '2', Time: '16:30' } }, 'E0');
