@@ -23,7 +23,7 @@
 
 import { rejouer } from './engine/rejeu.js';
 import { resumer } from './engine/backtest.js';
-import { comparerLogLoss, parisDuModele, bilanParis } from './engine/marche.js';
+import { comparerLogLoss, apportAuMarche, parisDuModele, bilanParis } from './engine/marche.js';
 import { mulberry32 } from './engine/montecarlo.js';
 import { chargerHistorique } from './data/football-data-uk.js';
 import { MODEL_VERSION } from './engine/index.js';
@@ -59,6 +59,16 @@ console.log(`  cotes de clôture      ${ll.cloture?.toFixed(4)}`);
 const ecart = ll.n ? (ll.modele - ll.avantMatch) / ll.avantMatch : null;
 console.log(`  écart modèle / avant-match : ${pct(ecart, 2)} ${ecart > 0 ? '(le modèle est MOINS précis que le marché)' : '(le modèle est plus précis que le marché)'}`);
 console.log(`  favori du modèle juste : ${(s.tauxFavori * 100).toFixed(1)} %\n`);
+
+// ── 1 bis. Le modèle ajoute-t-il quelque chose aux cotes ? ──
+const apport = apportAuMarche(notees);
+console.log('── 1 bis. Mélange modèle + cotes d\'avant-match (poids choisi sur la moitié des matchs, vérifié sur l\'autre) ──');
+for (const p of apport.parPoids) {
+  console.log(`  poids du modèle ${String(p.w * 100).padStart(3)} %   log-loss ${p.validation.toFixed(4)}${p.w === apport.poidsRetenu ? '   ← retenu' : ''}`);
+}
+console.log(apport.poidsRetenu > 0 && apport.gainValidation > 0
+  ? `  ✅ Le modèle apporte une information : ${pct(apport.gainValidation, 2)} de log-loss en moins sur la moitié de vérification.\n`
+  : '  ❌ Le modèle n\'ajoute rien aux cotes : le mélange le plus précis est le marché seul.\n');
 
 // ── 2. Les value du modèle tiennent-elles face à la clôture ? ──
 const rnd = mulberry32(20261002);

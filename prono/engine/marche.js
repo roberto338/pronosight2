@@ -94,6 +94,35 @@ export function comparerLogLoss(notees = []) {
 }
 
 /**
+ * Le modèle apporte-t-il une information que le marché n'a pas ?
+ *
+ * On mélange : p = w × modèle + (1 − w) × cotes d'avant-match. Si un poids
+ * w > 0 fait baisser la log-loss sous celle du marché seul, le modèle
+ * contient quelque chose que les cotes ignorent — même s'il est moins bon
+ * qu'elles pris isolément. Si aucun poids n'aide, il n'a rien à ajouter.
+ * Le poids est jugé sur les rencontres paires et vérifié sur les impaires :
+ * le choisir et le mesurer sur les mêmes données flatterait le résultat.
+ */
+export function apportAuMarche(notees = [], poids = [0, 0.05, 0.1, 0.2, 0.3]) {
+  const lignes = [];
+  for (const r of notees) {
+    const pa = probasJustes(r.extra?.ligne, AVANT_MATCH.moyenne).x12;
+    if (!pa || !(r.probas?.[r.issue] > 0)) continue;
+    lignes.push({ pm: r.probas[r.issue], pa: pa[r.issue] });
+  }
+  const mesurer = (sous, w) => sous.reduce((a, l) => a + ll(w * l.pm + (1 - w) * l.pa), 0) / (sous.length || 1);
+  const pairs = lignes.filter((_, i) => i % 2 === 0), impairs = lignes.filter((_, i) => i % 2 === 1);
+  const parPoids = poids.map(w => ({ w, apprentissage: mesurer(pairs, w), validation: mesurer(impairs, w) }));
+  const marcheSeul = parPoids.find(p => p.w === 0);
+  // Un gain de l'ordre de l'arrondi n'est pas une information.
+  const meilleur = parPoids.reduce((a, b) => (b.apprentissage < a.apprentissage - 1e-6 ? b : a), marcheSeul || parPoids[0]);
+  return {
+    n: lignes.length, parPoids, poidsRetenu: meilleur.w,
+    gainValidation: marcheSeul ? (marcheSeul.validation - meilleur.validation) / marcheSeul.validation : null,
+  };
+}
+
+/**
  * Paris qu'aurait pris le modèle : chaque issue dont l'espérance face à la
  * meilleure cote d'avant-match dépasse `seuilEdge`.
  * @returns {Array<{marche, issue, cote, pModele, gagne, gain, clv}>}
@@ -147,4 +176,4 @@ export function bilanParis(paris = [], { rnd } = {}) {
   };
 }
 
-export default { AVANT_MATCH, CLOTURES, cotesDe, probasJustes, clotureJuste, comparerLogLoss, parisDuModele, bilanParis };
+export default { AVANT_MATCH, CLOTURES, cotesDe, probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, bilanParis };

@@ -37,7 +37,7 @@ import {
 import {
   saisonDe, fichierPour, lireCsv, versRencontre, memeEquipe, apparier, versRencontreModele, paysDe,
 } from './data/football-data-uk.js';
-import { probasJustes, clotureJuste, comparerLogLoss, parisDuModele, bilanParis, AVANT_MATCH } from './engine/marche.js';
+import { probasJustes, clotureJuste, comparerLogLoss, apportAuMarche, parisDuModele, bilanParis, AVANT_MATCH } from './engine/marche.js';
 
 let ok = 0, ko = 0;
 const echecs = [];
@@ -986,6 +986,17 @@ verifie('marché : under pris quand le modèle sous-estime l\'over', pariM.some(
 verifie('marché : pas de pari sans value', parisDuModele([noteeM({ '1': 0.45, 'X': 0.27, '2': 0.22 }, '1', 0.5, true)], { seuilEdge: 0.05 }).filter(p => p.marche === '1X2').length, 0);
 verifie('marché : cote au-delà du plafond ignorée', parisDuModele([noteeM({ '1': 0.1, 'X': 0.1, '2': 0.8 }, '2', 0.5, true)], { seuilEdge: 0.05, coteMax: 4 }).some(p => p.issue === '2'), false);
 verifie('marché : sous 100 paris, pas de verdict', bilanParis(pariM, { rnd: mulberry32(3) }).verdict, 'insuffisant');
+
+// Un modèle identique au marché n'apporte rien : le poids retenu est nul.
+const commeMarche = Array.from({ length: 40 }, (_, i) => noteeM(probasJustes(ligneM, AVANT_MATCH.moyenne).x12, i % 3 === 0 ? 'X' : '1', 0.5, true));
+verifie('apport : modèle identique au marché, poids nul', apportAuMarche(commeMarche).poidsRetenu, 0);
+// Un modèle qui connaît l'issue apporte forcément : le poids retenu est positif.
+const devin = Array.from({ length: 40 }, (_, i) => {
+  const issue = i % 3 === 0 ? 'X' : '1';
+  return noteeM({ '1': issue === '1' ? 0.9 : 0.05, 'X': issue === 'X' ? 0.9 : 0.05, '2': 0.05 }, issue, 0.5, true);
+});
+verifie('apport : modèle informatif, poids positif', apportAuMarche(devin).poidsRetenu > 0, true);
+verifie('apport : gain mesuré sur la moitié de vérification', apportAuMarche(devin).gainValidation > 0, true);
 
 verifie('historique : pays commun E0 / E1', paysDe('E1'), 'E');
 const rM = versRencontreModele({ date: '2026-09-20', home: 'Fulham', away: 'Man United', ligne: { FTHG: '1', FTAG: '2', Time: '16:30' } }, 'E0');
