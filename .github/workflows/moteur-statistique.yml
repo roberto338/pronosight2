@@ -25,6 +25,7 @@
 #         publiques   → quelles sources gratuites couvrent la saison en cours
 #         espn        → format réel des réponses ESPN (secours de Victor)
 #         essai-espn  → le secours ESPN sur les vrais matchs des 3 prochains jours
+#         site        → compétitions réelles, cotes disponibles, routes du site en prod
 #         sonde-clv   → données disponibles pour mesurer le CLV de Victor
 #         corriger-dc → aperçu des 7 doubles chances à la cote du nul ;
 #                       « corriger-dc appliquer » pour les corriger
@@ -48,7 +49,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod, site]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -257,6 +258,21 @@ jobs:
           {
             echo '```'
             node scripts/essai-espn.js 3
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # Lecture seule, aucun crédit : ce que le site affiche existe-t-il ?
+      - name: Sonde du site (compétitions réelles, cotes, routes)
+        if: steps.choix.outputs.etape == 'site'
+        env:
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          APP: https://pronosight2.onrender.com
+        run: |
+          {
+            echo '```'
+            node scripts/sonde-site.js ${{ steps.choix.outputs.jours == '90' && '2' || steps.choix.outputs.jours }}
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 

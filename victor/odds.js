@@ -243,7 +243,8 @@ export async function getOddsEvents(dateISO) {
   return out;
 }
 
-const sportDe = (f) => SPORT_KEYS[f.codeCompet] || f.sportKey || null;
+/** Clé de sport The Odds API d'un match normalisé, ou null. Pur. */
+export const sportDe = (f) => SPORT_KEYS[f.codeCompet] || f.sportKey || null;
 
 /** Clés de sport à interroger, les plus fournies d'abord, sous le plafond. Pur. */
 export function sportsAInterroger(fixtures = [], max = MAX_COMPETS) {

@@ -1,19 +1,18 @@
 // ══════════════════════════════════════════════════════════════
-// PronoSight v4.0 — app.js (VERSION STABLE GEMINI)
+// PronoSight — app.js
 // ══════════════════════════════════════════════════════════════
 
-import { LEAGUES, CATS, CUP_IDS, CACHE_TTL, ANALYSIS_CACHE_TTL,
-         TSDB_LEAGUE_MAP, FD_COMP_MAP, TODAY_LEAGUES, ODDS_SPORT_MAP } from './modules/config.js';
-import { state, MATCH_CACHE, getCachedAnalysis, setCachedAnalysis,
-         clearOldCaches, getHist, saveHist, getFavs, saveFavs,
-         getBankrollData, saveBankrollData } from './modules/state.js';
-import { callClaude, callGemini, extractText, extractJSON, tsdbFetch, getLeagueEvents,
-         tsdbToMatch, fdFetch, fdToMatch, fetchRealOdds, fetchApiStatus, fetchMatchDetails, fetchLeagueStandings, fetchLiveStats, fetchH2H, fetchRealStats } from './modules/api.js';
+import { LEAGUES } from './modules/config.js';
+import { state, setCachedAnalysis, clearOldCaches, getFavs, saveFavs } from './modules/state.js';
+import { callGemini, extractText, extractJSON, fetchRealOdds, fetchApiStatus, fetchMatchDetails,
+         fetchLeagueStandings, fetchH2H, fetchRealStats } from './modules/api.js';
 import { probabilitesDepuisCotes, pourcentages100 } from './modules/probabilites.js';
 import { assainir, echapperHtml } from './modules/securite.js';
 import { htmlEcranValeurs } from './modules/valeurs.js';
 import { icone, iconeSport, ecusson } from './modules/icones.js';
-import { htmlUne, htmlAAnalyser } from './modules/accueil.js';
+import { htmlUne, htmlAAnalyser, ligneMatch, rangCompet, analysable } from './modules/accueil.js';
+import { htmlLive, htmlAujourdhui, htmlCompetitions, htmlMesParis, htmlVictor } from './modules/ecrans.js';
+import { creerPari, bilanParis, courbeBankroll, versCsv } from './modules/paris.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -60,9 +59,13 @@ async function initApp() {
   // Les boutons de clés API sont des outils d'administration : un visiteur
   // n'a pas à voir « ❌ GEMINI » ni l'état de l'infrastructure.
   if (localStorage.getItem('ps_admin_key')) document.body.classList.add('admin');
+  // Les favoris étaient des identifiants de ligue (« ligue1 ») ; ce sont
+  // désormais des noms de compétition tels que les sources les écrivent.
+  const favs = getFavs();
+  if (favs.some(f => LEAGUES.some(l => l.id === f))) saveFavs([...new Set(favs.map(f => LEAGUES.find(l => l.id === f)?.name || f))]);
   // La barre du bas et la feuille « Plus » sont en position fixe : rattachées
   // à <body>, sinon un ancêtre transformé (.container) les fait défiler.
-  ['plusFond', 'plusFeuille'].forEach(id => { const n = document.getElementById(id); if (n) document.body.appendChild(n); });
+  ['plusFond', 'plusFeuille', 'pariFond', 'pariFeuille'].forEach(id => { const n = document.getElementById(id); if (n) document.body.appendChild(n); });
   const bas = document.querySelector('.bottom-nav'); if (bas) document.body.appendChild(bas);
   loadValeurs();
 
@@ -72,7 +75,7 @@ async function initApp() {
     else { akBtn.textContent = '❌ GEMINI'; akBtn.style.borderColor = '#ff3333'; akBtn.style.color = '#ff3333'; }
   }
 
-  updateHistBadge();
+  majBadgeParis();
   renderDashboard();
   // Charge les données Victor immédiatement, re-render dashboard quand prêt
   loadVictorData().then(() => renderDashboard());
@@ -85,28 +88,14 @@ async function initApp() {
     }
   });
   // Scan auto toutes les 3h si notifications activées
-  autoScanAlerts();
-  setInterval(autoScanAlerts, 3 * 60 * 60 * 1000);
+  // Notifications sur les compétitions suivies : uniquement à partir de
+  // données réelles (pronos publiés, values détectées), jamais d'un scan IA.
+  Promise.all([loadVictorData(), loadValeurs()]).then(notifierFavoris);
 }
 
 // ══════════════════════════════════════════════
 // SPORT & NAVIGATION
 // ══════════════════════════════════════════════
-function selectSport(sport) {
-  state.currentSport = sport;
-  state.selectedLeague = null;
-  state.selectedMatch = null;
-  // N'affecte que les onglets sport dans la section manuelle (pas les onglets Victor/Manuel)
-  document.querySelectorAll('#pronoManuelSection .tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`#pronoManuelSection [data-sport="${sport}"]`)?.classList.add('active');
-  const btn = document.getElementById('analyzeBtn');
-  if (btn) btn.classList.toggle('bk-btn', sport === 'basket');
-  document.getElementById('bigSpinner')?.classList.toggle('bk', sport === 'basket');
-  state.currentCat = 'all';
-  state.filterText = '';
-  document.getElementById('leagueSearch').value = '';
-  renderCats(); renderLeagues(); showStep(1);
-}
 
 function showStep(n) {
   document.getElementById('step1panel').style.display = n >= 1 ? 'block' : 'none';
@@ -142,9 +131,8 @@ function switchPronoMode(mode, btn) {
   // Initialisation paresseuse : lance les ligues la première fois qu'on ouvre l'analyse manuelle
   if (mode === 'manuel' && !manuelSection.dataset.initialized) {
     manuelSection.dataset.initialized = 'true';
-    renderCats();
-    renderLeagues();
     showStep(1);
+    dessinerChoixMatch();
   }
 }
 
@@ -152,11 +140,11 @@ function switchNav(tab) {
   // Mise à jour visuelle immédiate (pas de debounce sur le CSS)
   const pv = document.getElementById('pronoView');
   if (pv) pv.style.display = tab === 'prono' ? 'block' : 'none';
-  ['history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor','valeurs'].forEach(t => {
+  ['history','parlay','alerts','dash','live','today','victor','valeurs'].forEach(t => {
     const el = document.getElementById(t + 'View');
     if (el) el.classList.toggle('visible', t === tab);
   });
-  ['prono','history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor','valeurs'].forEach(t => {
+  ['prono','history','parlay','alerts','dash','live','today','victor','valeurs'].forEach(t => {
     const b = document.getElementById('nav-' + t);
     if (b) b.classList.toggle('active', t === tab);
   });
@@ -170,21 +158,20 @@ function switchNav(tab) {
   fermerPlus();
   // Selon le thème, c'est <body> qui défile (overflow:auto), pas la fenêtre.
   window.scrollTo(0, 0); document.body.scrollTop = 0;
-  // Live : démarre/arrête le refresh indépendamment du debounce
-  if (tab === 'live') { fetchLive(false); startLiveAutoRefresh(); } else stopLiveAutoRefresh();
+  // Live : rafraîchi tant que l'onglet est ouvert, arrêté sinon.
+  if (tab === 'live') demarrerDirect(); else arreterDirect();
 
   // Debounce 150ms sur le chargement de données (évite les fetches en rafale)
   if (_switchNavTimer) clearTimeout(_switchNavTimer);
   _switchNavTimer = setTimeout(() => {
     _switchNavTimer = null;
-    if (tab === 'history') renderHistory();
+    if (tab === 'history') dessinerMesParis();
     if (tab === 'dash') renderDashboard();
     if (tab === 'victor') renderVictorView();
     if (tab === 'valeurs') renderValeursView();
     if (tab === 'prono') renderPronoVictor();
-    if (tab === 'today') fetchTodayMatches(false);
-    if (tab === 'alerts') renderAlertFavs();
-    if (tab === 'bankroll') renderBankroll();
+    if (tab === 'today') dessinerAujourdhui(true);
+    if (tab === 'alerts') dessinerCompetitions(true);
     if (tab === 'parlay' && document.getElementById('parlayLegs')?.children.length === 0) {
       addParlayLeg(); addParlayLeg();
     }
@@ -214,12 +201,12 @@ async function chargerProgramme() {
 function dessinerAccueil() {
   const une = document.getElementById('dashUne');
   if (une) une.innerHTML = htmlUne({
-    aVenir: programme.charge ? programme.matchs.filter(m => m.statut !== 'FT').length : null,
+    aVenir: programme.charge ? programme.matchs.filter(analysable).length : null,
     valeurs: valeursState.valeurs?.aujourdhui?.length || 0,
     pronos: victorState.today?.total || 0,
   });
   const liste = document.getElementById('dashAAnalyser');
-  if (liste) liste.innerHTML = htmlAAnalyser(programme.matchs, { charge: programme.charge });
+  if (liste) liste.innerHTML = htmlAAnalyser(programme.matchs, { charge: programme.charge, favoris: getFavs() });
 }
 
 /** Ligue de l'app correspondant au libellé de compétition d'une source. */
@@ -234,13 +221,14 @@ function ligueDepuisCompet(competition = '') {
  * renseigne les équipes et la ligue, puis exécute analyze().
  * Avant, le bouton ⚡ affichait « Victor analyse… » sans rien analyser.
  */
-async function analyserMatch({ team1, team2, competition = '', leagueId = null, live = false, heure = '' } = {}) {
+async function analyserMatch({ team1, team2, competition = '', leagueId = null, live = false, heure = '', sportKey = null } = {}) {
   if (!team1 || !team2) return;
   switchNav('prono');
   switchPronoMode('manuel', document.getElementById('pronoTabManuel'));
   const ligue = (leagueId && LEAGUES.find(l => l.id === leagueId)) || ligueDepuisCompet(competition);
   if (ligue) { state.selectedLeague = ligue; state.currentSport = ligue.sport === 'basketball' ? 'basket' : 'football'; }
-  state.selectedMatch = { team1, team2, live, date: "Aujourd'hui", time: heure, league: competition };
+  state.selectedMatch = { team1, team2, live, date: "Aujourd'hui", time: heure, league: competition, sport_key: sportKey };
+  if (!ligue) state.selectedLeague = competition ? { id: null, name: competition, country: '', sport: 'football' } : null;
   showStep(2);
   const s2 = document.getElementById('s2l');
   if (s2) s2.textContent = ligue ? ligue.name : (competition || 'Match choisi');
@@ -253,12 +241,41 @@ async function analyserMatch({ team1, team2, competition = '', leagueId = null, 
 
 function analyserDepuisAccueil(i) {
   const m = programme.matchs[i];
-  if (m) analyserMatch({ team1: m.equipe_a, team2: m.equipe_b, competition: m.competition, live: m.statut === 'LIVE', heure: m.heure });
+  if (m) analyserMatch({ team1: m.equipe_a, team2: m.equipe_b, competition: m.competition, live: m.statut === 'LIVE', heure: m.heure, sportKey: m.sport_key });
 }
 
 function ouvrirAnalyseLibre() {
   switchNav('prono');
   switchPronoMode('manuel', document.getElementById('pronoTabManuel'));
+}
+
+// ── Analyse : étape 1, un match réel du programme ──
+let _competChoisie = null;
+async function dessinerChoixMatch() {
+  const zc = document.getElementById('choixCompet'), zm = document.getElementById('choixMatchs');
+  if (!zc || !zm) return;
+  if (!programme.charge) { zm.innerHTML = '<div class="vm-note" style="margin:0">Chargement du programme…</div>'; await chargerProgramme(); }
+  const ouverts = programme.matchs.map((m, index) => ({ ...m, index })).filter(analysable);
+  if (!ouverts.length) {
+    zc.innerHTML = '';
+    zm.innerHTML = `<div class="etat-vide" style="padding:18px 10px"><div class="etat-vide-icone">${icone('calendrier')}</div><div class="etat-vide-titre">Plus de match de football aujourd'hui</div><div class="etat-vide-texte">Aucune affiche de football à venir dans nos sources. Tu peux en saisir une à la main.</div></div>`;
+    return;
+  }
+  const favs = getFavs();
+  const compets = [...new Set(ouverts.map(m => m.competition))]
+    .sort((a, b) => favs.includes(b) - favs.includes(a) || rangCompet(a) - rangCompet(b));
+  if (!_competChoisie || !compets.includes(_competChoisie)) _competChoisie = compets[0];
+  zc.innerHTML = compets.map(c => `<button class="tab ${c === _competChoisie ? 'active' : ''}" data-c="${echapperHtml(c)}" onclick="choisirCompet(this.dataset.c)">${echapperHtml(c)}<span class="tab-compte">${ouverts.filter(m => m.competition === c).length}</span></button>`).join('');
+  zm.innerHTML = ouverts.filter(m => m.competition === _competChoisie)
+    .sort((a, b) => String(a.heure).localeCompare(String(b.heure))).map(ligneMatch).join('');
+}
+function choisirCompet(c) { _competChoisie = c; dessinerChoixMatch(); }
+function saisieLibre() {
+  state.selectedMatch = null; state.selectedLeague = null;
+  showStep(2);
+  const s2 = document.getElementById('s2l'); if (s2) s2.textContent = 'Saisie libre';
+  ['team1', 'team2'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('team1')?.focus();
 }
 
 function ouvrirPlus() {
@@ -308,9 +325,7 @@ function majBadgeValeurs() {
 }
 
 function bankrollDefinie() {
-  const d = getBankrollData();
-  const b = d.current || d.initial || parseFloat(localStorage.getItem('ps_bankroll'));
-  return Number.isFinite(b) && b > 0 ? b : null;
+  return bilanParis(lireParis(), { bankrollInitiale: bankrollDepart() }).bankroll;
 }
 
 function dessinerValeurs() {
@@ -340,130 +355,11 @@ function toggleTheme() {
 // ══════════════════════════════════════════════
 // LEAGUES & MATCHES
 // ══════════════════════════════════════════════
-function renderCats() {
-  const cats = CATS[state.currentSport] || [];
-  document.getElementById('leagueCats').innerHTML = cats.map(c =>
-    `<button class="cat-btn ${c.id === state.currentCat ? 'active' : ''}" onclick="setCat('${c.id}')">${c.label}</button>`
-  ).join('');
-}
 
-function setCat(cat) { state.currentCat = cat; renderCats(); renderLeagues(); }
 
-function filterLeagues() { 
-  state.filterText = document.getElementById('leagueSearch').value.toLowerCase(); 
-  renderLeagues(); 
-}
 
-function renderLeagues() {
-  let list = LEAGUES.filter(l => l.sport === state.currentSport);
-  if (state.currentCat !== 'all') list = list.filter(l => l.cat === state.currentCat);
-  if (state.filterText) list = list.filter(l => l.name.toLowerCase().includes(state.filterText) || l.country.toLowerCase().includes(state.filterText));
-  const isBk = state.currentSport === 'basket';
-  document.getElementById('leaguesGrid').innerHTML = list.map(l => `
-    <div class="league-card ${state.selectedLeague?.id === l.id ? (isBk ? 'selected bk-sel' : 'selected') : ''}" onclick="pickLeague('${l.id}')">
-      <div class="league-flag">${l.flag}</div>
-      <div><div class="league-name">${l.name}</div><div class="league-tier">${l.country} · ${l.tier}</div></div>
-    </div>`).join('');
-}
 
-async function pickLeague(id) {
-  const cr = document.getElementById('cupLegRow');
-  if (cr) cr.style.display = CUP_IDS.includes(id) ? 'block' : 'none';
-  state.selectedLeague = LEAGUES.find(l => l.id === id);
-  state.selectedMatch = null;
-  document.getElementById('team1').value = '';
-  document.getElementById('team2').value = '';
-  renderLeagues(); 
-  showStep(2);
-  await loadMatches();
-}
 
-async function loadMatches() {
-  const container = document.getElementById('matchesContainer');
-  
-  // Vider le conteneur et afficher le chargement
-  container.innerHTML = '<div class="match-loading"><div class="mini-spinner"></div>Chargement des matchs...</div>';
-  
-  const cacheKey = state.selectedLeague.id;
-  
-  // Vérifier le cache d'abord
-  const cached = MATCH_CACHE[cacheKey];
-  if (cached && Date.now() - cached.ts < CACHE_TTL) { 
-    renderMatches(cached.matches, true); 
-    return; 
-  }
-
-  // ── SOURCE UNIQUE : /api/matchs (le backend de Victor) ──────────
-  // Le front maintenait sa propre table d'identifiants TheSportsDB.
-  // 14 des 38 étaient fausses : « Coupe du Monde » renvoyait la WWE,
-  // « League Cup » l'UFC, « Conference League » l'EliteXC. On ne
-  // devine plus : on lit ce que le backend a réellement collecté.
-  let jour = null;
-  try {
-    const rep = await fetch(`/api/matchs?date=${new Date().toISOString().slice(0, 10)}`);
-    if (rep.ok) jour = await rep.json();
-  } catch (e) {
-    console.log('/api/matchs indisponible:', e.message);
-  }
-
-  if (jour?.matchs?.length) {
-    const cherche = normaliserNom(state.selectedLeague.name);
-    const pourLaLigue = jour.matchs.filter(m => {
-      const c = normaliserNom(m.competition);
-      return c.includes(cherche) || cherche.includes(c);
-    });
-
-    if (pourLaLigue.length) {
-      const meta = { name: state.selectedLeague.name, flag: state.selectedLeague.flag, id: state.selectedLeague.id };
-      const formatted = pourLaLigue.map(m => apiToMatch(m, meta));
-      MATCH_CACHE[cacheKey] = { matches: formatted, ts: Date.now() };
-      renderMatches(formatted, false);
-      return;
-    }
-
-    // Rien pour cette compétition : plutôt qu'un message vide, on montre
-    // ce qui se joue vraiment. C'est l'information utile.
-    const dispo = jour.competitions.filter(c => c.aVenir > 0).slice(0, 12);
-    container.innerHTML = `
-      <div class="etat-vide">
-        <div class="etat-vide-icone">${icone('calendrier')}</div>
-        <div class="etat-vide-titre">Aucun match en ${state.selectedLeague.name} aujourd'hui</div>
-        <div class="etat-vide-texte">
-          ${dispo.length
-            ? `${jour.aVenir} match${jour.aVenir > 1 ? 's' : ''} à venir dans d'autres compétitions :`
-            : 'Aucun match à venir aujourd\'hui, toutes compétitions confondues.'}
-        </div>
-        ${dispo.length ? `<div class="compet-dispo">${dispo.map(c =>
-          `<span class="compet-puce">${c.competition} <b>${c.aVenir}</b></span>`).join('')}</div>` : ''}
-        <div class="etat-vide-texte" style="margin-top:14px">
-          Vous pouvez aussi saisir deux équipes à la main ci-dessous.
-        </div>
-      </div>`;
-    return;
-  }
-
-  container.innerHTML = `
-    <div class="etat-vide">
-      <div class="etat-vide-icone">${icone('calendrier')}</div>
-      <div class="etat-vide-titre">Calendrier indisponible</div>
-      <div class="etat-vide-texte">Les sources sportives ne répondent pas pour l'instant.
-      Saisissez deux équipes ci-dessous pour lancer une analyse.</div>
-    </div>`;
-
-  // Pré-remplir les placeholders selon la ligue
-  const examples = {
-    'ligue1': { team1: 'PSG', team2: 'Monaco' },
-    'pl': { team1: 'Manchester City', team2: 'Arsenal' },
-    'laliga': { team1: 'Real Madrid', team2: 'Barcelona' },
-    'bundesliga': { team1: 'Bayern Munich', team2: 'Dortmund' },
-    'seriea': { team1: 'Inter Milan', team2: 'Juventus' }
-  };
-  const ex = examples[state.selectedLeague.id];
-  if (ex) {
-    document.getElementById('team1').placeholder = ex.team1;
-    document.getElementById('team2').placeholder = ex.team2;
-  }
-}
 
 /**
  * Normalise un nom de compétition pour le rapprochement.
@@ -479,69 +375,10 @@ function normaliserNom(s) {
     .trim();
 }
 
-/** Convertit un match de /api/matchs vers la forme attendue par renderMatches(). */
-function apiToMatch(m, meta) {
-  const enCours = m.statut === 'LIVE';
-  const [s1, s2] = (m.score || '').split('-');
-  return {
-    team1: m.equipe_a || '?', team2: m.equipe_b || '?',
-    date: "Aujourd'hui", time: m.heure || 'TBD', live: enCours,
-    score1: s1 ?? null, score2: s2 ?? null,
-    status: m.statut || 'NS',
-    league: m.competition || meta?.name || '',
-    leagueName: meta?.name, leagueFlag: meta?.flag, leagueId: meta?.id,
-    source: m.source,
-    tsdb_id: null, home_team_id: null, away_team_id: null,
-  };
-}
 
-function clearMatchCache() {
-  if (state.selectedLeague) delete MATCH_CACHE[state.selectedLeague.id];
-  loadMatches();
-}
 
-function renderMatches(matches, fromCache) {
-  const container = document.getElementById('matchesContainer');
-  state.matches = matches;
-  if (!matches.length) {
-    container.innerHTML = '<div class="match-loading">Aucun match trouvé. Saisie manuelle disponible.</div>';
-    return;
-  }
-  const cacheLabel = fromCache ? '<span class="match-cached" onclick="clearMatchCache()" title="Cliquer pour rafraîchir" style="cursor:pointer">⚡ CACHE — 🔄 Rafraîchir</span>' : '';
-  container.innerHTML = `
-    <div style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;letter-spacing:1px;margin-bottom:9px;display:flex;align-items:center;gap:8px">
-      ${matches.length} MATCHS TROUVÉS ${cacheLabel}
-    </div>
-    <div class="matches-list">${matches.map((m, i) => `
-      <div class="match-item ${m.live ? 'live-match' : ''}" id="mi${i}" onclick="pickMatch(${i})">
-        <div class="match-teams">
-          <span class="match-team-name">${m.team1}</span>
-          <span class="match-vs">VS</span>
-          <span class="match-team-name">${m.team2}</span>
-        </div>
-        <div class="match-time">${m.live ? '<span class="live-tag">🔴 LIVE</span>' : `<div>${m.date}</div><div>${m.time}</div>`}</div>
-        <button class="match-quick-btn" onclick="event.stopPropagation();quickAnalyzeMatch(${i})">⚡ Analyser</button>
-      </div>`).join('')}
-    </div>`;
-}
 
-function pickMatch(idx) {
-  const m = state.matches[idx];
-  if (!m) return;
-  state.selectedMatch = m;
-  document.getElementById('team1').value = m.team1;
-  document.getElementById('team2').value = m.team2;
-  document.querySelectorAll('.match-item').forEach(el => el.classList.remove('selected', 'bk-sel'));
-  const el = document.getElementById('mi' + idx);
-  if (el) { el.classList.add('selected'); if (state.currentSport === 'basket') el.classList.add('bk-sel'); }
-}
 
-async function quickAnalyzeMatch(i) {
-  pickMatch(i);
-  await new Promise(r => setTimeout(r, 100));
-  document.getElementById('results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  await analyze();
-}
 
 // ══════════════════════════════════════════════
 // EV + KELLY
@@ -559,79 +396,7 @@ function calcKelly(bookOdds, trueProb, bankroll, fraction) {
   };
 }
 
-function computeGlobalConfidence(d, evData) {
-  const scores = [], weights = [];
-  
-  scores.push(d.best_bet_confidence || 60);
-  weights.push(0.40);
-  
-  if (evData && evData.ev !== null && evData.ev !== undefined) {
-    let evScore = 50;
-    if (evData.ev > 5) evScore = 90;
-    else if (evData.ev > 0) evScore = 70;
-    else if (evData.ev > -5) evScore = 40;
-    else evScore = 20;
-    scores.push(evScore);
-    weights.push(0.20);
-  } else {
-    weights[0] = 0.50;
-  }
 
-  const f1 = (d.team1_form || []).filter(r => r === 'W').length;
-  const f2 = (d.team2_form || []).filter(r => r === 'W').length;
-  const favForm = d.proba_home > d.proba_away ? f1 : f2;
-  let formScore = 50;
-  if (favForm >= 4) formScore = 90;
-  else if (favForm === 3) formScore = 70;
-  else if (favForm === 2) formScore = 50;
-  else formScore = 30;
-  scores.push(formScore);
-  weights.push(0.20);
-
-  const favInj = d.proba_home >= d.proba_away ? (d.blessures_team1 || []) : (d.blessures_team2 || []);
-  let injScore = 50;
-  if (favInj.length === 0) injScore = 90;
-  else if (favInj.length === 1) injScore = 70;
-  else if (favInj.length <= 3) injScore = 50;
-  else injScore = 25;
-  scores.push(injScore);
-  weights.push(0.10);
-
-  const maxProba = Math.max(d.proba_home || 0, d.proba_away || 0, d.proba_draw || 0);
-  let gapScore = 50;
-  if (maxProba >= 65) gapScore = 90;
-  else if (maxProba >= 55) gapScore = 70;
-  else if (maxProba >= 45) gapScore = 50;
-  else gapScore = 30;
-  scores.push(gapScore);
-  weights.push(0.10);
-
-  const totalWeight = weights.reduce((a, b) => a + b, 0);
-  let globalScore = 0;
-  for (let i = 0; i < scores.length; i++) {
-    globalScore += scores[i] * weights[i];
-  }
-  globalScore = Math.round(globalScore / totalWeight);
-
-  const hist = getHist();
-  const resolved = hist.filter(h => h.result === 'win' || h.result === 'lose');
-  if (resolved.length >= 5) {
-    const wins = resolved.filter(h => h.result === 'win').length;
-    const wr = wins / resolved.length;
-    if (wr >= 0.65) globalScore = Math.min(99, globalScore + 5);
-    else if (wr <= 0.35) globalScore = Math.max(10, globalScore - 5);
-  }
-
-  return Math.min(99, Math.max(10, globalScore));
-}
-
-function getConfidenceLabel(score) {
-  if (score >= 80) return { label: 'TRÈS ÉLEVÉE', color: '#00dd55', emoji: '🟢' };
-  if (score >= 65) return { label: 'ÉLEVÉE', color: '#00cc44', emoji: '🟢' };
-  if (score >= 50) return { label: 'MOYENNE', color: '#ffcc00', emoji: '🟡' };
-  if (score >= 35) return { label: 'FAIBLE', color: '#ff6600', emoji: '🟠' };
-  return { label: 'TRÈS FAIBLE', color: '#ff3333', emoji: '🔴' };
-}
 
 // ══════════════════════════════════════════════
 // ANALYZE
@@ -663,7 +428,7 @@ async function analyze() {
       fetchMatchDetails(t1, t2, state.selectedLeague?.id),
       fetchLeagueStandings(state.selectedLeague?.id),
       fetchH2H(state.selectedMatch?.home_team_id, state.selectedMatch?.away_team_id),
-      fetchRealOdds(t1, t2, state.selectedLeague?.id),
+      fetchRealOdds(t1, t2, state.selectedLeague?.id, state.selectedMatch?.sport_key),
       fetchRealStats(t1, t2, state.selectedLeague?.id)
     ]);
 
@@ -987,7 +752,6 @@ ${(statsCtx || liveFormCtx) ? '- PRIORITÉ ABSOLUE : appuie ton analyse sur les 
       }
     }
 
-    // Remplacer l'appel à computeGlobalConfidence par computeAdvancedConfidence dans renderResults
     // On va stocker fdData dans d pour qu'il soit accessible dans renderResults
     d.fdData = fdData;
     d.realOdds = realOdds;
@@ -1094,21 +858,6 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
 
   const factors = (d.key_factors || []).map(f => `<div class="an-facteur">${icone('fleche', { taille: 16 })}<div>${f.text}</div></div>`).join('');
 
-  const altBetsHTML = (d.alt_bets?.length)
-    ? d.alt_bets.map(b => {
-        const c = b.confidence || 0;
-        const cls = c >= 70 ? 'haute' : c >= 55 ? 'moyenne' : 'basse';
-        return `<div class="alt-bet-card">
-          <div class="alt-bet-market">${b.market}</div>
-          <div class="alt-bet-pick">${b.pick}</div>
-          <div class="alt-bet-conf jauge ${cls}">${c} %</div>
-          <div class="alt-bet-desc">${b.desc}</div>
-        </div>`;
-      }).join('')
-    : '';
-  const altBetsBlock = altBetsHTML
-    ? `<div class="an-carte"><div class="titre-section">${icone('couches')}Autres marchés</div><div class="alt-bets-grid">${altBetsHTML}</div></div>`
-    : '';
 
   let oddsTableBlock = '';
   if (d.realOdds?.bookmakers && Object.keys(d.realOdds.bookmakers).length) {
@@ -1149,35 +898,43 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
       </div>
     </div>
 
-    <div class="an-carte">
+    ${d.proba_source !== 'marche' ? `<div class="an-carte">
+      <div class="titre-section">${icone('cible')}Qui gagne ?</div>
+      <div class="an-source ia">${icone('eclair', { taille: 15 })}Aucune cote réelle trouvée pour ce match</div>
+      <div class="an-texte">Sans cotes du marché, PronoSight n'affiche ni pourcentages, ni cote juste, ni score probable : ce seraient des chiffres inventés. La lecture ci-dessous est qualitative.</div>
+    </div>` : `<div class="an-carte">
       <div class="titre-section">${icone('cible')}Qui gagne ?</div>
       <div class="an-source ${d.proba_source === 'marche' ? 'marche' : 'ia'}">${d.proba_source === 'marche'
         ? `${icone('bouclier', { taille: 15 })}Calculé sur les cotes réelles (${d.odds_source}), marge des bookmakers retirée`
         : `${icone('eclair', { taille: 15 })}Estimation de l'IA : aucune cote réelle trouvée pour ce match`}</div>
       <div class="an-issues">${issuesHtml}</div>
       <div class="an-barre-probas">${barre}</div>
-    </div>
+    </div>`}
 
     <div class="an-carte an-verdict">
       <div class="titre-section">${icone('eclair')}Le verdict</div>
       <div class="an-verdict-pari">${d.best_bet}</div>
-      <div class="an-verdict-meta">
+      ${d.proba_source === 'marche' ? `<div class="an-verdict-meta">
         <span class="an-pastille ${tlCls}">${tlLabel}</span>
         <span class="jauge ${tlCls}"><span class="jauge-segs">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= stars ? 'on' : ''}"></i>`).join('')}</span>${d.best_bet_confidence} %</span>
-      </div>
+      </div>` : `<div class="an-verdict-meta"><span class="an-pastille moyenne">Lecture de l'IA, non chiffrée</span></div>`}
       ${d.simple_explanation ? `<div class="an-simple">${d.simple_explanation}</div>` : ''}
     </div>
 
     ${evBlock}
 
-    <div class="an-carte">
+    ${d.proba_source === 'marche' ? `<div class="an-carte">
       <div class="titre-section">${icone('ballon')}Scores les plus probables</div>
       <div class="an-scores">
         <div class="an-score principal"><b>${d.score_pred}</b><span>${d.score_pred_pct} %</span></div>
         <div class="an-score"><b>${d.alt_score1}</b><span>${d.alt_score1_pct} %</span></div>
         <div class="an-score"><b>${d.alt_score2}</b><span>${d.alt_score2_pct} %</span></div>
       </div>
-    </div>
+      <div class="an-scores" style="grid-template-columns:1fr 1fr;margin-top:8px">
+        <div class="an-score"><b>${Math.round(d.marche.over25 * 100)} %</b><span>Plus de 2,5 buts · cote juste ${(1 / d.marche.over25).toFixed(2)}</span></div>
+        <div class="an-score"><b>${Math.round(d.marche.btts * 100)} %</b><span>Les deux marquent · cote juste ${(1 / d.marche.btts).toFixed(2)}</span></div>
+      </div>
+    </div>` : ''}
 
     ${form1 || form2 ? `<div class="an-carte">
       <div class="titre-section">${icone('historique')}Forme récente</div>
@@ -1191,18 +948,9 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
       ${factors ? `<div class="an-facteurs">${factors}</div>` : ''}
     </div>` : ''}
 
-    ${altBetsBlock}
     ${oddsTableBlock}
 
-    <div class="an-carte">
-      <div class="titre-section">${icone('coche')}Tu as joué ce pari ?</div>
-      <div class="result-tracker" id="resultTracker">
-        <button class="result-btn result-win"  onclick="markLastResult('win')"  id="rbWin">Gagné</button>
-        <button class="result-btn result-lose" onclick="markLastResult('lose')" id="rbLose">Perdu</button>
-        <button class="result-btn result-draw" onclick="markLastResult('draw')" id="rbDraw">Nul</button>
-        <button class="result-btn result-push" onclick="markLastResult('push')" id="rbPush">Remboursé</button>
-      </div>
-    </div>
+    <button class="dash-cta" style="width:100%;margin-bottom:12px" onclick="jouerPari('analyse')">${icone('portefeuille', { taille: 18 })} Je joue ce pari</button>
 
     <div class="chat-section">
       <div class="chat-header">
@@ -1242,72 +990,8 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
   if(c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
   state.chatCtx = d;
   state.chatHistory = [];
-  addToHistory(d, evData);
 }
 // Nouveau système de confiance avancé
-function computeAdvancedConfidence(d, fdData) {
-  const weights = {
-    forme: 0.20,
-    blessures: 0.15,
-    historique: 0.10,
-    domicile: 0.10,
-    motivation: 0.10,
-    cotes: 0.10,
-    iaConfidence: 0.15,
-    dataQuality: 0.10
-  };
-  
-  let scores = {};
-  
-  // 1. Forme récente
-  const homeWins = (d.team1_form || []).filter(r => r === 'W').length;
-  const awayWins = (d.team2_form || []).filter(r => r === 'W').length;
-  scores.forme = (homeWins * 20 + awayWins * 20) / 2;
-  
-  // 2. Blessures
-  scores.blessures = d.blessures_team1?.length === 0 && d.blessures_team2?.length === 0 ? 90 :
-                     d.blessures_team1?.length <= 1 && d.blessures_team2?.length <= 1 ? 70 : 40;
-  
-  // 3. Historique des confrontations
-  if (fdData?.head2head?.length) {
-    const h2hHomeWins = fdData.head2head.filter(h => h.winner === 'HOME_TEAM').length;
-    scores.historique = (h2hHomeWins / fdData.head2head.length) * 100;
-  } else {
-    scores.historique = 50;
-  }
-  
-  // 4. Avantage domicile
-  scores.domicile = d.proba_home > d.proba_away ? 80 : 40;
-  
-  // 5. Motivation (selon position au classement)
-  scores.motivation = 70;
-  
-  // 6. Cotes
-  if (d.odds_home && d.odds_away) {
-    const impliedProb = (1/d.odds_home) * 100;
-    scores.cotes = Math.min(100, Math.abs(impliedProb - d.proba_home) < 10 ? 80 : 50);
-  } else {
-    scores.cotes = 50;
-  }
-  
-  // 7. Confiance IA
-  scores.iaConfidence = d.best_bet_confidence || 60;
-  
-  // 8. Qualité des données
-  scores.dataQuality = fdData ? 80 : 50;
-  
-  // Calcul pondéré
-  let totalScore = 0;
-  for (let key in weights) {
-    totalScore += (scores[key] || 50) * weights[key];
-  }
-  
-  return {
-    global: Math.min(99, Math.max(10, Math.round(totalScore))),
-    details: scores,
-    weights: weights
-  };
-}
 
 function resetToStart() {
   state.selectedMatch = null;
@@ -1315,364 +999,64 @@ function resetToStart() {
   document.getElementById('team2').value = '';
   document.getElementById('evOdds').value = '';
   document.getElementById('evMarket').value = '';
-  showStep(state.selectedLeague ? 2 : 1);
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  showStep(1);
+  dessinerChoixMatch();
+  window.scrollTo(0, 0); document.body.scrollTop = 0;
 }
 
 // ══════════════════════════════════════════════
 // HISTORY
 // ══════════════════════════════════════════════
-function updateHistBadge() { const b = document.getElementById('histBadge'); if (b) b.textContent = getHist().length; }
 
-function addToHistory(d, evData) {
-  const h = getHist();
-  h.unshift({
-    id: Date.now(), date: new Date().toLocaleDateString('fr-FR'),
-    time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
-    team1: d.team1, team2: d.team2, league: d.league,
-    best_bet: d.best_bet, best_bet_market: d.best_bet_market || '1',
-    confidence: d.best_bet_confidence, odds: d.odds_home || d.odds_away || 0,
-    ev: evData?.ev ?? null, stake: evData?.stake ?? null,
-    proba_home: d.proba_home, proba_away: d.proba_away, proba_draw: d.proba_draw || 0,
-    score_pred: d.score_pred || '', traffic_light: d.traffic_light || 'orange',
-    stars: d.stars || 3, sport: d.sport || 'football', result: 'pending', pnl: 0
-  });
-  if (h.length > 50) h.splice(50);
-  saveHist(h); updateHistBadge();
-}
 
-function setResult(id, val) {
-  const h = getHist();
-  const it = h.find(x => x.id === id);
-  if (it) {
-    it.result = val;
-    const odds = parseFloat(it.odds) || 0;
-    const stake = parseFloat(it.stake) || 10;
-    it.pnl = val === 'win' && odds > 1 ? Math.round((odds - 1) * stake * 100) / 100 : val === 'lose' ? -stake : 0;
-    saveHist(h); renderHistory(); renderDashboard();
-  }
-}
 
-function clearHistory() { if (!confirm('Effacer tout ?')) return; localStorage.removeItem('ps_hist'); renderHistory(); updateHistBadge(); }
 
-function exportCSV() {
-  const h = getHist();
-  if (!h.length) { alert('Aucune analyse à exporter.'); return; }
-  const headers = ['Date','Heure','Équipe 1','Équipe 2','Ligue','Pari recommandé','Cote','Confiance (%)','EV (%)','Mise (€)','Résultat','P&L (€)'];
-  const rows = h.map(it => [
-    it.date || '', it.time || '',
-    it.team1 || '', it.team2 || '', it.league || '',
-    it.best_bet || '', it.odds || '', it.confidence || '',
-    it.ev != null ? it.ev : '', it.stake || '',
-    it.result || 'pending', it.pnl != null ? it.pnl : ''
-  ].map(v => `"${String(v).replace(/"/g, '""')}"`));
-  const csv = '\uFEFF' + [headers, ...rows].map(r => r.join(';')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `pronosight-historique-${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-window.exportCSV = exportCSV;
 
-function renderHistory() {
-  // MOD 4 — Victor mode check (auto-bascule sur perso si Victor vide)
-  const victorPicks = victorState.loaded ? (victorState.history?.pronostics || []) : [];
-  const hasVictor   = victorPicks.length > 0;
-  if (!hasVictor) _histMode = 'personal';
 
-  if (_histMode === 'victor' && hasVictor) {
-    const vH = victorState.history;
-    document.getElementById('hTotal').textContent  = vH.total || 0;
-    document.getElementById('hWins').textContent   = vH.corrects || 0;
-    document.getElementById('hLoses').textContent  = Math.max(0, (vH.total || 0) - (vH.corrects || 0));
-    document.getElementById('hRate').textContent   = vH.taux != null ? vH.taux + '%' : '—';
-    const pnlEl = document.getElementById('hPnl');   if (pnlEl)  { pnlEl.textContent  = '—'; pnlEl.style.color  = '#888'; }
-    const confEl = document.getElementById('hAvgConf'); if (confEl) confEl.textContent = '—';
-    const leagueEl = document.getElementById('hLeagueStats');
-    if (leagueEl) leagueEl.innerHTML = `<div style="display:flex;gap:6px;margin-bottom:8px">
-      <button class="hist-filter-btn active" onclick="window._setHistMode('victor')">🎙️ Victor</button>
-      <button class="hist-filter-btn" onclick="window._setHistMode('personal')">👤 Personnel</button></div>`;
-    const list = document.getElementById('histList');
-    const q = (_histFilter.search || '').toLowerCase();
-    const filtered = victorPicks.filter(p => {
-      const r = p.pronostic_correct === true ? 'win' : p.pronostic_correct === false ? 'lose' : 'pending';
-      if (_histFilter.result !== 'all' && r !== _histFilter.result) return false;
-      if (q && ![(p.equipe_a||''),(p.equipe_b||''),(p.sport||'')].some(s => s.toLowerCase().includes(q))) return false;
-      return true;
-    });
-    if (!filtered.length) { list.innerHTML = '<div class="hist-empty">🔍 Aucun résultat Victor pour ce filtre</div>'; return; }
-    list.innerHTML = filtered.map(p => {
-      const correct = p.pronostic_correct;
-      const cls = correct === true ? 'hist-win' : correct === false ? 'hist-lose' : '';
-      const badge = correct === true ? '✅' : correct === false ? '❌' : '⏳';
-      const confColor = _confColor(p.confiance);
-      return `<div class="hist-card ${cls}">
-        <div style="flex:1">
-          <div style="font-weight:700;font-size:14px">${p.equipe_a||''} vs ${p.equipe_b||''}</div>
-          <div style="font-size:10px;color:var(--muted)">${p.sport||''} · ${p.competition||''}</div>
-          <div style="font-size:12px;color:var(--accent);margin-top:4px">🎯 ${p.pronostic_principal||''}</div>
-          ${p.value_bet ? `<div style="font-size:11px;color:#00aaff;margin-top:2px">💡 ${p.value_bet}</div>` : ''}
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-          <div style="font-size:22px">${badge}</div>
-          <div style="font-size:10px;color:var(--muted)">${p.date||''}</div>
-          ${p.cote_estimee ? `<div style="font-size:11px;font-weight:700;color:var(--accent)">@${parseFloat(p.cote_estimee).toFixed(2)}</div>` : ''}
-          <div style="font-size:10px;font-weight:700;color:${confColor}">${p.confiance||''}</div>
-        </div>
-      </div>`;
-    }).join('');
-    return;
-  }
 
-  // ── Mode personnel (historique localStorage) ──
-  const h = getHist();
-  const res = h.filter(x => x.result !== 'pending');
-  const wins = res.filter(x => x.result === 'win').length;
-  const loses = res.filter(x => x.result === 'lose').length;
-  let pnl = 0;
-  res.forEach(x => {
-    const odds = parseFloat(x.odds) || 0, stake = parseFloat(x.stake) || 10;
-    if (x.result === 'win' && odds > 1) pnl += Math.round((odds - 1) * stake * 100) / 100;
-    else if (x.result === 'lose') pnl -= stake;
-  });
-
-  document.getElementById('hTotal').textContent = h.length;
-  document.getElementById('hWins').textContent = wins;
-  document.getElementById('hLoses').textContent = loses;
-  document.getElementById('hRate').textContent = res.length ? Math.round(wins / res.length * 100) + '%' : '—';
-  const pnlEl = document.getElementById('hPnl');
-  if (pnlEl) { pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(0) + '€'; pnlEl.style.color = pnl >= 0 ? '#00dd55' : '#ff3333'; }
-  const avgConf = h.length ? Math.round(h.reduce((a, x) => a + (x.confidence || 0), 0) / h.length) : 0;
-  const confEl = document.getElementById('hAvgConf');
-  if (confEl) confEl.textContent = avgConf ? avgConf + '%' : '—';
-
-  // Stats par ligue (+ toggle si Victor disponible)
-  const leagueEl = document.getElementById('hLeagueStats');
-  if (leagueEl) {
-    const byLeague = {};
-    h.forEach(x => {
-      const k = x.league || 'Autre';
-      if (!byLeague[k]) byLeague[k] = { total: 0, wins: 0, loses: 0 };
-      byLeague[k].total++;
-      if (x.result === 'win') byLeague[k].wins++;
-      else if (x.result === 'lose') byLeague[k].loses++;
-    });
-    const sorted = Object.entries(byLeague).sort((a, b) => b[1].total - a[1].total).slice(0, 5);
-    const toggleHtml = hasVictor ? `<div style="display:flex;gap:6px;margin-bottom:8px">
-      <button class="hist-filter-btn" onclick="window._setHistMode('victor')">🎙️ Victor</button>
-      <button class="hist-filter-btn active" onclick="window._setHistMode('personal')">👤 Personnel</button></div>` : '';
-    leagueEl.innerHTML = toggleHtml + (sorted.length ? sorted.map(([league, s]) => {
-      const wr = s.wins + s.loses > 0 ? Math.round(s.wins / (s.wins + s.loses) * 100) : null;
-      const col = wr === null ? '#888' : wr >= 60 ? '#00dd55' : wr >= 40 ? '#ffcc00' : '#ff3333';
-      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px">
-        <div style="flex:1;color:var(--text2)">${league}</div>
-        <div style="color:var(--muted)">${s.total} analyses</div>
-        <div style="font-weight:700;color:${col};min-width:36px;text-align:right">${wr !== null ? wr + '%' : '—'}</div>
-      </div>`;
-    }).join('') : '');
-  }
-
-  const list = document.getElementById('histList');
-  if (!h.length) { list.innerHTML = '<div class="hist-empty">📭 Aucune analyse</div>'; return; }
-
-  // Appliquer les filtres
-  const q = (_histFilter.search || '').toLowerCase();
-  const filtered = h.filter(it => {
-    if (_histFilter.result !== 'all' && it.result !== _histFilter.result) return false;
-    if (q && !(
-      (it.team1 || '').toLowerCase().includes(q) ||
-      (it.team2 || '').toLowerCase().includes(q) ||
-      (it.league || '').toLowerCase().includes(q)
-    )) return false;
-    return true;
-  });
-
-  if (!filtered.length) {
-    list.innerHTML = '<div class="hist-empty">🔍 Aucun résultat pour ce filtre</div>';
-    return;
-  }
-
-  list.innerHTML = filtered.map(it => {
-    const cls = it.result === 'win' ? 'hist-win' : it.result === 'lose' ? 'hist-lose' : '';
-    const pnlStr = it.pnl && it.pnl !== 0 ? `<span style="color:${it.pnl > 0 ? '#00dd55' : '#ff3333'};font-weight:700;font-size:11px">${it.pnl > 0 ? '+' : ''}${it.pnl}€</span>` : '';
-    return `<div class="hist-card ${cls}">
-      <div style="flex:1">
-        <div style="font-weight:700;font-size:14px">${it.team1} vs ${it.team2}</div>
-        <div style="font-size:10px;color:var(--muted)">${it.league}</div>
-        <div style="font-size:12px;color:var(--accent);margin-top:4px">🎯 ${it.best_bet} · ${it.confidence}%</div>
-        ${pnlStr}
-      </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-        <div style="font-size:10px;color:var(--muted)">${it.date} ${it.time}</div>
-        <select class="hist-result-select" onchange="setResult(${it.id},this.value)">
-          <option value="pending"${it.result === 'pending' ? ' selected' : ''}>⏳ En attente</option>
-          <option value="win"${it.result === 'win' ? ' selected' : ''}>✅ Gagné</option>
-          <option value="lose"${it.result === 'lose' ? ' selected' : ''}>❌ Perdu</option>
-          <option value="draw"${it.result === 'draw' ? ' selected' : ''}>🤝 Nul</option>
-          <option value="push"${it.result === 'push' ? ' selected' : ''}>↩️ Push</option>
-        </select>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function setHistFilter(result, btn) {
-  _histFilter.result = result;
-  document.querySelectorAll('.hist-filter-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  renderHistory();
-}
-window.setHistFilter = setHistFilter;
-
-function setHistSearch(val) {
-  _histFilter.search = val;
-  renderHistory();
-}
-window.setHistSearch = setHistSearch;
 
 // ══════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════
 function renderDashboard() {
   dessinerAccueil();
-  if (!programme.charge) chargerProgramme().then(dessinerAccueil);
-  const hist = getHist();
-  // Aucune bankroll inventée : sans montant saisi, on invite à le définir.
-  const br = bankrollDefinie();
-  const wins = hist.filter(h => h.result === 'win').length;
-  const total = hist.filter(h => h.result !== 'pending').length;
-  const pnl = hist.reduce((a, h) => a + (parseFloat(h.pnl) || 0), 0);
-  const wr = total > 0 ? Math.round(wins / total * 100) : 0;
+  if (!programme.charge) chargerProgramme().then(() => { dessinerAccueil(); majBadgeDirect(); });
 
-  const el1 = document.getElementById('dashBankroll');
-  if (el1) {
-    el1.textContent = br ? br.toFixed(0) + '€' : 'Définir';
-    el1.style.color = br ? '' : 'var(--accent)';
-    el1.style.cursor = 'pointer';
-    el1.onclick = () => switchNav('bankroll');
-  }
-
-  // Sans aucun pari résolu, afficher « 0% » laisse croire que rien ne
-  // fonctionne, alors qu'il n'y a simplement pas encore de données.
-  // Un tiret dit la vérité : la mesure n'a pas commencé.
-  const el2 = document.getElementById('dashWinrate');
-  if (el2) {
-    el2.textContent = total > 0 ? wr + '%' : '—';
-    el2.style.color = total > 0 ? '' : 'var(--muted)';
-  }
-  const el3 = document.getElementById('dashPnl');
-  if (el3) {
-    if (total === 0 && pnl === 0) { el3.textContent = '—'; el3.style.color = 'var(--muted)'; }
-    else { el3.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '€'; el3.style.color = pnl >= 0 ? 'var(--ev-pos)' : 'var(--ev-neg)'; }
+  // ── Mon suivi : uniquement les paris que l'utilisateur a enregistrés ──
+  const suivi = document.getElementById('dashSuivi');
+  if (suivi) {
+    const paris = lireParis(), b = bilanParis(paris, { bankrollInitiale: bankrollDepart() });
+    const st = (val, lib, cls = '') => `<div class="dash-stat"><div class="dash-stat-val ${cls}">${val}</div><div class="dash-stat-lbl">${lib}</div></div>`;
+    suivi.innerHTML = paris.length || b.bankroll
+      ? `<div class="dash-grid">
+          ${st(b.bankroll != null ? `${b.bankroll.toFixed(0)} €` : '—', 'Bankroll')}
+          ${st(b.regles ? `${b.profit >= 0 ? '+' : '−'}${Math.abs(b.profit).toFixed(0)} €` : '—', 'Gain net', b.profit > 0 ? 'pos' : b.profit < 0 ? 'neg' : '')}
+          ${st(b.roi == null ? '—' : `${b.roi >= 0 ? '+' : '−'}${Math.abs(b.roi * 100).toFixed(1)} %`, 'Rendement', b.roi > 0 ? 'pos' : b.roi < 0 ? 'neg' : '')}
+          ${st(b.attente, 'En attente')}
+        </div>
+        <button class="victor-actualiser" style="width:100%;justify-content:center;padding:11px;margin-top:12px;cursor:pointer" onclick="switchNav('history')">Ouvrir mes paris ${icone('fleche', { taille: 16 })}</button>`
+      : `<div class="etat-vide" style="padding:18px 10px"><div class="etat-vide-icone">${icone('portefeuille')}</div>
+          <div class="etat-vide-titre">Suis tes vrais résultats</div>
+          <div class="etat-vide-texte">Enregistre les paris que tu joues — cote et mise réelles — et PronoSight calcule ta bankroll, ton gain et ton rendement.</div>
+          <button class="dash-cta" style="margin-top:14px" onclick="switchNav('history')">Définir ma bankroll</button></div>`;
   }
 
-  // Streak sur le dashboard
-  const resolved = hist.filter(h => h.result === 'win' || h.result === 'lose');
-  let streak = 0, streakType = '';
-  for (const e of resolved) {
-    if (!streakType) streakType = e.result;
-    if (e.result === streakType) streak++; else break;
-  }
-  const el4 = document.getElementById('dashStreak');
-  const el4b = document.getElementById('dashStreakBar');
-  if (el4) {
-    if (!streak) { el4.textContent = '—'; el4.style.color = '#888'; }
-    else {
-      const isWin = streakType === 'win';
-      el4.textContent = (isWin ? '🔥 ' : '💀 ') + streak + (isWin ? 'W' : 'L');
-      el4.style.color = isWin ? '#00dd55' : '#ff3333';
-      if (el4b) { el4b.style.background = isWin ? '#00dd55' : '#ff3333'; el4b.style.width = Math.min(100, streak * 15) + '%'; }
-    }
-  }
-
-  // MOD 3 — Stats Victor (override si données disponibles)
-  if (victorState.loaded && victorState.stats?.global?.total > 0) {
-    const vg = victorState.stats.global;
-    if (el2) el2.textContent = (vg.taux_global || 0) + '%';
-    const vRoi = victorState.stats.derniere_maj?.roi_mise_fixe;
-    if (el3 && vRoi != null) { el3.textContent = (vRoi >= 0 ? '+' : '') + vRoi + 'u'; el3.style.color = vRoi >= 0 ? '#00dd55' : '#ff3333'; }
-    // Série depuis Victor history
-    const vPicks = victorState.history?.pronostics || [];
-    let vStreak = 0, vSType = '';
-    for (const vp of vPicks) {
-      const vr = vp.pronostic_correct === true ? 'win' : vp.pronostic_correct === false ? 'lose' : null;
-      if (!vr) continue;
-      if (!vSType) vSType = vr;
-      if (vr === vSType) vStreak++; else break;
-    }
-    if (el4 && vStreak > 0) {
-      const vWin = vSType === 'win';
-      el4.textContent = (vWin ? '🔥 ' : '💀 ') + vStreak + (vWin ? 'W' : 'L');
-      el4.style.color = vWin ? '#00dd55' : '#ff3333';
-      if (el4b) { el4b.style.background = vWin ? '#00dd55' : '#ff3333'; el4b.style.width = Math.min(100, vStreak * 15) + '%'; }
-    }
-  }
-
-  // MOD 1 — Derniers picks : Victor en priorité, perso en fallback
+  // ── Les pronos de Victor du jour ──
   const rp = document.getElementById('dashRecentPicks');
   if (rp) {
-    const victorPicksToday = victorState.loaded ? (victorState.today?.pronostics || []) : [];
-    if (victorPicksToday.length > 0) {
-      rp.onclick = null;
-      rp.innerHTML = victorPicksToday.slice(0, 5).map(p => {
-        const confColor = _confColor(p.confiance);
-        const confArrow = _confNum(p.confiance) >= 80 ? '↑↑' : _confNum(p.confiance) >= 50 ? '↑' : '→';
-        return `<div class="dash-pick-row" onclick="switchNav('prono')" style="cursor:pointer">
-          <div class="dash-pick-result" style="background:${confColor};color:#000;font-size:10px;font-weight:800;min-width:28px;text-align:center;padding:0 4px">${confArrow}</div>
-          <div style="flex:1">
-            <div class="dash-pick-match">${p.equipe_a || ''} vs ${p.equipe_b || ''}</div>
+    const picks = victorState.loaded ? (victorState.today?.pronostics || []) : [];
+    if (!victorState.loaded) rp.innerHTML = '<div class="vm-note" style="margin:0">Chargement…</div>';
+    else if (!picks.length) {
+      const h = new Date().getHours();
+      rp.innerHTML = `<div class="vm-note" style="margin:0">Aucun prono publié aujourd'hui pour l'instant. Victor analyse à 7 h et 13 h, et ne publie que lorsqu'il voit un avantage — certains jours, rien.${h < 13 ? '' : ''}</div>`;
+    } else {
+      rp.innerHTML = picks.slice(0, 4).map(p => `<div class="dash-pick-row" onclick="switchNav('prono')" style="cursor:pointer">
+          ${ecusson(p.equipe_a || '', { taille: 30 })}
+          <div style="flex:1;min-width:0">
+            <div class="dash-pick-match">${p.equipe_a || ''} – ${p.equipe_b || ''}</div>
             <div class="dash-pick-league">${p.pronostic_principal || ''}${p.cote_estimee ? ` · <b>${parseFloat(p.cote_estimee).toFixed(2)}</b>` : ''} · ${p.competition || p.sport || ''}</div>
           </div>
-        </div>`;
-      }).join('') + `<button class="victor-actualiser" style="width:100%;justify-content:center;padding:11px;margin-top:8px;cursor:pointer" onclick="switchNav('prono')">Voir les pronos de Victor ${icone('fleche', { taille: 16 })}</button>`;
-    } else if (hist.length) {
-      rp.innerHTML = hist.slice(0, 5).map(h => {
-        const rc = h.result === 'win' ? 'win' : h.result === 'lose' ? 'loss' : 'pending';
-        return `<div class="dash-pick-row"><div class="dash-pick-result ${rc}">${h.result === 'win' ? 'W' : h.result === 'lose' ? 'L' : '?'}</div>
-          <div style="flex:1"><div class="dash-pick-match">${h.team1 || ''} vs ${h.team2 || ''}</div>
-          <div class="dash-pick-league">${h.best_bet || ''} | ${h.league || ''}</div></div></div>`;
-      }).join('');
-      rp.onclick = () => switchNav('history');
-    } else {
-      // Un tableau de bord neuf n'affiche que des zéros : c'est la pire
-      // première impression possible. On explique ce qui va se passer
-      // plutôt que de constater le vide.
-      rp.innerHTML =
-        '<div class="etat-vide">' +
-          '<div class="etat-vide-icone">' + icone('stats') + '</div>' +
-          '<div class="etat-vide-titre">Les analyses arrivent chaque matin</div>' +
-          '<div class="etat-vide-texte">Victor étudie les matchs du jour à 7h et ne retient que ceux où les chiffres lui donnent un avantage réel. Certains jours, il ne propose rien — c\'est voulu.</div>' +
-          '<button class="dash-cta" onclick="switchNav(\'victor\')" style="margin-top:16px">Découvrir la méthode</button>' +
-        '</div>';
-    }
-  }
-
-  const fl = document.getElementById('dashFavLeagues');
-  if (fl) {
-    const favs = getFavs();
-    if (!favs.length) {
-      fl.innerHTML =
-        '<div class="etat-vide">' +
-          '<div class="etat-vide-icone">' + icone('ballon') + '</div>' +
-          '<div class="etat-vide-titre">Suivez vos championnats</div>' +
-          '<div class="etat-vide-texte">Choisissez les compétitions qui vous intéressent : vous serez prévenu dès qu\'une analyse à forte confiance y apparaît.</div>' +
-          '<button class="dash-cta" onclick="switchNav(\'alerts\')" style="margin-top:16px">Choisir mes championnats</button>' +
-        '</div>';
-    } else {
-      fl.innerHTML = LEAGUES.filter(l => favs.includes(l.id)).slice(0, 6).map(l => {
-        const lHist = hist.filter(h => h.league && h.league.includes(l.name));
-        const lRes = lHist.filter(h => h.result !== 'pending');
-        const lWr = lRes.length ? Math.round(lRes.filter(h => h.result === 'win').length / lRes.length * 100) : null;
-        const col = lWr === null ? '#888' : lWr >= 60 ? '#00dd55' : lWr >= 40 ? '#ffcc00' : '#ff3333';
-        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;cursor:pointer" onclick="pickLeague('${l.id}');switchNav('prono')">
-          <div style="font-size:16px">${l.flag}</div>
-          <div style="flex:1"><div style="font-weight:600">${l.name}</div><div style="color:var(--muted);font-size:10px">${l.country}</div></div>
-          <div style="font-weight:700;color:${col}">${lWr !== null ? lWr + '%' : '—'}</div>
-        </div>`;
-      }).join('');
+        </div>`).join('') + `<button class="victor-actualiser" style="width:100%;justify-content:center;padding:11px;margin-top:8px;cursor:pointer" onclick="switchNav('prono')">Voir les pronos de Victor ${icone('fleche', { taille: 16 })}</button>`;
     }
   }
 }
@@ -1680,432 +1064,283 @@ function renderDashboard() {
 // ══════════════════════════════════════════════
 // BANKROLL
 // ══════════════════════════════════════════════
-function setBankroll() {
-  const val = parseFloat(document.getElementById('bkInitial').value);
-  if (!val || val <= 0) { alert('Entre un montant valide'); return; }
-  const d = getBankrollData();
-  d.initial = val; d.current = d.current || val;
-  if (!d.log) d.log = [];
-  saveBankrollData(d);
-  localStorage.setItem('ps_bankroll', val.toString());
-  renderBankroll(); renderDashboard();
-}
 
-function resetBankroll() {
-  if (!confirm('Réinitialiser ?')) return;
-  localStorage.removeItem('ps_bankroll_data');
-  localStorage.removeItem('ps_bankroll');
-  renderBankroll(); renderDashboard();
-}
 
-function renderBankroll() {
-  const d = getBankrollData();
-  const initial = d.initial || parseFloat(localStorage.getItem('ps_bankroll')) || 0;
-  const resolved = getHist().filter(x => x.result !== 'pending');
-
-  // Current bankroll & stats
-  let current = initial;
-  resolved.forEach(e => { current += (parseFloat(e.pnl) || 0); });
-  const profit = current - initial;
-  const roi = initial > 0 ? Math.round(profit / initial * 10000) / 100 : 0;
-
-  const el1 = document.getElementById('bkCurrent'); if (el1) el1.textContent = initial > 0 ? current.toFixed(0) + '€' : '—';
-  const el2 = document.getElementById('bkProfit'); if (el2) { el2.textContent = initial > 0 ? (profit >= 0 ? '+' : '') + profit.toFixed(1) + '€' : '—'; el2.style.color = profit >= 0 ? '#00dd55' : '#ff3333'; }
-  const el3 = document.getElementById('bkROI'); if (el3) el3.textContent = initial > 0 ? (roi >= 0 ? '+' : '') + roi + '%' : '—';
-
-  // Streak
-  let streak = 0, streakType = '';
-  for (const e of resolved) {
-    if (e.result === 'win' || e.result === 'lose') {
-      if (!streakType) streakType = e.result;
-      if (e.result === streakType) streak++;
-      else break;
-    }
-  }
-  const el4 = document.getElementById('bkStreak');
-  if (el4) {
-    if (!streak) { el4.textContent = '—'; el4.style.color = ''; }
-    else { el4.textContent = (streakType === 'win' ? '🔥 ' : '❄️ ') + streak + (streakType === 'win' ? 'W' : 'L'); el4.style.color = streakType === 'win' ? '#00dd55' : '#ff3333'; }
-  }
-
-  // Canvas chart
-  const canvas = document.getElementById('bkCanvas');
-  if (canvas && initial > 0) {
-    const ctx2 = canvas.getContext('2d');
-    const W = canvas.offsetWidth || 300, H = canvas.offsetHeight || 120;
-    canvas.width = W; canvas.height = H;
-    const points = [initial];
-    [...resolved].reverse().forEach(e => { points.push(points[points.length - 1] + (parseFloat(e.pnl) || 0)); });
-    if (points.length < 2) {
-      ctx2.fillStyle = '#555'; ctx2.font = '12px monospace'; ctx2.textAlign = 'center';
-      ctx2.fillText('Pas assez de données', W / 2, H / 2);
-    } else {
-      const minV = Math.min(...points), maxV = Math.max(...points), range = maxV - minV || 1;
-      const pad = { t: 14, b: 18, l: 8, r: 8 };
-      const toX = i => pad.l + (i / (points.length - 1)) * (W - pad.l - pad.r);
-      const toY = v => pad.t + (1 - (v - minV) / range) * (H - pad.t - pad.b);
-      ctx2.clearRect(0, 0, W, H);
-      // Baseline
-      const baseY = toY(initial);
-      ctx2.beginPath(); ctx2.strokeStyle = '#333'; ctx2.lineWidth = 1; ctx2.setLineDash([4, 4]);
-      ctx2.moveTo(pad.l, baseY); ctx2.lineTo(W - pad.r, baseY); ctx2.stroke(); ctx2.setLineDash([]);
-      // Gradient fill
-      const isPos = current >= initial;
-      const grad = ctx2.createLinearGradient(0, pad.t, 0, H - pad.b);
-      grad.addColorStop(0, isPos ? 'rgba(0,221,85,0.25)' : 'rgba(255,51,51,0.25)');
-      grad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx2.beginPath();
-      ctx2.moveTo(toX(0), toY(points[0]));
-      points.forEach((v, i) => { if (i > 0) ctx2.lineTo(toX(i), toY(v)); });
-      ctx2.lineTo(toX(points.length - 1), H - pad.b); ctx2.lineTo(toX(0), H - pad.b);
-      ctx2.closePath(); ctx2.fillStyle = grad; ctx2.fill();
-      // Line
-      ctx2.beginPath(); ctx2.strokeStyle = isPos ? '#00dd55' : '#ff3333'; ctx2.lineWidth = 2; ctx2.lineJoin = 'round';
-      ctx2.moveTo(toX(0), toY(points[0]));
-      points.forEach((v, i) => { if (i > 0) ctx2.lineTo(toX(i), toY(v)); });
-      ctx2.stroke();
-      // Last dot
-      ctx2.beginPath(); ctx2.arc(toX(points.length - 1), toY(points[points.length - 1]), 4, 0, Math.PI * 2);
-      ctx2.fillStyle = isPos ? '#00dd55' : '#ff3333'; ctx2.fill();
-      // Labels
-      ctx2.fillStyle = '#888'; ctx2.font = '10px monospace'; ctx2.textAlign = 'left';
-      ctx2.fillText(Math.round(maxV) + '€', pad.l + 2, pad.t + 10);
-      ctx2.fillText(Math.round(minV) + '€', pad.l + 2, H - pad.b - 2);
-    }
-  }
-
-  // Log
-  const logEl = document.getElementById('bkLog');
-  if (logEl) {
-    if (!resolved.length) {
-      logEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px;font-family:\'JetBrains Mono\',monospace">Aucune mise enregistrée</div>';
-    } else {
-      logEl.innerHTML = resolved.slice(0, 20).map(e => {
-        const pnl = parseFloat(e.pnl) || 0;
-        const icon = e.result === 'win' ? '✅' : e.result === 'lose' ? '❌' : '↩️';
-        const col = e.result === 'win' ? '#00dd55' : e.result === 'lose' ? '#ff3333' : '#888';
-        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
-          <div style="font-size:16px">${icon}</div>
-          <div style="flex:1"><div style="font-weight:600">${e.team1} vs ${e.team2}</div>
-          <div style="color:var(--muted);font-size:10px;font-family:'JetBrains Mono',monospace">${e.best_bet} · ${e.date}</div></div>
-          <div style="font-weight:700;color:${col}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}€</div>
-        </div>`;
-      }).join('');
-    }
-  }
-}
 
 // ══════════════════════════════════════════════
 // TODAY'S MATCHES
 // ══════════════════════════════════════════════
-async function fetchTodayMatches(force) {
-  if (state.todayLoaded && !force) return;
-  const content = document.getElementById('todayContent');
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const dateEl = document.getElementById('todayDate');
-  if (dateEl) dateEl.textContent = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
-  if (content) content.innerHTML = '<div class="today-loading">⏳ Chargement...</div>';
 
-  try {
-    const tomorrowStr = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-    const allMatches = [];
-    const promises = TODAY_LEAGUES.map(league =>
-      getLeagueEvents(league.tsdb).then(events => {
-        (events || []).filter(e => e.dateEvent === todayStr || e.dateEvent === tomorrowStr)
-          .forEach(e => {
-            const m = tsdbToMatch(e);
-            m.leagueName = league.name; m.leagueFlag = league.flag;
-            m.leagueId = league.id; m.sport = league.sport;
-            allMatches.push(m);
-          });
-      }).catch(() => {})
-    );
-    await Promise.all(promises);
-    allMatches.sort((a, b) => a.live && !b.live ? -1 : !a.live && b.live ? 1 : (a.time || '').localeCompare(b.time || ''));
-    state.todayData = allMatches;
-    state.todayLoaded = true;
-    renderTodayMatches();
-  } catch (e) {
-    if (content) content.innerHTML = `<div class="today-empty"><div style="font-size:40px">⚠️</div><div style="margin-top:10px">${e.message}</div></div>`;
-  }
-}
 
-function renderTodayMatches() {
-  const content = document.getElementById('todayContent');
-  if (!content) return;
-  const filtered = state.todayData.filter(m => {
-    if (state.todayFilter === 'live') return m.live;
-    if (state.todayFilter === 'soccer') return m.sport === 'soccer';
-    if (state.todayFilter === 'basketball') return m.sport === 'basketball';
-    return true;
-  });
-  if (!filtered.length) {
-    content.innerHTML = `<div class="etat-vide"><div class="etat-vide-icone">${icone('calendrier')}</div><div class="etat-vide-titre">Aucun match</div><div class="etat-vide-texte">Rien ne correspond à ce filtre aujourd'hui.</div></div>`;
-    return;
-  }
-  const byLeague = {};
-  filtered.forEach(m => {
-    const key = m.leagueFlag + ' ' + m.leagueName;
-    if (!byLeague[key]) byLeague[key] = [];
-    byLeague[key].push(m);
-  });
-  let html = `<div class="today-summary"><span><strong>${filtered.length}</strong> matchs au programme</span></div>`;
-  Object.entries(byLeague).forEach(([league, matches]) => {
-    html += `<div class="compet-entete">${echapperHtml(league)}<span class="compte">${matches.length} match${matches.length > 1 ? 's' : ''}</span></div><div class="a-analyser">`;
-    matches.forEach(m => {
-      const idx = state.todayData.indexOf(m);
-      const aScore = m.score1 != null && m.score2 != null;
-      html += `<div class="match-ligne" onclick="todayAnalyze(${idx})">
-        <div class="match-ligne-heure ${m.live ? 'direct' : ''}">${m.live ? 'LIVE' : echapperHtml(m.time || '—')}<small>${m.live ? 'en cours' : (m.date && m.date !== "Aujourd'hui" ? echapperHtml(m.date) : 'coup d\'envoi')}</small></div>
-        <div class="match-ligne-equipes">
-          <div class="match-ligne-equipe">${ecusson(echapperHtml(m.team1), { taille: 26 })}<span>${echapperHtml(m.team1)}</span>${aScore ? `<span class="match-ligne-score">${m.score1}</span>` : ''}</div>
-          <div class="match-ligne-equipe">${ecusson(echapperHtml(m.team2), { taille: 26 })}<span>${echapperHtml(m.team2)}</span>${aScore ? `<span class="match-ligne-score">${m.score2}</span>` : ''}</div>
-        </div>
-        <button class="bouton-analyser" onclick="event.stopPropagation();todayAnalyze(${idx})">${icone('loupe', { taille: 16, epaisseur: 2.4 })}<span>Analyser</span></button>
-      </div>`;
-    });
-    html += '</div>';
-  });
-  content.innerHTML = html;
-}
 
-function filterToday(filter, btn) {
-  state.todayFilter = filter;
-  document.querySelectorAll('.today-filter-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  renderTodayMatches();
-}
-
-function todayAnalyze(idx) {
-  const m = state.todayData[idx];
-  if (!m) return;
-  analyserMatch({ team1: m.team1, team2: m.team2, leagueId: m.leagueId, competition: m.leagueName, live: !!m.live, heure: m.time });
-}
 
 // ══════════════════════════════════════════════
 // LIVE SCORES + AUTO-REFRESH
 // ══════════════════════════════════════════════
-const LIVE_REFRESH_SEC = 60;
-let _liveInterval = null;
+let _minuterieDirect = null;
 
-function startLiveAutoRefresh() {
-  stopLiveAutoRefresh();
-  state.liveCountdown = LIVE_REFRESH_SEC;
-  _liveInterval = setInterval(() => {
-    state.liveCountdown--;
-    const fill = document.getElementById('liveRefreshFill');
-    if (fill) fill.style.width = ((LIVE_REFRESH_SEC - state.liveCountdown) / LIVE_REFRESH_SEC * 100) + '%';
-    if (state.liveCountdown <= 0) {
-      state.liveCountdown = LIVE_REFRESH_SEC;
-      fetchLive(true);
-    }
-  }, 1000);
+async function rafraichirProgramme() {
+  programme.ts = 0;
+  await chargerProgramme();
+  majBadgeDirect();
 }
 
-function stopLiveAutoRefresh() {
-  if (_liveInterval) { clearInterval(_liveInterval); _liveInterval = null; }
-  const fill = document.getElementById('liveRefreshFill');
-  if (fill) fill.style.width = '0%';
+function dessinerLive() {
+  const el = document.getElementById('liveView');
+  if (el) el.innerHTML = htmlLive(programme.matchs, { charge: programme.charge, maj: programme.ts, favoris: getFavs() });
 }
 
-async function fetchLive(force) {
-  const btn = document.getElementById('liveRefreshBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Chargement...'; }
-  const content = document.getElementById('liveContent');
-  if (content) content.innerHTML = '<div class="live-empty"><div style="font-size:32px">📡</div><div style="margin-top:8px;color:var(--muted)">Connexion...</div></div>';
+async function demarrerDirect() {
+  dessinerLive();
+  await rafraichirProgramme();
+  dessinerLive();
+  arreterDirect();
+  _minuterieDirect = setInterval(async () => { await rafraichirProgramme(); dessinerLive(); }, 120_000);
+}
+function arreterDirect() { if (_minuterieDirect) { clearInterval(_minuterieDirect); _minuterieDirect = null; } }
 
-  try {
-    const topLeagues = ['pl','ligue1','laliga','bundesliga','seriea','ucl','uel','nba'];
-    const results = await Promise.all(topLeagues.map(lid => {
-      const tsdbId = TSDB_LEAGUE_MAP[lid];
-      return tsdbId ? getLeagueEvents(tsdbId).catch(() => []) : Promise.resolve([]);
-    }));
+function majBadgeDirect() {
+  const n = programme.matchs.filter(m => m.statut === 'LIVE').length;
+  const b = document.getElementById('badgeDirect');
+  if (b) { b.style.display = n ? '' : 'none'; document.getElementById('badgeDirectN').textContent = n; }
+}
 
-    const seen = {};
-    state.liveData = [];
-    results.flat().forEach(e => {
-      const key = (e.strHomeTeam || '') + (e.strAwayTeam || '') + (e.dateEvent || '');
-      if (!seen[key]) { seen[key] = true; state.liveData.push(tsdbToMatch(e)); }
-    });
+// ── Aujourd'hui ──
+let _filtreJour = 'analysables';
+async function dessinerAujourdhui(recharger = false) {
+  const el = document.getElementById('todayView');
+  const dessiner = () => { if (el) el.innerHTML = htmlAujourdhui(programme.matchs, { charge: programme.charge, filtre: _filtreJour, favoris: getFavs() }); };
+  dessiner();
+  if (recharger || !programme.charge) { await chargerProgramme(); majBadgeDirect(); dessiner(); }
+}
+function filtrerAujourdhui(f) { _filtreJour = f; dessinerAujourdhui(); }
 
-    state.liveData.sort((a, b) => {
-      const order = { "Aujourd'hui": 0, "Demain": 1 };
-      const ao = order[a.date] ?? 2, bo = order[b.date] ?? 2;
-      if (ao !== bo) return ao - bo;
-      if (a.live && !b.live) return -1;
-      if (!a.live && b.live) return 1;
-      return (a.time || '').localeCompare(b.time || '');
-    });
+// ── Mes compétitions (favoris) ──
+async function dessinerCompetitions(recharger = false) {
+  const el = document.getElementById('alertsView');
+  const etat = typeof Notification === 'undefined' ? 'denied' : Notification.permission;
+  const dessiner = () => { if (el) el.innerHTML = htmlCompetitions(programme.matchs, { favoris: getFavs(), notifs: etat }); };
+  dessiner();
+  if (recharger && !programme.charge) { await chargerProgramme(); dessiner(); }
+}
+function basculerFavori(compet) {
+  const f = getFavs(); const i = f.indexOf(compet);
+  if (i >= 0) f.splice(i, 1); else f.push(compet);
+  saveFavs(f); dessinerCompetitions(); dessinerAccueil();
+}
+async function activerNotifs() {
+  if (typeof Notification === 'undefined') return;
+  await Notification.requestPermission();
+  dessinerCompetitions();
+  notifierFavoris();
+}
 
-    const ts = document.getElementById('liveLastUpdate');
-    if (ts) ts.textContent = 'Mis à jour ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    renderLiveContent();
-  } catch (e) {
-    if (content) content.innerHTML = `<div class="live-empty"><div style="font-size:32px">⚠️</div><div style="margin-top:8px">${e.message}</div></div>`;
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 Actualiser'; }
-  // Reset bar after manual refresh
-  if (force) {
-    state.liveCountdown = LIVE_REFRESH_SEC;
-    const fill = document.getElementById('liveRefreshFill');
-    if (fill) fill.style.width = '0%';
+/** Prévient (une fois) des pronos et values publiés dans les compétitions suivies. */
+function notifierFavoris() {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const favs = new Set(getFavs());
+  if (!favs.size) return;
+  let vus;
+  try { vus = new Set(JSON.parse(localStorage.getItem('ps_notifies') || '[]')); } catch { vus = new Set(); }
+  const signaux = [
+    ...(victorState.today?.pronostics || []).map(p => ({ cle: `v${p.id}`, compet: p.competition, titre: `${p.equipe_a} – ${p.equipe_b}`, corps: `Prono de Victor : ${p.pronostic_principal}${p.cote_estimee ? ` @ ${Number(p.cote_estimee).toFixed(2)}` : ''}` })),
+    ...(valeursState.valeurs?.aujourdhui || []).map(v => ({ cle: `m${v.date}${v.match}${v.pari_code}`, compet: v.competition, titre: v.match, corps: `Value : ${v.libelle || v.pari_code} @ ${Number(v.cote).toFixed(2)} (${v.bookmaker})` })),
+  ];
+  for (const sgl of signaux) {
+    if (!favs.has(sgl.compet) || vus.has(sgl.cle)) continue;
+    vus.add(sgl.cle);
+    try { new Notification(`PronoSight · ${sgl.titre}`, { body: sgl.corps, tag: sgl.cle }); } catch { /* navigateur sans notification */ }
   }
+  try { localStorage.setItem('ps_notifies', JSON.stringify([...vus].slice(-200))); } catch { /* stockage plein */ }
+}
+
+// ── Mes paris ──
+function lireParis() { try { return JSON.parse(localStorage.getItem('ps_paris') || '[]'); } catch { return []; } }
+function ecrireParis(l) { localStorage.setItem('ps_paris', JSON.stringify(l)); majBadgeParis(); }
+function bankrollDepart() {
+  // Reprend la bankroll saisie dans l'ancienne version, si elle existe.
+  const b = parseFloat(localStorage.getItem('ps_bankroll_depart') ?? localStorage.getItem('ps_bankroll'));
+  return b > 0 ? b : null;
+}
+let _filtreParis = 'tous';
+
+function majBadgeParis() {
+  const n = lireParis().filter(p => p.resultat === 'attente').length;
+  const b = document.getElementById('histBadge');
+  if (b) { b.textContent = n; b.style.display = n ? '' : 'none'; }
+}
+
+function dessinerMesParis() {
+  const el = document.getElementById('historyView');
+  if (!el) return;
+  const paris = lireParis(), b0 = bankrollDepart();
+  el.innerHTML = htmlMesParis(paris, bilanParis(paris, { bankrollInitiale: b0 }), { bankrollInitiale: b0, filtre: _filtreParis });
+  dessinerCourbe(courbeBankroll(paris, b0));
+}
+
+function dessinerCourbe(points) {
+  const canvas = document.getElementById('bkCanvas');
+  if (!canvas) return;
+  const W = canvas.offsetWidth || 320, H = canvas.offsetHeight || 140, dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+  const css = getComputedStyle(document.body);
+  const coul = (v) => css.getPropertyValue(v).trim() || '#888';
+  if (points.length < 2) {
+    ctx.fillStyle = coul('--muted'); ctx.font = '600 13px Barlow, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('La courbe apparaît après ton premier pari réglé', W / 2, H / 2); return;
+  }
+  const min = Math.min(...points), max = Math.max(...points), ec = max - min || 1, pad = 12;
+  const x = i => pad + (i / (points.length - 1)) * (W - 2 * pad);
+  const y = v => pad + (1 - (v - min) / ec) * (H - 2 * pad);
+  const hausse = points[points.length - 1] >= points[0];
+  ctx.strokeStyle = coul('--border2'); ctx.setLineDash([4, 4]); ctx.beginPath();
+  ctx.moveTo(pad, y(points[0])); ctx.lineTo(W - pad, y(points[0])); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = coul(hausse ? '--gagne' : '--perdu'); ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.beginPath();
+  points.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)))); ctx.stroke();
+}
+
+function definirBankroll() {
+  const v = parseFloat(String(document.getElementById('bkInitial')?.value || '').replace(',', '.'));
+  if (!(v > 0)) { alert('Entre un montant positif.'); return; }
+  localStorage.setItem('ps_bankroll_depart', String(v));
+  dessinerMesParis(); renderDashboard();
+}
+function filtrerParis(f) { _filtreParis = f; dessinerMesParis(); }
+function reglerPari(id, resultat) {
+  const l = lireParis(); const p = l.find(x => x.id === id);
+  if (p) { p.resultat = resultat; ecrireParis(l); dessinerMesParis(); renderDashboard(); }
+}
+function supprimerPari(id) {
+  if (!confirm('Supprimer ce pari ?')) return;
+  ecrireParis(lireParis().filter(x => x.id !== id)); dessinerMesParis(); renderDashboard();
+}
+function effacerParis() {
+  if (!confirm('Effacer tous tes paris ? C\'est définitif.')) return;
+  ecrireParis([]); dessinerMesParis(); renderDashboard();
+}
+function exporterParis() {
+  const url = URL.createObjectURL(new Blob([versCsv(lireParis())], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = `pronosight-mes-paris-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Feuille « Je joue ce pari », pré-remplie avec ce que l'écran connaît déjà. */
+/** Texte affichable → texte brut (les données Victor sont échappées au chargement). */
+function brut(x) { const t = document.createElement('textarea'); t.innerHTML = String(x ?? ''); return t.value; }
+
+/** « Je joue ce pari » depuis un prono de Victor, une value ou l'analyse en cours. */
+function desassainir(v) {
+  if (typeof v === 'string') return brut(v);
+  if (Array.isArray(v)) return v.map(desassainir);
+  if (v && typeof v === 'object') { const o = {}; for (const [k, x] of Object.entries(v)) o[k] = desassainir(x); return o; }
+  return v;
+}
+
+function jouerPari(source, i) {
+  if (source === 'victor') {
+    const p = victorState.today?.pronostics?.[i]; if (!p) return;
+    ouvrirFormPari({ match: brut(`${p.equipe_a} – ${p.equipe_b}`), competition: brut(p.competition), pari: brut(p.pronostic_principal), cote: p.cote_estimee });
+  } else if (source === 'value') {
+    const v = valeursState.valeurs?.aujourdhui?.[i]; if (!v) return;
+    ouvrirFormPari({ match: v.match.replace(/\s+vs\s+/i, ' – '), competition: v.competition, pari: v.libelle || v.pari_code, cote: v.cote });
+  } else {
+    const d = state.chatCtx; if (!d) return;
+    ouvrirFormPari({ match: brut(`${d.team1} – ${d.team2}`), competition: brut(d.league), pari: brut(d.best_bet), cote: '' });
   }
 }
 
-function renderLiveContent() {
-  const content = document.getElementById('liveContent');
-  if (!content) return;
-  const filtered = state.liveData.filter(m => state.liveFilter === 'all' || m.sport === state.liveFilter);
-  if (!filtered.length) {
-    content.innerHTML = '<div class="live-empty"><div style="font-size:40px">📭</div><div style="margin-top:10px">Aucun match</div></div>';
-    return;
-  }
-  const byLeague = {};
-  filtered.forEach(m => { const l = m.league || 'Autre'; if (!byLeague[l]) byLeague[l] = []; byLeague[l].push(m); });
-  let html = '';
-  Object.entries(byLeague).forEach(([league, matches]) => {
-    html += `<div class="live-league-block"><div class="live-league-name">${league}</div>`;
-    matches.forEach(m => {
-      const isLive = m.live || m.status === 'LIVE';
-      const score = (m.score1 != null && m.score2 != null) ? m.score1 + ' — ' + m.score2 : '— — —';
-      html += `<div class="live-match-row" onclick="prefillFromLive('${(m.team1||'').replace(/'/g,"\\'")}','${(m.team2||'').replace(/'/g,"\\'")}')">
-        <div class="live-match-teams"><span class="live-team">${m.team1}</span><span class="live-score ${isLive ? 'live-score-active' : ''}">${score}</span><span class="live-team live-team-away">${m.team2}</span></div>
-        <button class="live-analyze-btn" onclick="event.stopPropagation();prefillFromLive('${(m.team1||'').replace(/'/g,"\\'")}','${(m.team2||'').replace(/'/g,"\\'")}')">⚡</button></div>`;
-    });
-    html += '</div>';
-  });
-  content.innerHTML = html;
+function ouvrirFormPari({ match = '', competition = '', pari = '', cote = '' } = {}) {
+  const val = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
+  val('fpMatch', match); val('fpPari', pari); val('fpCote', cote ? Number(cote).toFixed(2) : ''); val('fpCompet', competition);
+  const b0 = bankrollDepart(), bilan = bilanParis(lireParis(), { bankrollInitiale: b0 });
+  const conseil = bilan.bankroll ? Math.max(0.5, Math.round(bilan.bankroll * 0.01 * 2) / 2) : null;
+  val('fpMise', conseil ?? '');
+  document.getElementById('fpAide').textContent = conseil
+    ? `Mise proposée : 1 % de ta bankroll (${bilan.bankroll.toFixed(0)} €). Modifie-la si besoin.`
+    : 'Astuce : définis ta bankroll dans « Mes paris » pour une mise conseillée.';
+  document.getElementById('fpErreur').textContent = '';
+  document.getElementById('pariFeuille')?.classList.add('ouverte');
+  document.getElementById('pariFond')?.classList.add('ouvert');
+}
+function fermerFormPari() {
+  document.getElementById('pariFeuille')?.classList.remove('ouverte');
+  document.getElementById('pariFond')?.classList.remove('ouvert');
+}
+function enregistrerPari() {
+  const v = (id) => document.getElementById(id)?.value || '';
+  const { pari, erreur } = creerPari({ match: v('fpMatch'), competition: v('fpCompet'), pari: v('fpPari'), cote: v('fpCote'), mise: v('fpMise') });
+  if (erreur) { document.getElementById('fpErreur').textContent = erreur; return; }
+  ecrireParis([pari, ...lireParis()]);
+  fermerFormPari();
+  renderDashboard();
+  if (document.getElementById('historyView')?.classList.contains('visible')) dessinerMesParis();
+  afficherToast('Pari enregistré dans « Mes paris »');
+}
+function afficherToast(texte) {
+  document.getElementById('toastPs')?.remove();
+  const t = document.createElement('div');
+  t.id = 'toastPs'; t.className = 'toast-ps'; t.textContent = texte;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 3000);
 }
 
-function filterLive() { state.liveFilter = document.getElementById('liveSportFilter').value || 'all'; renderLiveContent(); }
 
-function prefillFromLive(t1, t2) {
-  analyserMatch({ team1: t1, team2: t2, live: true });
-}
 
-function saveLiveKey() { 
-  alert('Les clés API sont maintenant configurées sur le serveur dans le fichier .env'); 
-}
+
+
+
+
 
 // ══════════════════════════════════════════════
 // ALERTS
 // ══════════════════════════════════════════════
-function renderAlertFavs() {
-  const favs = getFavs();
-  const banner = document.getElementById('alertPermBanner');
-  if (banner) banner.style.display = Notification.permission === 'granted' ? 'none' : 'flex';
-  const top = ['ligue1','pl','laliga','bundesliga','seriea','ucl','nba','euroleague'];
-  const grid = document.getElementById('alertFavGrid');
-  if (!grid) return;
-  grid.innerHTML = LEAGUES.filter(l => top.includes(l.id)).map(l => {
-    const on = favs.includes(l.id);
-    return `<div class="alert-fav-card${on ? ' fav-on' : ''}" onclick="toggleFav('${l.id}')">
-      <div style="font-size:14px">${on ? '🔔' : '🔕'}</div>
-      <div><div class="alert-fav-name">${l.flag} ${l.name}</div><div class="alert-fav-country">${l.country}</div></div></div>`;
-  }).join('');
-}
 
-function toggleFav(id) { const f = getFavs(); const idx = f.indexOf(id); if (idx >= 0) f.splice(idx, 1); else f.push(id); saveFavs(f); renderAlertFavs(); }
 
-function requestNotifPerm() { Notification.requestPermission().then(p => { if (p === 'granted') { document.getElementById('alertPermBanner').style.display = 'none'; new Notification('PronoSight', { body: 'Notifications activées !' }); } }); }
 
-async function autoScanAlerts() {
-  if (Notification.permission !== 'granted') return;
-  const favs = getFavs();
-  if (!favs.length) return;
-  const lastScan = parseInt(localStorage.getItem('ps_last_auto_scan') || '0');
-  if (Date.now() - lastScan < 3 * 60 * 60 * 1000) return;
-  localStorage.setItem('ps_last_auto_scan', String(Date.now()));
-  const thresh = parseInt(localStorage.getItem('ps_alert_thresh') || '70');
-  const names = LEAGUES.filter(l => favs.includes(l.id)).map(l => l.name + ' (' + l.country + ')').join(', ');
-  try {
-    const data = await callGemini([{
-      role: 'user',
-      content: `Recherche les matchs dans les 24h pour : ${names}. Retourne uniquement JSON: {"signals":[{"league":"x","team1":"x","team2":"x","best_bet":"x","confidence":75}]} Seulement confidence >= ${thresh}. Max 5.`
-    }], { maxTokens: 600 });
-    const parsed = extractJSON(extractText(data));
-    const signals = parsed?.signals || [];
-    signals.forEach(s => {
-      new Notification(`⚡ PronoSight — ${s.team1} vs ${s.team2}`, {
-        body: `🎯 ${s.best_bet} · ${s.confidence}% confiance\n${s.league}`,
-        icon: '/favicon.ico',
-        tag: `ps-${s.team1}-${s.team2}`
-      });
-    });
-  } catch { /* silencieux */ }
-}
 
-async function scanAlerts() {
-  const favs = getFavs();
-  if (!favs.length) { alert('Sélectionne au moins une ligue'); return; }
-  const thresh = parseInt(document.getElementById('alertThresh').value) || 70;
-  const btn = document.getElementById('alertScanBtn');
-  btn.disabled = true; btn.textContent = 'Scan en cours...';
-  const resDiv = document.getElementById('alertResults');
-  const names = LEAGUES.filter(l => favs.includes(l.id)).map(l => l.name + ' (' + l.country + ')').join(', ');
-  try {
-    const data = await callGemini([{
-      role: 'user',
-      content: `Recherche les matchs dans les 3 prochains jours pour : ${names}. Pour chaque match estime la confiance IA. TOUT EN FRANCAIS. Retourne uniquement JSON: {"signals":[{"league":"x","team1":"x","team2":"x","date":"JJ/MM","best_bet":"x","confidence":75,"reason":"Raison"}]} Seulement confidence >= ${thresh}. Max 8.`
-    }], { useSearch: true, maxTokens: 900 });
-    const parsed = extractJSON(extractText(data));
-    const signals = parsed?.signals || [];
-    resDiv.innerHTML = signals.length
-      ? signals.map(s => `<div class="alert-hit"><div style="font-weight:700">⚡ ${s.team1} vs ${s.team2}</div><div style="font-size:10px;color:var(--muted)">${s.league} · ${s.date}</div><div style="font-size:12px;color:var(--yellow);margin-top:5px">🎯 ${s.best_bet} · <strong>${s.confidence}%</strong></div></div>`).join('')
-      : '<div style="text-align:center;padding:20px;color:var(--muted);font-size:12px">Aucun signal. Baisse le seuil ou réessaie.</div>';
-  } catch (e) {
-    resDiv.innerHTML = `<div style="color:var(--ev-neg);font-size:12px;padding:12px">${e.message}</div>`;
-  } finally {
-    btn.disabled = false; btn.textContent = '🔍 SCANNER MES LIGUES';
-  }
-}
 
 // ══════════════════════════════════════════════
 // PARLAY BUILDER
 // ══════════════════════════════════════════════
 function addParlayLeg() {
   const legs = document.getElementById('parlayLegs');
-  if (legs.children.length >= 10) { alert('Maximum 10 matchs'); return; }
+  if (legs.children.length >= 10) { alert('10 sélections maximum'); return; }
   parlayCount++;
   const n = parlayCount, num = legs.children.length + 1;
   const div = document.createElement('div');
   div.className = 'parlay-leg'; div.id = 'pl' + n;
-  div.innerHTML = `<div class="parlay-leg-header"><div class="parlay-leg-title">Match ${num}</div><button class="parlay-remove" onclick="document.getElementById('pl${n}').remove()">✕</button></div>
+  div.innerHTML = `<div class="parlay-leg-header"><div class="parlay-leg-title">Sélection ${num}</div><button class="parlay-remove" onclick="document.getElementById('pl${n}').remove()" aria-label="Retirer">${icone('croix', { taille: 15 })}</button></div>
     <div class="parlay-inputs">
-      <div class="parlay-field"><label>Equipes</label><input class="parlay-input" id="pt${n}" placeholder="PSG vs Lyon"></div>
-      <div class="parlay-field"><label>Pari</label><input class="parlay-input" id="pb${n}" placeholder="PSG gagne"></div>
-      <div class="parlay-field"><label>Cote</label><input class="parlay-input" type="number" step="0.01" min="1" id="po${n}" placeholder="1.85"></div>
-      <div class="parlay-field"><label>Proba %</label><input class="parlay-input" type="number" min="1" max="99" id="pp${n}" placeholder="62"></div>
+      <div class="parlay-field"><label>Match et pari</label><input class="parlay-input" id="pb${n}" placeholder="Lens gagne contre Lille"></div>
+      <div class="parlay-field"><label>Cote</label><input class="parlay-input" type="number" step="0.01" min="1.01" inputmode="decimal" id="po${n}" placeholder="1,85"></div>
+      <div class="parlay-field"><label>Ta proba % (facultatif)</label><input class="parlay-input" type="number" min="1" max="99" inputmode="numeric" id="pp${n}" placeholder="55"></div>
     </div>`;
   legs.appendChild(div);
 }
 
 function calcParlay() {
-  const legs = document.querySelectorAll('.parlay-leg');
-  if (legs.length < 2) { alert('Ajoute au moins 2 matchs'); return; }
-  const stake = parseFloat(document.getElementById('parlayStake').value) || 10;
-  let combOdds = 1, combProb = 1, valid = 0;
-  legs.forEach(leg => {
+  const legs = [...document.querySelectorAll('.parlay-leg')].map(leg => {
     const n = leg.id.replace('pl', '');
-    const odds = parseFloat(document.getElementById('po' + n)?.value) || 0;
-    const prob = parseFloat(document.getElementById('pp' + n)?.value) || 0;
-    if (odds > 1) { combOdds *= odds; if (prob > 0) combProb *= (prob / 100); valid++; }
-  });
-  if (valid < 2) { alert('Remplis au moins 2 matchs'); return; }
-  combOdds = Math.round(combOdds * 100) / 100;
-  const probPct = Math.round(combProb * 10000) / 100;
-  const potWin = Math.round(stake * combOdds * 100) / 100;
-  const ev = Math.round((combProb * (combOdds - 1) - (1 - combProb)) * 10000) / 100;
-  const isPos = ev > 0;
+    return { cote: parseFloat(document.getElementById('po' + n)?.value) || 0, proba: parseFloat(document.getElementById('pp' + n)?.value) || 0 };
+  }).filter(l => l.cote > 1);
+  if (legs.length < 2) { alert('Entre au moins deux cotes.'); return; }
+  const mise = parseFloat(document.getElementById('parlayStake').value) || 0;
+  const cote = legs.reduce((a, l) => a * l.cote, 1);
+  // La valeur n'a de sens que si CHAQUE sélection a une probabilité : avant,
+  // les sélections sans proba comptaient pour 100 %, et l'EV était faux.
+  const toutes = legs.every(l => l.proba > 0 && l.proba < 100);
+  const proba = toutes ? legs.reduce((a, l) => a * l.proba / 100, 1) : null;
+  const ev = proba != null ? proba * cote - 1 : null;
+  const marge = legs.length; // chaque sélection paie sa marge
   const res = document.getElementById('parlayResult');
   res.style.display = 'block';
-  res.innerHTML = `<div style="background:var(--surface);border:1px solid ${isPos ? 'rgba(127,255,107,.4)' : 'var(--border)'};border-radius:var(--r);padding:20px">
-    <div style="font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:12px">RÉSULTAT PARLAY</div>
-    <div class="parlay-result-row"><div class="parlay-result-label">Cote combinée</div><div class="parlay-result-val" style="color:var(--accent)">${combOdds}</div></div>
-    <div class="parlay-result-row"><div class="parlay-result-label">Probabilité</div><div class="parlay-result-val">${probPct}%</div></div>
-    <div class="parlay-result-row"><div class="parlay-result-label">Gain potentiel</div><div class="parlay-result-val" style="color:var(--accent3)">€${potWin}</div></div>
-    <div class="parlay-result-row"><div class="parlay-result-label">Value (EV)</div><div class="parlay-result-val" style="color:${isPos ? 'var(--ev-pos)' : 'var(--ev-neg)'}">${isPos ? '+' : ''}${ev}%</div></div>
+  const ligne = (lib, val, cls = '') => `<div class="parlay-result-row"><div class="parlay-result-label">${lib}</div><div class="parlay-result-val ${cls}">${val}</div></div>`;
+  res.innerHTML = `<div class="an-carte" style="margin-top:14px">
+    ${ligne('Cote totale', cote.toFixed(2))}
+    ${mise > 0 ? ligne('Gain si tout passe', `${(mise * cote).toFixed(2).replace('.', ',')} €`) : ''}
+    ${proba != null ? ligne('Chances que tout passe', `${(proba * 100).toFixed(1).replace('.', ',')} %`) : ''}
+    ${ev != null ? ligne('Valeur espérée', `${ev >= 0 ? '+' : '−'}${Math.abs(ev * 100).toFixed(1).replace('.', ',')} %`, ev >= 0 ? 'pos' : 'neg') : ''}
+    <div class="vm-note">${proba == null ? 'Indique ta probabilité pour chaque sélection pour obtenir la valeur espérée. ' : ''}${marge} sélections : la marge du bookmaker est payée ${marge} fois.</div>
   </div>`;
 }
 
@@ -2200,6 +1435,8 @@ function _renderPronoList() {
     ? new Date(victorState.today.generated_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
     : null;
 
+  const barreSports = document.getElementById('pronoSportTabs');
+  if (barreSports) barreSports.style.display = allPicks.length ? '' : 'none';
   if (!allPicks.length) {
     const h = new Date().getHours();
     const nextRun = h < 7 ? '07h00' : h < 13 ? '13h00' : '07h00 demain';
@@ -2250,6 +1487,12 @@ function _renderPronoList() {
     return;
   }
 
+  // Un filtre de sport sans aucun prono ne sert à rien : on le masque.
+  document.querySelectorAll('#pronoSportTabs .tab[data-psport]').forEach(b => {
+    const sp = b.dataset.psport;
+    b.style.display = sp === 'all' || allPicks.some(p => _normalizeSport(p.sport) === sp) ? '' : 'none';
+  });
+
   const groupsHtml = Object.entries(bySport).map(([sportKey, { label, picks }]) => {
     // Grouper par compétition dans chaque sport
     const byComp = {};
@@ -2284,6 +1527,8 @@ function _renderPronoList() {
             <span><span class="pick-pari-type">Le pari de Victor</span><span class="pick-pari-libelle">${p.pronostic_principal || ''}</span></span>
             ${Number.isFinite(cote) ? `<span class="cote-puce retenue"><span>${p.cote_confirmee ? 'Cote' : 'Cote est.'}</span><b>${cote.toFixed(2)}</b></span>` : ''}
           </div>
+
+          <button class="bouton-jouer" onclick="jouerPari('victor', ${allPicks.indexOf(p)})">${icone('portefeuille', { taille: 16 })}Je joue ce pari</button>
 
           <div class="pick-lignes">
             ${p.value_bet && p.value_bet !== 'aucun' ? `<div class="pick-ligne value"><span>Value</span> ${p.value_bet}${p.cote_value ? ` · ${parseFloat(p.cote_value).toFixed(2)}` : ''}</div>` : ''}
@@ -2408,112 +1653,23 @@ function showVictorUpdateNotif(count) {
 }
 window.showVictorUpdateNotif = showVictorUpdateNotif;
 
-function renderVictorPicks(picks, containerId) {
-  const el = document.getElementById(containerId);
-  if (!el) return;
-  if (!picks || !picks.length) {
-    const h = new Date().getHours();
-    const msg = h < 7
-      ? `Pronostics disponibles à 07h00 (dans ${7 - h}h)`
-      : h < 13 ? 'Run du matin disponible — prochain refresh à 13h00' : 'Prochain run à 07h00 demain';
-    el.innerHTML = `<div style="text-align:center;padding:36px;color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:12px">
-      <div style="font-size:28px;margin-bottom:8px">🎙️</div>
-      <strong style="color:var(--text2);font-size:13px">Victor analyse en cours...</strong><br>
-      <span style="font-size:11px;margin-top:6px;display:block">${msg}</span>
-    </div>`;
-    return;
-  }
-  el.innerHTML = picks.map((p, i) => {
-    const confColor = _confColor(p.confiance);
-    const confNum   = _confNum(p.confiance);
-    return `<div class="qp-card${i === 0 ? ' top-pick' : ''}">
-      ${i === 0 ? '<div class="qp-card-badge">🎙️ VICTOR TOP PICK</div>' : ''}
-      <div class="qp-card-match">${p.equipe_a || ''} vs ${p.equipe_b || ''}</div>
-      <div class="qp-card-league">${p.sport || ''} · ${p.competition || ''}</div>
-      <div class="qp-card-bet">🎯 ${p.pronostic_principal || ''}</div>
-      <div class="qp-card-stats">
-        <span class="qp-chip" style="color:${confColor}">${confNum}% · ${p.confiance || ''}</span>
-        ${p.cote_estimee ? `<span class="qp-chip">@${parseFloat(p.cote_estimee).toFixed(2)}</span>` : ''}
-        ${p.value_bet ? `<span class="qp-chip" style="color:#00aaff">💡 ${p.value_bet}</span>` : ''}
-      </div>
-      ${p.score_predit ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">🏟️ Score prédit : <strong>${p.score_predit}</strong></div>` : ''}
-      ${p.phrase_signature ? `<div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:6px;border-top:1px solid var(--border);padding-top:6px">"${p.phrase_signature}"</div>` : ''}
-    </div>`;
-  }).join('');
-}
 
-function renderVictorView() {
+async function renderVictorView() {
   const el = document.getElementById('victorView');
   if (!el) return;
-  if (!victorState.loaded) {
-    if (victorState.loadError) {
-      el.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
-        <div style="font-size:32px">⚠️</div>
-        <div style="margin-top:12px;font-weight:700;color:#ff6644">Impossible de charger Victor</div>
-        <div style="font-size:12px;margin-top:6px">Vérifiez la connexion au serveur</div>
-        <button onclick="victorState.loadError=false;renderVictorView()" style="margin-top:12px;padding:6px 16px;border-radius:8px;background:var(--accent);border:none;color:var(--sur-accent,#000);cursor:pointer">↻ Réessayer</button>
-      </div></div>`;
-    } else {
-      el.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
-        <div style="font-size:32px">🎙️</div>
-        <div style="margin-top:12px;font-weight:700;color:var(--text2)">Chargement de Victor...</div>
-      </div></div>`;
-      loadVictorData().then(() => renderVictorView());
-    }
-    return;
-  }
-  const picks    = victorState.today?.pronostics || [];
-  const g        = victorState.stats?.global || {};
-  const patterns = victorState.patterns?.forts || [];
-  const taux     = g.taux_global != null ? g.taux_global + '%' : '—';
-  const roi      = victorState.stats?.derniere_maj?.roi_mise_fixe != null
-    ? (victorState.stats.derniere_maj.roi_mise_fixe >= 0 ? '+' : '') + victorState.stats.derniere_maj.roi_mise_fixe + 'u'
-    : '—';
-  const totalVerif = g.total || 0;
-  const updateTime = victorState.today?.generated_at
-    ? new Date(victorState.today.generated_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-    : null;
-  const signature = picks[0]?.phrase_signature || '';
-
-  el.innerHTML = `
-    <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
-        <div>
-          <div class="card-title">🎙️ <span class="ct-accent">Victor</span> — Analyse du jour</div>
-          ${updateTime ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Dernière mise à jour : ${updateTime}</div>` : '<div style="font-size:11px;color:var(--muted);margin-top:2px">Aucune analyse aujourd\'hui</div>'}
-        </div>
-        <button class="qp-scan-btn" onclick="refreshVictorView()" style="font-size:11px;padding:8px 14px">🔄 Actualiser</button>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:20px;font-weight:800;color:#00dd55">${taux}</div>
-          <div style="font-size:9px;color:var(--muted);letter-spacing:1px;margin-top:3px">WIN RATE</div>
-        </div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:20px;font-weight:800;color:#00aaff">${roi}</div>
-          <div style="font-size:9px;color:var(--muted);letter-spacing:1px;margin-top:3px">ROI</div>
-        </div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center">
-          <div style="font-size:20px;font-weight:800;color:var(--yellow)">${totalVerif}</div>
-          <div style="font-size:9px;color:var(--muted);letter-spacing:1px;margin-top:3px">VÉRIFIÉS</div>
-        </div>
-      </div>
-      ${signature ? `<div style="background:var(--surface);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:16px;font-size:13px;font-style:italic;color:var(--text2)">"${signature}"</div>` : ''}
-      <div style="font-size:10px;letter-spacing:2px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:10px">PICKS DU JOUR (${picks.length})</div>
-      <div id="victorPicksList"></div>
-    </div>
-    ${patterns.length ? `<div class="card" style="margin-top:12px">
-      <div style="font-size:10px;letter-spacing:2px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:12px">⚡ PATTERNS ACTIFS — FIABILITÉ ≥70%</div>
-      ${patterns.map(p => `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
-        <div style="flex:1">
-          <div style="font-weight:600;color:var(--text1)">${p.nom || ''}</div>
-          <div style="color:var(--muted);font-size:11px;margin-top:2px">${(p.description || '').slice(0, 90)}</div>
-        </div>
-        <div style="font-weight:800;color:#00dd55;font-size:16px">${parseFloat(p.taux_confirmation || 0).toFixed(0)}%</div>
-      </div>`).join('')}
-    </div>` : ''}
-  `;
-  renderVictorPicks(picks, 'victorPicksList');
+  const dessiner = () => {
+    // victorState est échappé au chargement ; htmlVictor échappe lui-même :
+    // on lui rend le texte brut pour ne pas l'échapper deux fois.
+    const p = victorState.patterns || {};
+    el.innerHTML = htmlVictor(desassainir({
+      stats: victorState.stats, bilan: valeursState.bilan,
+      patterns: p.forts?.length ? p.forts : (p.moyens || []),
+      historique: victorState.history?.pronostics || [], aujourdhui: victorState.today?.total || 0,
+    }));
+  };
+  dessiner();
+  await Promise.all([loadVictorData(), loadValeurs()]);
+  dessiner();
 }
 
 async function refreshVictorView() {
@@ -2523,213 +1679,14 @@ async function refreshVictorView() {
 }
 window.refreshVictorView = refreshVictorView;
 
-function _setHistMode(mode) { _histMode = mode; renderHistory(); }
-window._setHistMode = _setHistMode;
 
 // ══════════════════════════════════════════════
 // QUICK PICK
 // ══════════════════════════════════════════════
-async function runQuickPick() {
-  const btn = document.getElementById('qpScanBtn');
-  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Chargement...'; }
-  const resDiv = document.getElementById('qpResults');
-  resDiv.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">🎙️ Récupération des picks Victor...</div>';
-  try {
-    if (!victorState.loaded) await loadVictorData();
-    const picks = victorState.today?.pronostics || [];
-    renderVictorPicks(picks, 'qpResults');
-  } catch (e) {
-    resDiv.innerHTML = `<div style="color:var(--ev-neg);padding:12px">${e.message}</div>`;
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F50D; SCANNER'; }
-  }
-}
 
 // ══════════════════════════════════════════════
 // COMBOS AUTO
 // ══════════════════════════════════════════════
-async function buildCombos() {
-  const btn = document.getElementById('comboBuildBtn');
-  btn.disabled = true; btn.textContent = 'Génération...';
-  const res = document.getElementById('comboResults');
-  const size = parseInt(document.getElementById('comboSize').value) || 3;
-  const stake = parseFloat(document.getElementById('comboStake').value) || 20;
-  const lf = document.getElementById('comboLeagueFilter').value;
-
-  const maxTokens = size <= 4 ? 3000 : size <= 6 ? 4500 : size <= 8 ? 6000 : 7500;
-
-  try {
-    res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">📡 Récupération des vrais matchs...</div>';
-
-    // ── 1. Ligues à interroger selon le filtre ──
-    const favs = getFavs();
-    let leaguesToFetch;
-    if (lf === 'basket') {
-      leaguesToFetch = TODAY_LEAGUES.filter(l => l.sport === 'basketball');
-    } else if (lf === 'favs' && favs.length) {
-      leaguesToFetch = TODAY_LEAGUES.filter(l => favs.includes(l.id));
-    } else {
-      leaguesToFetch = TODAY_LEAGUES.filter(l => l.sport === 'soccer');
-    }
-    if (!leaguesToFetch.length) leaguesToFetch = TODAY_LEAGUES.filter(l => l.sport === 'soccer');
-
-    // ── 2. Récupérer les vrais matchs des 3 prochains jours ──
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const in3days  = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
-    const realMatches = [];
-
-    // Source A : Football-Data.org (top 5 + coupes)
-    const fdLeagues = leaguesToFetch.filter(l => FD_COMP_MAP[l.id] && state.apiStatus?.footballData);
-    await Promise.all(fdLeagues.map(async league => {
-      try {
-        const data = await fdFetch(`competitions/${FD_COMP_MAP[league.id]}/matches?dateFrom=${todayStr}&dateTo=${in3days}`);
-        (data?.matches || []).forEach(m => {
-          if (m.status === 'FINISHED' || m.status === 'IN_PLAY' || m.status === 'PAUSED') return;
-          const match = fdToMatch(m, league);
-          match.leagueId = league.id;
-          realMatches.push(match);
-        });
-      } catch { /* ignore */ }
-    }));
-
-    // Source B : TheSportsDB pour les ligues non couvertes par FD.org
-    const fdLeagueIds = new Set(fdLeagues.map(l => l.id));
-    const tsdbLeagues = leaguesToFetch.filter(l => !fdLeagueIds.has(l.id) && l.tsdb);
-    await Promise.all(tsdbLeagues.map(async league => {
-      try {
-        const events = await getLeagueEvents(league.tsdb);
-        (events || [])
-          .filter(e => e.dateEvent >= todayStr && e.dateEvent <= in3days)
-          .forEach(e => {
-            const m = tsdbToMatch(e);
-            m.leagueName = league.name; m.leagueFlag = league.flag;
-            m.leagueId = league.id; m.sport = league.sport;
-            realMatches.push(m);
-          });
-      } catch { /* ignore */ }
-    }));
-
-    // ── 3. Dédupliquer et filtrer les matchs déjà joués ──
-    const seen = new Set();
-    const unique = realMatches.filter(m => {
-      if (m.status === 'FT' || m.status === 'FINISHED') return false;
-      const key = `${m.team1}|${m.team2}`.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key); return true;
-    });
-
-    if (!unique.length) {
-      throw new Error('Aucun match réel trouvé pour les 3 prochains jours. Vérifie ta connexion ou reviens plus tard.');
-    }
-
-    // ── 4. Adapter la taille si pas assez de matchs ──
-    const actualSize = Math.min(size, unique.length);
-    if (actualSize < size) {
-      res.innerHTML = `<div style="text-align:center;padding:16px;color:var(--yellow);font-size:12px">⚠️ ${unique.length} matchs trouvés — combinés réduits à ${actualSize} sélections</div>`;
-      await new Promise(r => setTimeout(r, 1500));
-    }
-
-    // ── 5. Construire la liste de matchs pour le prompt ──
-    const matchList = unique.map((m, i) => {
-      const lg = m.leagueName || m.league || '';
-      const dt = m.date + (m.time && m.time !== 'TBD' ? ' ' + m.time : '');
-      return `${i + 1}. ${m.team1} vs ${m.team2} | ${lg} | ${dt}`;
-    }).join('\n');
-
-    res.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:12px">🧠 Génération des combinés IA...</div>';
-
-    // ── 6. Gemini génère les combos à partir UNIQUEMENT de ces matchs ──
-    const prompt = `Tu es un expert en paris sportifs. Voici la liste EXACTE des vrais matchs disponibles:
-
-${matchList}
-
-Génère 4 combinés de EXACTEMENT ${actualSize} legs chacun. 4 types OBLIGATOIRES:
-1. "blinde": cotes 1.20-1.65/leg, confiance >= 82% — SÉCURITÉ MAX
-2. "value": EV+ (confiance > 1/odds en %), cotes 1.65-2.80/leg — VALUE BET
-3. "equilibre": mix blinde + value, cotes 1.50-2.20/leg
-4. "outsider": cotes 2.50-6.00/leg, confiance 52-70% — GROS POTENTIEL
-
-RÈGLES ABSOLUES:
-- Utilise UNIQUEMENT les matchs numérotés ci-dessus, JAMAIS d'autres matchs inventés
-- Recopie les noms des équipes, la ligue et la date EXACTEMENT comme dans la liste
-- Chaque match peut être dans plusieurs combos mais UNE SEULE FOIS par combo
-
-JSON COMPACT (champs courts obligatoires):
-{"combos":[{"type":"blinde","legs":[{"t1":"Equipe1","t2":"Equipe2","lg":"Compétition","dt":"JJ/MM","bet":"description pari","odds":1.45,"conf":85}],"cote":X.XX,"proba":XX,"ev":X.X,"verdict":"phrase courte"}]}
-
-CALCULS: cote=produit des odds, proba=produit(conf/100)*100, ev=(proba/100)*(cote-1)-(1-proba/100).
-EXACTEMENT ${actualSize} legs par combo, 4 combos total.`;
-
-    const d2 = await callGemini([{ role: 'user', content: prompt }], { maxTokens, jsonMode: true });
-
-    const parsed = extractJSON(extractText(d2));
-    const combos = parsed?.combos || [];
-    if (!combos.length) throw new Error('Aucun combiné généré — réessaie');
-
-    const typeMap = {
-      blinde:   { cls: 'csafe',     lbl: '🔒 BLINDÉ',    desc: 'Haute sécurité' },
-      value:    { cls: 'cvalue',    lbl: '💹 VALUE BET',  desc: 'Valeur positive' },
-      equilibre:{ cls: 'cbalanced', lbl: '⚖️ ÉQUILIBRÉ', desc: 'Risque maîtrisé' },
-      outsider: { cls: 'coutsider', lbl: '🚀 OUTSIDER',  desc: 'Gros potentiel' },
-      // compatibilité anciens types
-      safe:     { cls: 'csafe',     lbl: '🔒 BLINDÉ',    desc: 'Haute sécurité' },
-      balanced: { cls: 'cbalanced', lbl: '⚖️ ÉQUILIBRÉ', desc: 'Risque maîtrisé' },
-    };
-
-    res.innerHTML = combos.map(combo => {
-      const legs = combo.legs || [];
-      const cote  = combo.cote  || Math.round(legs.reduce((a, l) => a * (l.odds || 1), 1) * 100) / 100;
-      const proba = combo.proba || Math.round(legs.reduce((a, l) => a * ((l.conf || 60) / 100), 1) * 10000) / 100;
-      const ev    = combo.ev    ?? Math.round(((proba / 100) * (cote - 1) - (1 - proba / 100)) * 10000) / 100;
-      const isPos = ev > 0;
-      const gain  = Math.round(stake * cote * 100) / 100;
-      const riskDot = proba >= 20 ? '🟢' : proba >= 5 ? '🟡' : '🔴';
-      const riskLbl = proba >= 20 ? 'Faisable' : proba >= 5 ? 'Risqué' : 'Long shot';
-      const t = typeMap[combo.type] || typeMap.equilibre;
-
-      const legsHtml = legs.map((leg, i) => {
-        const legEv = Math.round(((leg.conf / 100) * (leg.odds - 1) - (1 - leg.conf / 100)) * 100);
-        const confCol = leg.conf >= 80 ? '#00dd55' : leg.conf >= 65 ? '#ffcc00' : '#ff6633';
-        const evTag = legEv > 0
-          ? `<span class="leg-ev-tag ev-pos-tag">EV+${legEv}%</span>`
-          : `<span class="leg-ev-tag ev-neg-tag">EV${legEv}%</span>`;
-        return `<div class="combo-leg">
-          <div class="combo-leg-num">${i + 1}</div>
-          <div class="combo-leg-info">
-            <div class="combo-leg-match">${leg.t1} vs ${leg.t2}</div>
-            <div class="combo-leg-bet">🎯 ${leg.bet} <span style="color:var(--accent)">@ ${leg.odds}</span></div>
-            <div class="combo-leg-meta">${leg.lg} · ${leg.dt}</div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
-            <div class="combo-leg-conf" style="color:${confCol}">${leg.conf}%</div>
-            ${evTag}
-          </div>
-        </div>`;
-      }).join('');
-
-      return `<div class="combo-card ${t.cls}">
-        <div class="combo-header-row">
-          <div class="combo-badge">${t.lbl}</div>
-          <div class="combo-risk-badge">${riskDot} ${riskLbl}</div>
-        </div>
-        <div class="combo-desc">${t.desc} · ${size} sélections</div>
-        <div class="combo-legs">${legsHtml}</div>
-        <div class="combo-verdict">"${combo.verdict || ''}"</div>
-        <div class="combo-totals">
-          <div class="combo-total"><div class="combo-total-val" style="color:var(--accent)">×${cote}</div><div class="combo-total-lbl">COTE</div></div>
-          <div class="combo-total"><div class="combo-total-val" style="color:${proba >= 20 ? '#00dd55' : proba >= 5 ? '#ffcc00' : '#ff6633'}">${proba}%</div><div class="combo-total-lbl">PROBA</div></div>
-          <div class="combo-total"><div class="combo-total-val" style="color:var(--accent3)">€${gain}</div><div class="combo-total-lbl">GAIN</div></div>
-          <div class="combo-total"><div class="combo-total-val" style="color:${isPos ? 'var(--ev-pos)' : 'var(--ev-neg)'}">${isPos ? '+' : ''}${ev}%</div><div class="combo-total-lbl">EV</div></div>
-        </div>
-      </div>`;
-    }).join('');
-
-  } catch (e) {
-    res.innerHTML = `<div style="color:var(--ev-neg);padding:16px;font-size:13px">❌ ${e.message}</div>`;
-  } finally {
-    btn.disabled = false; btn.innerHTML = '✨ GÉNÉRER';
-  }
-}
 
 // ══════════════════════════════════════════════
 // API KEY MODALS
@@ -2802,41 +1759,23 @@ document.addEventListener('keydown', e => {
 // ══════════════════════════════════════════════
 // EXPOSITION GLOBALE
 // ══════════════════════════════════════════════
-window.selectSport = selectSport;
 window.switchNav = switchNav;
 window.ouvrirPlus = ouvrirPlus;
 window.fermerPlus = fermerPlus;
 window.rechargerValeurs = rechargerValeurs;
 window.analyserDepuisAccueil = analyserDepuisAccueil;
+Object.assign(window, {
+  filtrerAujourdhui, basculerFavori, activerNotifs, definirBankroll, filtrerParis, reglerPari, supprimerPari,
+  effacerParis, exporterParis, ouvrirFormPari, fermerFormPari, enregistrerPari, choisirCompet, saisieLibre, jouerPari,
+});
 window.ouvrirAnalyseLibre = ouvrirAnalyseLibre;
 window.switchPronoMode = switchPronoMode;
-window.filterLeagues = filterLeagues;
-window.setCat = setCat;
-window.pickLeague = pickLeague;
-window.pickMatch = pickMatch;
-window.quickAnalyzeMatch = quickAnalyzeMatch;
 window.analyze = analyze;
 window.resetToStart = resetToStart;
 window.addParlayLeg = addParlayLeg;
 window.calcParlay = calcParlay;
-window.scanAlerts = scanAlerts;
-window.toggleFav = toggleFav;
-window.requestNotifPerm = requestNotifPerm;
-window.setResult = setResult;
-window.clearHistory = clearHistory;
-window.setBankroll = setBankroll;
-window.resetBankroll = resetBankroll;
-window.runQuickPick = runQuickPick;
-window.buildCombos = buildCombos;
 window.toggleTheme = toggleTheme;
 window.installPWA = installPWA;
-window.filterToday = filterToday;
-window.todayAnalyze = todayAnalyze;
-window.fetchTodayMatches = fetchTodayMatches;
-window.filterLive = filterLive;
-window.prefillFromLive = prefillFromLive;
-window.saveLiveKey = saveLiveKey;
-window.clearMatchCache = clearMatchCache;
 
 // ══════════════════════════════════════════════
 // CHAT IA
@@ -2911,161 +1850,50 @@ async function sendChatMessage() {
   }
 }
 
-function markLastResult(val) {
-  const h = getHist();
-  if (!h.length) return;
-  const it = h[0];
-  const odds = parseFloat(it.odds) || 0;
-  const stake = parseFloat(it.stake) || 10;
-  it.result = val;
-  it.pnl = val === 'win' && odds > 1 ? Math.round((odds - 1) * stake * 100) / 100 : val === 'lose' ? -stake : 0;
-  saveHist(h);
-  renderDashboard();
-  // Feedback visuel sur les boutons
-  ['rbWin','rbLose','rbDraw','rbPush'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (btn) btn.classList.remove('result-btn-active');
-  });
-  const activeId = val === 'win' ? 'rbWin' : val === 'lose' ? 'rbLose' : val === 'draw' ? 'rbDraw' : 'rbPush';
-  const activeBtn = document.getElementById(activeId);
-  if (activeBtn) activeBtn.classList.add('result-btn-active');
-}
-window.markLastResult = markLastResult;
 
 async function shareAnalysis() {
-  const h = getHist();
-  const it = h[0];
-  if (!it) return;
-
+  // L'analyse affichée, telle quelle : pas l'historique, qui mélangeait les analyses.
+  const d = state.chatCtx;
+  if (!d) return;
+  const t = (x) => brut(x);
+  const W = 600, H = 340, dpr = window.devicePixelRatio || 1;
   const canvas = document.createElement('canvas');
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = 600 * dpr;
-  canvas.height = 320 * dpr;
-  canvas.style.width = '600px';
-  canvas.style.height = '320px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  // Background
-  ctx.fillStyle = '#0a0a0a';
-  ctx.fillRect(0, 0, 600, 320);
-
-  // Accent border top
-  const grad = ctx.createLinearGradient(0, 0, 600, 0);
-  grad.addColorStop(0, '#00aaff');
-  grad.addColorStop(1, '#7b2fff');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 600, 4);
-
-  // Logo
-  ctx.font = 'bold 13px monospace';
-  ctx.fillStyle = '#00aaff';
-  ctx.fillText('🔮 PRONOSIGHT', 24, 32);
-
-  // League
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#666';
-  ctx.fillText((it.league || '').toUpperCase(), 24, 52);
-
-  // Teams
-  ctx.font = 'bold 26px sans-serif';
-  ctx.fillStyle = '#ffffff';
-  const matchStr = `${it.team1}  vs  ${it.team2}`;
-  ctx.fillText(matchStr, 24, 96);
-
-  // Separator line
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(24, 112);
-  ctx.lineTo(576, 112);
-  ctx.stroke();
-
-  // Best bet
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#888';
-  ctx.fillText('PARI RECOMMANDÉ', 24, 138);
-  ctx.font = 'bold 20px sans-serif';
-  ctx.fillStyle = '#00dd55';
-  ctx.fillText(it.best_bet || '—', 24, 162);
-
-  // Confidence
-  const conf = it.confidence || 0;
-  const confColor = conf >= 70 ? '#00dd55' : conf >= 55 ? '#ffcc00' : '#ff6633';
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#888';
-  ctx.fillText('CONFIANCE', 220, 138);
-  ctx.font = 'bold 28px sans-serif';
-  ctx.fillStyle = confColor;
-  ctx.fillText(`${conf}%`, 220, 166);
-
-  // Odds
-  if (it.odds) {
-    ctx.font = '11px monospace';
-    ctx.fillStyle = '#888';
-    ctx.fillText('COTE', 340, 138);
-    ctx.font = 'bold 28px sans-serif';
-    ctx.fillStyle = '#00aaff';
-    ctx.fillText(`×${parseFloat(it.odds).toFixed(2)}`, 340, 166);
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+  ctx.fillStyle = '#0b1a12'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#c8f31d'; ctx.fillRect(0, 0, W, 6);
+  ctx.font = '800 22px "Barlow Condensed", sans-serif'; ctx.fillStyle = '#f2f5f1'; ctx.fillText('PRONO', 24, 40);
+  ctx.fillStyle = '#c8f31d'; ctx.fillText('SIGHT', 24 + ctx.measureText('PRONO').width, 40);
+  ctx.font = '700 14px Barlow, sans-serif'; ctx.fillStyle = '#9fb3a6'; ctx.fillText(t(d.league).toUpperCase(), 24, 66);
+  ctx.font = '800 30px "Barlow Condensed", sans-serif'; ctx.fillStyle = '#ffffff'; ctx.fillText(`${t(d.team1)}  –  ${t(d.team2)}`.toUpperCase(), 24, 108);
+  ctx.font = '700 13px Barlow, sans-serif'; ctx.fillStyle = '#9fb3a6'; ctx.fillText('LE VERDICT', 24, 148);
+  ctx.font = '800 26px "Barlow Condensed", sans-serif'; ctx.fillStyle = '#c8f31d'; ctx.fillText(t(d.best_bet).toUpperCase(), 24, 178);
+  if (d.proba_source === 'marche') {
+    const issues = [['1', d.proba_home], ...(d.sport === 'basketball' ? [] : [['N', d.proba_draw]]), ['2', d.proba_away]];
+    issues.forEach(([lib, p], i) => {
+      const x = 24 + i * 120;
+      ctx.font = '700 13px Barlow, sans-serif'; ctx.fillStyle = '#9fb3a6'; ctx.fillText(lib, x, 216);
+      ctx.font = '800 30px "Barlow Condensed", sans-serif'; ctx.fillStyle = '#ffffff'; ctx.fillText(`${p} %`, x, 248);
+      ctx.font = '600 12px Barlow, sans-serif'; ctx.fillStyle = '#9fb3a6'; ctx.fillText(`cote juste ${(100 / p).toFixed(2)}`, x, 266);
+    });
+    ctx.font = '600 12px Barlow, sans-serif'; ctx.fillStyle = '#9fb3a6';
+    ctx.fillText('Probabilités tirées des cotes réelles, marge des bookmakers retirée.', 24, 296);
   }
+  ctx.font = '600 11px Barlow, sans-serif'; ctx.fillStyle = '#6f8577';
+  ctx.fillText(`${new Date().toLocaleDateString('fr-FR')} · ${location.host} · 18+ · Jouer comporte des risques : 09 74 75 13 13`, 24, 324);
 
-  // EV
-  if (it.ev != null) {
-    const evColor = it.ev > 0 ? '#00dd55' : '#ff3333';
-    ctx.font = '11px monospace';
-    ctx.fillStyle = '#888';
-    ctx.fillText('EV', 450, 138);
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillStyle = evColor;
-    ctx.fillText(`${it.ev > 0 ? '+' : ''}${it.ev.toFixed(1)}%`, 450, 166);
-  }
-
-  // Stars
-  const stars = '★'.repeat(it.stars || 3) + '☆'.repeat(5 - (it.stars || 3));
-  ctx.font = '18px sans-serif';
-  ctx.fillStyle = '#ffcc00';
-  ctx.fillText(stars, 24, 210);
-
-  // Date
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#444';
-  ctx.fillText(`Analyse du ${it.date} — pronosight.app`, 24, 240);
-
-  // Disclaimer
-  ctx.font = '10px monospace';
-  ctx.fillStyle = '#333';
-  ctx.fillText('⚠️ Outil d\'analyse IA — pas un conseil financier. Jouez responsable.', 24, 300);
-
-  // Convert to blob and share
   canvas.toBlob(async blob => {
     const file = new File([blob], 'pronosight-analyse.png', { type: 'image/png' });
-    const shareData = {
-      title: `PronoSight — ${it.team1} vs ${it.team2}`,
-      text: `${it.best_bet} (${conf}% confiance)\n🔮 PronoSight`,
-      files: [file]
+    const donnees = { title: `PronoSight — ${t(d.team1)} – ${t(d.team2)}`, text: `${t(d.best_bet)} · PronoSight`, files: [file] };
+    const telecharger = () => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'pronosight-analyse.png'; a.click();
+      URL.revokeObjectURL(url);
     };
     try {
-      if (navigator.canShare && navigator.canShare(shareData)) {
-        await navigator.share(shareData);
-      } else {
-        // Fallback: download
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'pronosight-analyse.png';
-        a.click();
-        URL.revokeObjectURL(url);
-      }
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'pronosight-analyse.png';
-        a.click();
-        URL.revokeObjectURL(url);
-      }
-    }
+      if (navigator.canShare && navigator.canShare(donnees)) await navigator.share(donnees);
+      else telecharger();
+    } catch (e) { if (e.name !== 'AbortError') telecharger(); }
   }, 'image/png');
 }
 window.shareAnalysis = shareAnalysis;
