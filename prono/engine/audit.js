@@ -29,6 +29,21 @@ export const BANDES = {
 };
 
 /**
+ * Une cote « confirmée » est-elle digne de foi ?
+ *
+ * The Odds API ne cote aucune double chance : seules h2h et totals sont
+ * demandées (victor/odds.js). Une double chance marquée « cote confirmée »
+ * ne peut donc venir que du bug corrigé le 02/10 — le libellé « Pas de match
+ * nul » de DC:12 recevait la cote du MATCH NUL (3,01 à 3,80 au lieu d'environ
+ * 1,35). Ces cotes faussent le rendement dans le sens flatteur : une DC:12
+ * passe environ trois fois sur quatre, comptée à 3,80.
+ */
+export function coteFiable(r = {}) {
+  if (r.cote_confirmee !== true) return false;
+  return !String(r.pari_code || '').startsWith('DC:');
+}
+
+/**
  * Gain d'une mise d'une unité.
  * Gagné → on récupère (cote − 1) net. Perdu → on perd la mise.
  */
@@ -148,4 +163,4 @@ export function echelleOrdonnee(bandes) {
   return true;
 }
 
-export default { gainPari, resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, BANDES };
+export default { coteFiable, gainPari, resumerParis, bootstrapRoi, verifierBandes, echelleOrdonnee, BANDES };

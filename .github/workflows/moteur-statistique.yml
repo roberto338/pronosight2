@@ -18,11 +18,13 @@
 #         backtest    → note le modèle sur le passé, lecture seule
 #         sweep       → cherche de meilleurs réglages, lecture seule
 #         audit       → note les signaux déjà publiés par Victor, lecture seule
+#         clv         → Victor bat-il la cote de clôture ? lecture seule
 #         diagnostic  → pourquoi Victor ne publie plus, lecture seule
 #         sondes      → football-data répond-il ? 2 requêtes, lecture seule
 #         publiques   → quelles sources gratuites couvrent la saison en cours
 #         espn        → format réel des réponses ESPN (secours de Victor)
 #         essai-espn  → le secours ESPN sur les vrais matchs des 3 prochains jours
+#         sonde-clv   → données disponibles pour mesurer le CLV de Victor
 #         prod        → la prod Render tourne-t-elle le dernier commit de master ?
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
@@ -42,7 +44,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, espn, essai-espn, prod]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, prod]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -172,6 +174,15 @@ jobs:
           echo "signif=$(sed -n 's/^::SIGNIFICATIF:://p' /tmp/backtest.txt | tail -1)" >> $GITHUB_OUTPUT
           echo "n=$(sed -n 's/^::N:://p' /tmp/backtest.txt | tail -1)"             >> $GITHUB_OUTPUT
 
+          # Le CLV de Victor, chaque mois : c'est la mesure qui tranchera,
+          # bien avant le rendement. Lecture seule ; un échec n'arrête pas le suivi.
+          {
+            echo '## CLV de Victor'
+            echo '```'
+            node prono/clv.js || echo "(CLV indisponible ce mois-ci)"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
       # Le silence est le comportement normal. Une issue n'est ouverte que
       # lorsqu'il y a une décision à prendre — sinon l'alerte devient un
       # bruit mensuel qu'on finit par ignorer, et elle ne sert plus à rien
@@ -245,6 +256,17 @@ jobs:
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
+      - name: Sonde CLV
+        if: steps.choix.outputs.etape == 'sonde-clv'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node scripts/sonde-clv.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
       # ── Vérifier la prod sans accès à Render ──
       # Render publie RENDER_GIT_COMMIT, que /api/status expose : on compare au
       # dernier commit de master, ce qui prouve (ou non) que le déploiement
@@ -286,6 +308,17 @@ jobs:
             echo "### /api/victor/health?sources=0"
             echo '```json'
             echo "$SANTE" | jq . 2>/dev/null || echo "$SANTE"
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: CLV de Victor
+        if: steps.choix.outputs.etape == 'clv'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/clv.js
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
