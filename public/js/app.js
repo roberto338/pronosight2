@@ -10,7 +10,7 @@ import { probabilitesDepuisCotes, pourcentages100 } from './modules/probabilites
 import { assainir, echapperHtml } from './modules/securite.js';
 import { htmlEcranValeurs } from './modules/valeurs.js';
 import { icone, iconeSport, ecusson } from './modules/icones.js';
-import { htmlUne, htmlAAnalyser, ligneMatch, rangCompet } from './modules/accueil.js';
+import { htmlUne, htmlAAnalyser, ligneMatch, rangCompet, analysable } from './modules/accueil.js';
 import { htmlLive, htmlAujourdhui, htmlCompetitions, htmlMesParis, htmlVictor } from './modules/ecrans.js';
 import { creerPari, bilanParis, courbeBankroll, versCsv } from './modules/paris.js';
 // ══════════════════════════════════════════════
@@ -201,7 +201,7 @@ async function chargerProgramme() {
 function dessinerAccueil() {
   const une = document.getElementById('dashUne');
   if (une) une.innerHTML = htmlUne({
-    aVenir: programme.charge ? programme.matchs.filter(m => m.statut === 'NS' || m.statut === 'LIVE').length : null,
+    aVenir: programme.charge ? programme.matchs.filter(analysable).length : null,
     valeurs: valeursState.valeurs?.aujourdhui?.length || 0,
     pronos: victorState.today?.total || 0,
   });
@@ -255,10 +255,10 @@ async function dessinerChoixMatch() {
   const zc = document.getElementById('choixCompet'), zm = document.getElementById('choixMatchs');
   if (!zc || !zm) return;
   if (!programme.charge) { zm.innerHTML = '<div class="vm-note" style="margin:0">Chargement du programme…</div>'; await chargerProgramme(); }
-  const ouverts = programme.matchs.map((m, index) => ({ ...m, index })).filter(m => m.statut === 'NS' || m.statut === 'LIVE');
+  const ouverts = programme.matchs.map((m, index) => ({ ...m, index })).filter(analysable);
   if (!ouverts.length) {
     zc.innerHTML = '';
-    zm.innerHTML = `<div class="etat-vide" style="padding:18px 10px"><div class="etat-vide-icone">${icone('calendrier')}</div><div class="etat-vide-titre">Plus de match aujourd'hui</div><div class="etat-vide-texte">Le programme du jour est terminé. Tu peux saisir une affiche à la main.</div></div>`;
+    zm.innerHTML = `<div class="etat-vide" style="padding:18px 10px"><div class="etat-vide-icone">${icone('calendrier')}</div><div class="etat-vide-titre">Plus de match de football aujourd'hui</div><div class="etat-vide-texte">Aucune affiche de football à venir dans nos sources. Tu peux en saisir une à la main.</div></div>`;
     return;
   }
   const favs = getFavs();
