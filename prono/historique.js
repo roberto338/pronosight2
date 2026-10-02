@@ -23,7 +23,7 @@
 
 import { rejouer } from './engine/rejeu.js';
 import { resumer } from './engine/backtest.js';
-import { comparerLogLoss, apportAuMarche, parisDuModele, bilanParis } from './engine/marche.js';
+import { comparerLogLoss, apportAuMarche, parisDuModele, parisValeurMarche, bilanParis } from './engine/marche.js';
 import { mulberry32 } from './engine/montecarlo.js';
 import { chargerHistorique } from './data/football-data-uk.js';
 import { MODEL_VERSION } from './engine/index.js';
@@ -98,6 +98,33 @@ for (const saison of saisons) {
   const b = bilanParis(dansSaison, { rnd });
   console.log(`  ${saison}   ${String(b.n).padStart(6)} paris · rendement ${pct(b.roi)} · CLV ${pct(b.clv)}`);
 }
+
+// ── 3. Value de marché : la meilleure cote face au consensus ──
+// Aucun modèle ici : seulement les cotes d'avant-match. C'est ce que Victor
+// peut calculer en direct. Seuils fixés avant de regarder : 0, 2, 4 %.
+console.log('\n── 3. Value de marché : meilleure cote > prix juste du consensus (aucun modèle) ──');
+console.log('  seuil    paris     rendement [IC 95 %]              CLV face à la clôture [IC 95 %]');
+const bilansMarche = {};
+for (const seuilEdge of [0, 0.02, 0.04]) {
+  const b = bilanParis(parisValeurMarche(rencontres, { seuilEdge }), { rnd });
+  bilansMarche[seuilEdge] = b;
+  console.log(`  > ${String(seuilEdge * 100).padStart(2)} %  ${String(b.n).padStart(6)}   ${pct(b.roi)} ${ic(b.icRoi).padEnd(22)}   ${pct(b.clv)} ${ic(b.icClv)}`);
+}
+const marche2 = parisValeurMarche(rencontres, { seuilEdge: 0.02 });
+for (const marche of ['1X2', 'OU2.5']) {
+  const b = bilanParis(marche2.filter(p => p.marche === marche), { rnd });
+  console.log(`  ${marche.padEnd(6)} (seuil 2 %) ${String(b.n).padStart(6)} paris · rendement ${pct(b.roi)} · CLV ${pct(b.clv)} ${ic(b.icClv)}`);
+}
+for (const saison of saisons) {
+  const a = 2000 + Number(saison.slice(0, 2));
+  const dans = marche2.filter(p => p.date >= `${a}-07-01` && p.date < `${a + 1}-07-01`);
+  if (!dans.length) continue;
+  const b = bilanParis(dans, { rnd });
+  console.log(`  ${saison}   ${String(b.n).padStart(6)} paris · rendement ${pct(b.roi)} · CLV ${pct(b.clv)}`);
+}
+console.log(`::MARCHE_N::${bilansMarche[0.02].n}`);
+console.log(`::MARCHE_CLV::${bilansMarche[0.02].clv == null ? '' : (bilansMarche[0.02].clv * 100).toFixed(2)}`);
+console.log(`::MARCHE_VERDICT::${bilansMarche[0.02].verdict}`);
 
 const VERDICTS = {
   'bat la clôture': '✅ Le modèle bat la clôture : ses value tiennent face au marché. Il peut servir de filtre.',
