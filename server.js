@@ -20,6 +20,7 @@ import { runVictor }                from './victor/core.js';
 import { getFixturesOfDay }         from './victor/sources.js';
 import { getOddsEvents }            from './victor/odds.js';
 import { creerCacheProxyCotes }     from './victor/cache-proxy-cotes.js';
+import { bilanVictor, bilanValeursMarche, valeursRecentes } from './victor/valeur-suivi.js';
 import { broadcastDaily }           from './bot/telegram.js';
 import { startWorker }              from './queues/workerManager.js';
 import { installerSurveillanceProcess } from './victor/mortalite.js';
@@ -642,6 +643,35 @@ app.post('/api/victor/refresh', async (req, res) => {
       status:  'started',
       message: 'Victor lance l\'analyse (mode direct — file indisponible).',
     });
+  }
+});
+
+// ── Values de marché et bilan vérifiable (app web) ──
+// Mêmes chiffres que /value et /bilan sur Telegram : ce que l'app affiche
+// doit pouvoir être recoupé, et rien n'y est arrondi en notre faveur.
+app.get('/api/victor/valeurs', generalLimiter, async (req, res) => {
+  try {
+    const jours = Math.min(Math.max(parseInt(req.query.jours) || 14, 1), 60);
+    const rows = await valeursRecentes({ jours });
+    const aujourdhui = new Date().toISOString().slice(0, 10);
+    res.json({
+      date: aujourdhui,
+      aujourdhui: rows.filter(r => r.date === aujourdhui),
+      notees: rows.filter(r => r.gagne === true || r.gagne === false),
+    });
+  } catch (err) {
+    console.error('[Victor/valeurs]', err.message);
+    res.status(500).json({ error: 'Erreur récupération des values de marché' });
+  }
+});
+
+app.get('/api/victor/bilan', generalLimiter, async (req, res) => {
+  try {
+    const [victor, marche] = await Promise.all([bilanVictor(), bilanValeursMarche()]);
+    res.json({ victor, marche });
+  } catch (err) {
+    console.error('[Victor/bilan]', err.message);
+    res.status(500).json({ error: 'Erreur récupération du bilan' });
   }
 });
 

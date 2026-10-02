@@ -2,7 +2,7 @@
 // PronoSight — Service Worker (PWA cache)
 // ══════════════════════════════════════════════
 
-const CACHE = 'pronosight-v5.1';
+const CACHE = 'pronosight-v5.3';
 
 // Assets statiques mis en cache (JS/CSS uniquement — PAS index.html)
 const STATIC_ASSETS = [

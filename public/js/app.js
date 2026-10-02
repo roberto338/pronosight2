@@ -10,7 +10,10 @@ import { state, MATCH_CACHE, getCachedAnalysis, setCachedAnalysis,
 import { callClaude, callGemini, extractText, extractJSON, tsdbFetch, getLeagueEvents,
          tsdbToMatch, fdFetch, fdToMatch, fetchRealOdds, fetchApiStatus, fetchMatchDetails, fetchLeagueStandings, fetchLiveStats, fetchH2H, fetchRealStats } from './modules/api.js';
 import { probabilitesDepuisCotes, pourcentages100 } from './modules/probabilites.js';
-import { assainir } from './modules/securite.js';
+import { assainir, echapperHtml } from './modules/securite.js';
+import { htmlEcranValeurs } from './modules/valeurs.js';
+import { icone, iconeSport, ecusson } from './modules/icones.js';
+import { htmlUne, htmlAAnalyser } from './modules/accueil.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -33,10 +36,11 @@ async function initApp() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js').catch(() => {});
   }
+  poserIcones();
   if (localStorage.getItem('ps_theme') === 'light') {
     document.body.classList.add('light-mode');
     const btn = document.getElementById('themeBtn');
-    if (btn) btn.innerHTML = '☀️';
+    if (btn) btn.innerHTML = icone('soleil');
   }
   clearOldCaches();
   const status = await fetchApiStatus();
@@ -52,6 +56,15 @@ async function initApp() {
     if (status.footballData) { fdBtn.style.borderColor = 'var(--accent)'; fdBtn.style.color = 'var(--accent)'; fdBtn.textContent = '📅 FD ✓'; }
     else fdBtn.title = 'Configurez FOOTBALL_DATA_KEY dans .env sur le serveur';
   }
+
+  // Les boutons de clés API sont des outils d'administration : un visiteur
+  // n'a pas à voir « ❌ GEMINI » ni l'état de l'infrastructure.
+  if (localStorage.getItem('ps_admin_key')) document.body.classList.add('admin');
+  // La barre du bas et la feuille « Plus » sont en position fixe : rattachées
+  // à <body>, sinon un ancêtre transformé (.container) les fait défiler.
+  ['plusFond', 'plusFeuille'].forEach(id => { const n = document.getElementById(id); if (n) document.body.appendChild(n); });
+  const bas = document.querySelector('.bottom-nav'); if (bas) document.body.appendChild(bas);
+  loadValeurs();
 
   const akBtn = document.getElementById('akChange');
   if (akBtn) {
@@ -139,14 +152,24 @@ function switchNav(tab) {
   // Mise à jour visuelle immédiate (pas de debounce sur le CSS)
   const pv = document.getElementById('pronoView');
   if (pv) pv.style.display = tab === 'prono' ? 'block' : 'none';
-  ['history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor'].forEach(t => {
+  ['history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor','valeurs'].forEach(t => {
     const el = document.getElementById(t + 'View');
     if (el) el.classList.toggle('visible', t === tab);
   });
-  ['prono','history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor'].forEach(t => {
+  ['prono','history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor','valeurs'].forEach(t => {
     const b = document.getElementById('nav-' + t);
     if (b) b.classList.toggle('active', t === tab);
   });
+  // Barre du bas (mobile) : une rubrique rangée dans « Plus » allume « Plus ».
+  const enBas = ['dash', 'prono', 'valeurs', 'live'];
+  document.querySelectorAll('.bn-btn').forEach(b => {
+    const n = b.dataset.nav;
+    b.classList.toggle('active', n === tab || (n === 'plus' && !enBas.includes(tab)));
+  });
+  document.querySelectorAll('.plus-grille button').forEach(b => b.classList.toggle('active', b.dataset.nav === tab));
+  fermerPlus();
+  // Selon le thème, c'est <body> qui défile (overflow:auto), pas la fenêtre.
+  window.scrollTo(0, 0); document.body.scrollTop = 0;
   // Live : démarre/arrête le refresh indépendamment du debounce
   if (tab === 'live') { fetchLive(false); startLiveAutoRefresh(); } else stopLiveAutoRefresh();
 
@@ -157,6 +180,7 @@ function switchNav(tab) {
     if (tab === 'history') renderHistory();
     if (tab === 'dash') renderDashboard();
     if (tab === 'victor') renderVictorView();
+    if (tab === 'valeurs') renderValeursView();
     if (tab === 'prono') renderPronoVictor();
     if (tab === 'today') fetchTodayMatches(false);
     if (tab === 'alerts') renderAlertFavs();
@@ -167,10 +191,149 @@ function switchNav(tab) {
   }, 150);
 }
 
+/** Remplace chaque <i data-ico="nom"> par son pictogramme. */
+function poserIcones(racine = document) {
+  racine.querySelectorAll('i[data-ico]').forEach(i => { i.outerHTML = icone(i.dataset.ico); });
+}
+
+// ══════════════════════════════════════════════
+// ACCUEIL — le programme du jour, prêt à analyser
+// ══════════════════════════════════════════════
+const programme = { matchs: [], charge: false, ts: 0 };
+
+async function chargerProgramme() {
+  if (programme.charge && Date.now() - programme.ts < 5 * 60 * 1000) return;
+  try {
+    const r = await fetch(`/api/matchs?date=${new Date().toISOString().slice(0, 10)}`);
+    const j = r.ok ? await r.json() : null;
+    programme.matchs = Array.isArray(j?.matchs) ? j.matchs : [];
+  } catch { programme.matchs = []; }
+  programme.charge = true; programme.ts = Date.now();
+}
+
+function dessinerAccueil() {
+  const une = document.getElementById('dashUne');
+  if (une) une.innerHTML = htmlUne({
+    aVenir: programme.charge ? programme.matchs.filter(m => m.statut !== 'FT').length : null,
+    valeurs: valeursState.valeurs?.aujourdhui?.length || 0,
+    pronos: victorState.today?.total || 0,
+  });
+  const liste = document.getElementById('dashAAnalyser');
+  if (liste) liste.innerHTML = htmlAAnalyser(programme.matchs, { charge: programme.charge });
+}
+
+/** Ligue de l'app correspondant au libellé de compétition d'une source. */
+function ligueDepuisCompet(competition = '') {
+  const c = normaliserNom(competition);
+  if (!c) return null;
+  return LEAGUES.find(l => { const n = normaliserNom(l.name); return n === c || c.includes(n) || n.includes(c); }) || null;
+}
+
+/**
+ * Lance une VRAIE analyse du match : bascule sur « Analyser un match »,
+ * renseigne les équipes et la ligue, puis exécute analyze().
+ * Avant, le bouton ⚡ affichait « Victor analyse… » sans rien analyser.
+ */
+async function analyserMatch({ team1, team2, competition = '', leagueId = null, live = false, heure = '' } = {}) {
+  if (!team1 || !team2) return;
+  switchNav('prono');
+  switchPronoMode('manuel', document.getElementById('pronoTabManuel'));
+  const ligue = (leagueId && LEAGUES.find(l => l.id === leagueId)) || ligueDepuisCompet(competition);
+  if (ligue) { state.selectedLeague = ligue; state.currentSport = ligue.sport === 'basketball' ? 'basket' : 'football'; }
+  state.selectedMatch = { team1, team2, live, date: "Aujourd'hui", time: heure, league: competition };
+  showStep(2);
+  const s2 = document.getElementById('s2l');
+  if (s2) s2.textContent = ligue ? ligue.name : (competition || 'Match choisi');
+  document.getElementById('team1').value = team1;
+  document.getElementById('team2').value = team2;
+  await new Promise(r => setTimeout(r, 60));
+  document.getElementById('step2panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  await analyze();
+}
+
+function analyserDepuisAccueil(i) {
+  const m = programme.matchs[i];
+  if (m) analyserMatch({ team1: m.equipe_a, team2: m.equipe_b, competition: m.competition, live: m.statut === 'LIVE', heure: m.heure });
+}
+
+function ouvrirAnalyseLibre() {
+  switchNav('prono');
+  switchPronoMode('manuel', document.getElementById('pronoTabManuel'));
+}
+
+function ouvrirPlus() {
+  document.getElementById('plusFeuille')?.classList.add('ouverte');
+  document.getElementById('plusFond')?.classList.add('ouvert');
+}
+function fermerPlus() {
+  document.getElementById('plusFeuille')?.classList.remove('ouverte');
+  document.getElementById('plusFond')?.classList.remove('ouvert');
+}
+
+// ══════════════════════════════════════════════
+// VALUE DE MARCHÉ — signaux du jour et bilan vérifiable
+// ══════════════════════════════════════════════
+const valeursState = { valeurs: null, bilan: null, erreur: false, ts: 0, enCours: null };
+
+async function loadValeurs({ force = false } = {}) {
+  if (!force && valeursState.ts && Date.now() - valeursState.ts < VICTOR_CACHE_TTL) return;
+  if (valeursState.enCours) return valeursState.enCours;
+  valeursState.enCours = (async () => {
+    try {
+      const [v, b] = await Promise.all([
+        fetch('/api/victor/valeurs').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
+        fetch('/api/victor/bilan').then(r => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      // Pas d'assainir() ici : modules/valeurs.js échappe lui-même chaque chaîne.
+      valeursState.valeurs = v; valeursState.bilan = b;
+      valeursState.erreur = false; valeursState.ts = Date.now();
+    } catch (err) {
+      console.warn('[Values] indisponibles :', err.message);
+      valeursState.erreur = !valeursState.valeurs;
+    } finally {
+      valeursState.enCours = null;
+      majBadgeValeurs();
+      dessinerAccueil();
+    }
+  })();
+  return valeursState.enCours;
+}
+
+function majBadgeValeurs() {
+  const n = valeursState.valeurs?.aujourdhui?.length || 0;
+  const badge = document.getElementById('valeursBadge');
+  if (badge) { badge.textContent = n; badge.style.display = n ? '' : 'none'; }
+  const pastille = document.getElementById('valeursPastille');
+  if (pastille) pastille.style.display = n ? '' : 'none';
+}
+
+function bankrollDefinie() {
+  const d = getBankrollData();
+  const b = d.current || d.initial || parseFloat(localStorage.getItem('ps_bankroll'));
+  return Number.isFinite(b) && b > 0 ? b : null;
+}
+
+function dessinerValeurs() {
+  const el = document.getElementById('valeursView');
+  if (el) el.innerHTML = htmlEcranValeurs({ ...valeursState, bankroll: bankrollDefinie() });
+}
+
+async function renderValeursView() {
+  dessinerValeurs();
+  await loadValeurs();
+  dessinerValeurs();
+}
+
+async function rechargerValeurs() {
+  valeursState.erreur = false;
+  await loadValeurs({ force: true });
+  dessinerValeurs();
+}
+
 function toggleTheme() {
   document.body.classList.toggle('light-mode');
   const btn = document.getElementById('themeBtn');
-  if (btn) btn.innerHTML = document.body.classList.contains('light-mode') ? '☀️' : '🌙';
+  if (btn) btn.innerHTML = icone(document.body.classList.contains('light-mode') ? 'soleil' : 'lune');
   localStorage.setItem('ps_theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
 }
 
@@ -263,7 +426,7 @@ async function loadMatches() {
     const dispo = jour.competitions.filter(c => c.aVenir > 0).slice(0, 12);
     container.innerHTML = `
       <div class="etat-vide">
-        <div class="etat-vide-icone">🗓️</div>
+        <div class="etat-vide-icone">${icone('calendrier')}</div>
         <div class="etat-vide-titre">Aucun match en ${state.selectedLeague.name} aujourd'hui</div>
         <div class="etat-vide-texte">
           ${dispo.length
@@ -281,7 +444,7 @@ async function loadMatches() {
 
   container.innerHTML = `
     <div class="etat-vide">
-      <div class="etat-vide-icone">🗓️</div>
+      <div class="etat-vide-icone">${icone('calendrier')}</div>
       <div class="etat-vide-titre">Calendrier indisponible</div>
       <div class="etat-vide-texte">Les sources sportives ne répondent pas pour l'instant.
       Saisissez deux équipes ci-dessous pour lancer une analyse.</div>
@@ -893,49 +1056,58 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
   if (d.proba_away > d.proba_home && d.proba_away > (d.proba_draw || 0)) wi = 2;
   else if (!isBk && (d.proba_draw || 0) > d.proba_home && (d.proba_draw || 0) > d.proba_away) wi = 1;
 
-  const globalConf = d.fdData ? computeAdvancedConfidence(d, d.fdData).global : computeGlobalConfidence(d, evData);
-  const confInfo = getConfidenceLabel(globalConf);
-  const starsText = confInfo.label;
   const tl = d.traffic_light || 'orange';
-  const tlEmoji = tl === 'vert' ? '🟢' : tl === 'orange' ? '🟡' : '🔴';
-  const tlLabel = tl === 'vert' ? 'BON PARI' : tl === 'orange' ? 'MOYEN' : 'RISQUÉ';
-  const tlColor = tl === 'vert' ? 'var(--ev-pos)' : tl === 'orange' ? 'var(--yellow)' : 'var(--ev-neg)';
+  const tlLabel = tl === 'vert' ? 'Bon pari' : tl === 'orange' ? 'Pari moyen' : 'Pari risqué';
+  const tlCls = tl === 'vert' ? 'haute' : tl === 'orange' ? 'moyenne' : 'basse';
   const stars = Math.min(5, Math.max(1, d.stars || Math.ceil(d.best_bet_confidence / 20)));
-  const starsStr = '⭐'.repeat(stars) + '☆'.repeat(5 - stars);
-  const isSignal = d.best_bet_confidence >= 75;
-  const formDot = r => r ? `<div class="form-dot ${({ W: 'fd-w', D: 'fd-d', L: 'fd-l' })[r] || 'fd-d'}">${r}</div>` : '';
-  const form1 = (d.team1_form || []).map(formDot).join('');
-  const form2 = (d.team2_form || []).map(formDot).join('');
-  const wTop = isBk ? 'top bk-top' : 'top';
-  const drawRow = !isBk ? `<div class="proba-row"><div class="proba-label">⚖️ Nul</div><div class="proba-bar-bg"><div class="proba-bar pb-draw" style="width:${d.proba_draw || 0}%"></div></div><div class="proba-pct">${d.proba_draw || 0}%</div></div>` : '';
+  const formDot = r => r ? `<div class="form-dot ${({ W: 'fd-w', D: 'fd-d', L: 'fd-l' })[r] || 'fd-d'}">${({ W: 'V', D: 'N', L: 'D' })[r] || r}</div>` : '';
+  // Une forme inconnue (« ? ») n'est pas une forme : on n'affiche que du réel.
+  const formeReelle = (f) => (Array.isArray(f) && f.some(r => ['W', 'D', 'L'].includes(r)) ? f : []);
+  const form1 = formeReelle(d.team1_form).map(formDot).join('');
+  const form2 = formeReelle(d.team2_form).map(formDot).join('');
+  const coteJuste = (p) => (p > 0 ? (100 / p).toFixed(2) : '—');
+
+  // Les trois issues, façon tableau de cotes : probabilité + cote juste.
+  const issues = [
+    { lib: '1', nom: d.team1, p: d.proba_home, i: 0 },
+    ...(!isBk ? [{ lib: 'N', nom: 'Match nul', p: d.proba_draw || 0, i: 1 }] : []),
+    { lib: '2', nom: d.team2, p: d.proba_away, i: 2 },
+  ];
+  const issuesHtml = issues.map(x => `<div class="an-issue ${wi === x.i ? 'favori' : ''}">
+      <span class="an-issue-lib">${x.lib}</span>
+      <b>${x.p ?? 0}<small>%</small></b>
+      <span class="an-issue-nom">${x.nom}</span>
+      <span class="an-issue-cote">cote juste ${coteJuste(x.p)}</span>
+    </div>`).join('');
+  const barre = issues.map(x => `<i class="seg-${x.i}" style="width:${x.p || 0}%"></i>`).join('');
 
   let evBlock = '';
   if (evData) {
     const isPos = evData.ev > 0;
-    evBlock = `<div class="ev-result ${isPos ? 'ev-pos' : 'ev-neg'}"><div><div class="ev-result-label">💰 Value Bet — ${evData.market} @ ${evData.bookOdds}</div><div class="ev-result-value">${isPos ? '+' : ''}${evData.ev}% EV</div><div class="ev-verdict">${isPos ? '✅ VALEUR POSITIVE' : '❌ VALEUR NÉGATIVE'}</div></div><div style="text-align:center;flex-shrink:0"><div style="font-size:42px">${isPos ? '💚' : '🔴'}</div></div></div>`;
+    evBlock = `<div class="an-carte an-ev ${isPos ? 'pos' : 'neg'}">
+      <div class="an-ev-tete">${icone(isPos ? 'hausse' : 'croix')}<span>Ta cote : ${evData.market} @ ${evData.bookOdds}</span></div>
+      <div class="an-ev-val">${isPos ? '+' : ''}${evData.ev} %<small>de valeur espérée</small></div>
+      <div class="an-ev-texte">${isPos ? 'La cote est au-dessus du prix juste : sur la durée, ce pari rapporte.' : 'La cote est sous le prix juste : le bookmaker garde l\'avantage. À éviter.'}</div>
+      ${kellyData && isPos ? `<div class="an-ev-mise">Mise suggérée (Kelly × ${kellyData.fraction}) : <b>${kellyData.stake} €</b> sur ${kellyData.bankroll} €</div>` : ''}
+    </div>`;
   }
 
-  let kellyBlock = '';
-  if (kellyData && evData?.ev > 0) {
-    kellyBlock = `<div class="kelly-result"><div><div class="kelly-result-label">📊 Mise optimale (Kelly × ${kellyData.fraction})</div><div class="kelly-result-value">€${kellyData.stake}</div><div class="kelly-explain">Kelly brut : ${kellyData.kelly}% · Bankroll : €${kellyData.bankroll}</div></div><div style="text-align:center;flex-shrink:0"><div style="font-size:38px">💜</div></div></div>`;
-  }
-
-  const factors = (d.key_factors || []).map(f => `<div class="factor-item"><div class="factor-icon">${f.icon || '📌'}</div><div>${f.text}</div></div>`).join('');
+  const factors = (d.key_factors || []).map(f => `<div class="an-facteur">${icone('fleche', { taille: 16 })}<div>${f.text}</div></div>`).join('');
 
   const altBetsHTML = (d.alt_bets?.length)
     ? d.alt_bets.map(b => {
         const c = b.confidence || 0;
-        const col = c >= 70 ? '#00dd55' : c >= 55 ? '#ffcc00' : '#ff6633';
+        const cls = c >= 70 ? 'haute' : c >= 55 ? 'moyenne' : 'basse';
         return `<div class="alt-bet-card">
           <div class="alt-bet-market">${b.market}</div>
           <div class="alt-bet-pick">${b.pick}</div>
-          <div class="alt-bet-conf" style="color:${col}">${c}%</div>
+          <div class="alt-bet-conf jauge ${cls}">${c} %</div>
           <div class="alt-bet-desc">${b.desc}</div>
         </div>`;
       }).join('')
     : '';
   const altBetsBlock = altBetsHTML
-    ? `<div class="alt-bets-section"><div class="section-title">🎯 Marchés alternatifs</div><div class="alt-bets-grid">${altBetsHTML}</div></div>`
+    ? `<div class="an-carte"><div class="titre-section">${icone('couches')}Autres marchés</div><div class="alt-bets-grid">${altBetsHTML}</div></div>`
     : '';
 
   let oddsTableBlock = '';
@@ -952,94 +1124,108 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
       const drawCell = odds.draw ? `<td class="odds-cell${dBest}">${odds.draw.toFixed(2)}</td>` : '<td class="odds-cell odds-na">—</td>';
       return `<tr><td class="odds-bk">${name}</td><td class="odds-cell${hBest}">${odds.home?.toFixed(2) || '—'}</td>${drawCell}<td class="odds-cell${aBest}">${odds.away?.toFixed(2) || '—'}</td></tr>`;
     }).join('');
-    oddsTableBlock = `<div class="odds-table-section">
-      <div class="section-title">📡 Cotes réelles bookmakers</div>
+    oddsTableBlock = `<div class="an-carte">
+      <div class="titre-section">${icone('stats')}Les cotes des bookmakers</div>
       <table class="odds-table">
-        <thead><tr><th>Bookmaker</th><th>${d.team1}</th><th>Nul</th><th>${d.team2}</th></tr></thead>
+        <thead><tr><th>Bookmaker</th><th>1</th><th>N</th><th>2</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      <div class="odds-best-hint">🟢 Meilleure cote disponible</div>
-    </div>`;
-  } else if (!state.apiStatus?.odds) {
-    oddsTableBlock = `<div class="odds-no-key">
-      📡 <strong>Cotes réelles non disponibles</strong> —
-      <span onclick="showOddsKeyModal()" style="color:var(--accent);cursor:pointer;text-decoration:underline">Configure une clé The Odds API</span>
-      (gratuit · 500 req/mois · Bet365, Unibet, Betclic...)
+      <div class="odds-best-hint">En surbrillance : la meilleure cote du marché.</div>
     </div>`;
   }
 
   const html = `
-    <button class="new-btn" onclick="resetToStart()">← Nouvelle analyse</button>
-    <div class="result-tracker" id="resultTracker">
-      <span class="result-tracker-label">Résultat de ce pari :</span>
-      <button class="result-btn result-win"  onclick="markLastResult('win')"  id="rbWin">✅ Gagné</button>
-      <button class="result-btn result-lose" onclick="markLastResult('lose')" id="rbLose">❌ Perdu</button>
-      <button class="result-btn result-draw" onclick="markLastResult('draw')" id="rbDraw">🤝 Nul</button>
-      <button class="result-btn result-push" onclick="markLastResult('push')" id="rbPush">↩️ Push</button>
-      <button class="result-btn result-share" onclick="shareAnalysis()" id="rbShare">📤 Partager</button>
+    <div class="an-barre">
+      <button class="bouton-discret" onclick="resetToStart()">${icone('fleche', { taille: 16, classe: 'retourne' })}Autre match</button>
+      <button class="bouton-discret" onclick="shareAnalysis()" id="rbShare">Partager</button>
     </div>
-    <div class="match-banner"><div class="match-banner-inner">
-      <div class="team-block"><span class="team-emoji">${d.team1_emoji || '⚽'}</span><div class="team-big">${d.team1}</div></div>
-      <div class="vs-center"><div class="vs-big">VS</div><div class="league-pill">${d.league}</div><div class="match-date-tag">${d.is_live ? '🔴 EN DIRECT' : d.match_date}</div></div>
-      <div class="team-block"><span class="team-emoji">${d.team2_emoji || '⚽'}</span><div class="team-big">${d.team2}</div></div>
-    </div></div>
-    ${evBlock}${kellyBlock}
-    <div class="simple-explanation"><div class="simple-title">🧒 En termes simples :</div><div class="simple-text">${d.simple_explanation || ''}</div></div>
-    <div class="confidence-block">
-      <div class="conf-section"><div class="conf-label">Confiance</div><div class="conf-tl">${tlEmoji}</div><div class="conf-tl-text" style="color:${tlColor}">${tlLabel}</div></div>
-      <div class="conf-divider"></div>
-      <div class="conf-section"><div class="conf-label">Note</div><div class="conf-stars">${starsStr}</div><div class="conf-stars-text">${starsText} (${d.best_bet_confidence}%)</div></div>
-      <div class="conf-divider"></div>
-      <div class="conf-section" style="flex:2;text-align:left"><div class="conf-label">🎯 Meilleur pari</div><div class="conf-pick">${d.best_bet}</div></div>
+
+    <div class="an-affiche">
+      <div class="an-affiche-sur">${d.league}${d.is_live ? ' · <span class="an-direct">EN DIRECT</span>' : d.match_date ? ` · ${d.match_date}` : ''}</div>
+      <div class="an-affiche-equipes">
+        <div class="an-equipe">${ecusson(d.team1 || '', { taille: 64 })}<div>${d.team1}</div></div>
+        <div class="an-vs">VS</div>
+        <div class="an-equipe">${ecusson(d.team2 || '', { taille: 64 })}<div>${d.team2}</div></div>
+      </div>
     </div>
-    <div class="winner-section">
-      <div class="winner-card ${wi === 0 ? wTop : ''}"><div class="winner-icon">${d.team1_emoji || '⚽'}</div><div class="winner-label">${(d.team1 || '').substring(0, 12)}</div><div class="winner-pct">${d.proba_home}%</div><div class="winner-fav">${wi === 0 ? '⭐ Favori' : ''}</div></div>
-      ${!isBk ? `<div class="winner-card ${wi === 1 ? wTop : ''}"><div class="winner-icon">⚖️</div><div class="winner-label">Nul</div><div class="winner-pct">${d.proba_draw || 0}%</div><div class="winner-fav">${wi === 1 ? '⭐ Favori' : ''}</div></div>` : ''}
-      <div class="winner-card ${wi === 2 ? wTop : ''}"><div class="winner-icon">${d.team2_emoji || '⚽'}</div><div class="winner-label">${(d.team2 || '').substring(0, 12)}</div><div class="winner-pct">${d.proba_away}%</div><div class="winner-fav">${wi === 2 ? '⭐ Favori' : ''}</div></div>
+
+    <div class="an-carte">
+      <div class="titre-section">${icone('cible')}Qui gagne ?</div>
+      <div class="an-source ${d.proba_source === 'marche' ? 'marche' : 'ia'}">${d.proba_source === 'marche'
+        ? `${icone('bouclier', { taille: 15 })}Calculé sur les cotes réelles (${d.odds_source}), marge des bookmakers retirée`
+        : `${icone('eclair', { taille: 15 })}Estimation de l'IA : aucune cote réelle trouvée pour ce match`}</div>
+      <div class="an-issues">${issuesHtml}</div>
+      <div class="an-barre-probas">${barre}</div>
     </div>
-    <div class="proba-section"><div class="section-title">📊 Probabilités</div>
-      <div class="proba-source" style="font-size:11px;opacity:.8;margin-bottom:6px">${d.proba_source === 'marche'
-        ? `✅ Calculées depuis les cotes réelles — ${d.odds_source}, marge retirée`
-        : `⚠️ Estimation IA, non vérifiée par le marché : aucune cote réelle disponible pour ce match`}</div>
-      <div class="proba-row"><div class="proba-label">${d.team1}</div><div class="proba-bar-bg"><div class="proba-bar ${isBk ? 'pb-bk-home' : 'pb-home'}" style="width:0%" data-w="${d.proba_home}"></div></div><div class="proba-pct">${d.proba_home}%</div></div>
-      ${drawRow}
-      <div class="proba-row"><div class="proba-label">${d.team2}</div><div class="proba-bar-bg"><div class="proba-bar ${isBk ? 'pb-bk-away' : 'pb-away'}" style="width:0%" data-w="${d.proba_away}"></div></div><div class="proba-pct">${d.proba_away}%</div></div>
+
+    <div class="an-carte an-verdict">
+      <div class="titre-section">${icone('eclair')}Le verdict</div>
+      <div class="an-verdict-pari">${d.best_bet}</div>
+      <div class="an-verdict-meta">
+        <span class="an-pastille ${tlCls}">${tlLabel}</span>
+        <span class="jauge ${tlCls}"><span class="jauge-segs">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= stars ? 'on' : ''}"></i>`).join('')}</span>${d.best_bet_confidence} %</span>
+      </div>
+      ${d.simple_explanation ? `<div class="an-simple">${d.simple_explanation}</div>` : ''}
     </div>
-    <div class="score-grid">
-      <div class="score-card ${wTop}"><div class="score-lbl">Score probable</div><div class="score-num">${d.score_pred}</div><div class="score-sub">${d.score_pred_pct}%</div></div>
-      <div class="score-card"><div class="score-lbl">Alt 1</div><div class="score-num" style="font-size:24px">${d.alt_score1}</div><div class="score-sub">${d.alt_score1_pct}%</div></div>
-      <div class="score-card"><div class="score-lbl">Alt 2</div><div class="score-num" style="font-size:24px">${d.alt_score2}</div><div class="score-sub">${d.alt_score2_pct}%</div></div>
+
+    ${evBlock}
+
+    <div class="an-carte">
+      <div class="titre-section">${icone('ballon')}Scores les plus probables</div>
+      <div class="an-scores">
+        <div class="an-score principal"><b>${d.score_pred}</b><span>${d.score_pred_pct} %</span></div>
+        <div class="an-score"><b>${d.alt_score1}</b><span>${d.alt_score1_pct} %</span></div>
+        <div class="an-score"><b>${d.alt_score2}</b><span>${d.alt_score2_pct} %</span></div>
+      </div>
     </div>
-    <div class="form-section"><div class="section-title">📈 Forme récente (5 derniers)</div><div class="form-grid">
-      <div class="form-team"><div class="form-team-name">${d.team1}</div><div class="form-dots">${form1}</div></div>
-      <div class="form-team"><div class="form-team-name">${d.team2}</div><div class="form-dots">${form2}</div></div>
-    </div></div>
-    <div class="analysis-block ${isBk ? 'bk' : ''}"><div class="analysis-header">📊 Analyse experte IA${d.realStats ? ' <span class="live-stats-badge">📡 Stats réelles</span>' : ''}</div>${d.analysis}</div>
-    <div class="proba-section"><div class="section-title">🔑 Facteurs clés</div><div class="factors-grid">${factors}</div></div>
+
+    ${form1 || form2 ? `<div class="an-carte">
+      <div class="titre-section">${icone('historique')}Forme récente</div>
+      <div class="an-forme"><span>${d.team1}</span><div class="form-dots">${form1 || '<em>—</em>'}</div></div>
+      <div class="an-forme"><span>${d.team2}</span><div class="form-dots">${form2 || '<em>—</em>'}</div></div>
+    </div>` : ''}
+
+    ${d.analysis ? `<div class="an-carte">
+      <div class="titre-section">${icone('loupe')}L'analyse${d.realStats ? ' <span class="an-pastille haute">stats réelles</span>' : ''}</div>
+      <div class="an-texte">${d.analysis}</div>
+      ${factors ? `<div class="an-facteurs">${factors}</div>` : ''}
+    </div>` : ''}
+
     ${altBetsBlock}
     ${oddsTableBlock}
+
+    <div class="an-carte">
+      <div class="titre-section">${icone('coche')}Tu as joué ce pari ?</div>
+      <div class="result-tracker" id="resultTracker">
+        <button class="result-btn result-win"  onclick="markLastResult('win')"  id="rbWin">Gagné</button>
+        <button class="result-btn result-lose" onclick="markLastResult('lose')" id="rbLose">Perdu</button>
+        <button class="result-btn result-draw" onclick="markLastResult('draw')" id="rbDraw">Nul</button>
+        <button class="result-btn result-push" onclick="markLastResult('push')" id="rbPush">Remboursé</button>
+      </div>
+    </div>
+
     <div class="chat-section">
       <div class="chat-header">
-        <div class="chat-avatar">🤖</div>
+        <div class="chat-avatar">${icone('micro')}</div>
         <div>
-          <div class="chat-title">Assistant IA</div>
-          <div class="chat-subtitle">Questions sur cette analyse ou sur n'importe quel match</div>
+          <div class="chat-title">Pose ta question</div>
+          <div class="chat-subtitle">Sur ce match, ses risques, ou n'importe quelle autre affiche</div>
         </div>
       </div>
       <div class="chat-suggestions">
-        <button class="chat-chip" onclick="chatQuickSuggestion('Pourquoi ce pronostic ?')">Pourquoi ce pronostic ?</button>
+        <button class="chat-chip" onclick="chatQuickSuggestion('Pourquoi ce pronostic ?')">Pourquoi ce prono ?</button>
         <button class="chat-chip" onclick="chatQuickSuggestion('Quels sont les risques ?')">Quels risques ?</button>
-        <button class="chat-chip" onclick="chatQuickSuggestion('Que miseriez-vous et combien ?')">Que miser ?</button>
+        <button class="chat-chip" onclick="chatQuickSuggestion('Que miseriez-vous et combien ?')">Combien miser ?</button>
         <button class="chat-chip" onclick="chatQuickSuggestion('Donne-moi les stats clés des deux équipes')">Stats des équipes</button>
       </div>
       <div class="chat-messages" id="chatMessages">
         <div class="chat-msg chat-msg-ai">
-          <div class="chat-bubble-ai">Bonjour ! Je peux vous expliquer cette analyse, discuter des risques, ou analyser n'importe quel autre match. Que souhaitez-vous savoir ?</div>
+          <div class="chat-bubble-ai">Une question sur ce match ? Je peux détailler l'analyse, les risques, ou étudier une autre affiche.</div>
         </div>
       </div>
       <div class="chat-input-row">
-        <input type="text" class="chat-input" id="chatInput" placeholder="Ex: Pourquoi ce pronostic ? ou Analyse PSG vs Lyon..." onkeydown="handleChatKey(event)" maxlength="400">
-        <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()">➤</button>
+        <input type="text" class="chat-input" id="chatInput" placeholder="Ex. : pourquoi ce prono ? ou analyse PSG – Lyon" onkeydown="handleChatKey(event)" maxlength="400">
+        <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()" aria-label="Envoyer">${icone('fleche')}</button>
       </div>
     </div>
   `;
@@ -1053,9 +1239,6 @@ function renderResults(dBrut, evData, kellyData, leg1Score) {
     const n = document.getElementById('s' + i + 'n'); 
     if(n) { n.classList.remove('active'); n.classList.add('done'); n.textContent = '✓'; }
   }
-  setTimeout(() => {
-    document.querySelectorAll('.proba-bar[data-w]').forEach(el => { el.style.width = el.dataset.w + '%'; });
-  }, 120);
   if(c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
   state.chatCtx = d;
   state.chatHistory = [];
@@ -1354,14 +1537,23 @@ window.setHistSearch = setHistSearch;
 // DASHBOARD
 // ══════════════════════════════════════════════
 function renderDashboard() {
+  dessinerAccueil();
+  if (!programme.charge) chargerProgramme().then(dessinerAccueil);
   const hist = getHist();
-  const br = parseFloat(localStorage.getItem('ps_bankroll') || '1000');
+  // Aucune bankroll inventée : sans montant saisi, on invite à le définir.
+  const br = bankrollDefinie();
   const wins = hist.filter(h => h.result === 'win').length;
   const total = hist.filter(h => h.result !== 'pending').length;
   const pnl = hist.reduce((a, h) => a + (parseFloat(h.pnl) || 0), 0);
   const wr = total > 0 ? Math.round(wins / total * 100) : 0;
 
-  const el1 = document.getElementById('dashBankroll'); if (el1) el1.textContent = br.toFixed(0) + '€';
+  const el1 = document.getElementById('dashBankroll');
+  if (el1) {
+    el1.textContent = br ? br.toFixed(0) + '€' : 'Définir';
+    el1.style.color = br ? '' : 'var(--accent)';
+    el1.style.cursor = 'pointer';
+    el1.onclick = () => switchNav('bankroll');
+  }
 
   // Sans aucun pari résolu, afficher « 0% » laisse croire que rien ne
   // fonctionne, alors qu'il n'y a simplement pas encore de données.
@@ -1428,14 +1620,14 @@ function renderDashboard() {
       rp.innerHTML = victorPicksToday.slice(0, 5).map(p => {
         const confColor = _confColor(p.confiance);
         const confArrow = _confNum(p.confiance) >= 80 ? '↑↑' : _confNum(p.confiance) >= 50 ? '↑' : '→';
-        return `<div class="dash-pick-row" onclick="switchNav('victor')" style="cursor:pointer">
+        return `<div class="dash-pick-row" onclick="switchNav('prono')" style="cursor:pointer">
           <div class="dash-pick-result" style="background:${confColor};color:#000;font-size:10px;font-weight:800;min-width:28px;text-align:center;padding:0 4px">${confArrow}</div>
           <div style="flex:1">
             <div class="dash-pick-match">${p.equipe_a || ''} vs ${p.equipe_b || ''}</div>
-            <div class="dash-pick-league">🎯 ${p.pronostic_principal || ''} · ${p.sport || ''}</div>
+            <div class="dash-pick-league">${p.pronostic_principal || ''}${p.cote_estimee ? ` · <b>${parseFloat(p.cote_estimee).toFixed(2)}</b>` : ''} · ${p.competition || p.sport || ''}</div>
           </div>
         </div>`;
-      }).join('') + `<div style="text-align:center;padding:8px 0 2px;font-size:11px;color:var(--muted);cursor:pointer" onclick="switchNav('victor')">🎙️ Voir l'analyse complète →${victorState.lastUpdated ? ` <span style="opacity:.6">· 🔄 ${victorState.lastUpdated.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>` : ''}</div>`;
+      }).join('') + `<button class="victor-actualiser" style="width:100%;justify-content:center;padding:11px;margin-top:8px;cursor:pointer" onclick="switchNav('prono')">Voir les pronos de Victor ${icone('fleche', { taille: 16 })}</button>`;
     } else if (hist.length) {
       rp.innerHTML = hist.slice(0, 5).map(h => {
         const rc = h.result === 'win' ? 'win' : h.result === 'lose' ? 'loss' : 'pending';
@@ -1450,7 +1642,7 @@ function renderDashboard() {
       // plutôt que de constater le vide.
       rp.innerHTML =
         '<div class="etat-vide">' +
-          '<div class="etat-vide-icone">📊</div>' +
+          '<div class="etat-vide-icone">' + icone('stats') + '</div>' +
           '<div class="etat-vide-titre">Les analyses arrivent chaque matin</div>' +
           '<div class="etat-vide-texte">Victor étudie les matchs du jour à 7h et ne retient que ceux où les chiffres lui donnent un avantage réel. Certains jours, il ne propose rien — c\'est voulu.</div>' +
           '<button class="dash-cta" onclick="switchNav(\'victor\')" style="margin-top:16px">Découvrir la méthode</button>' +
@@ -1464,7 +1656,7 @@ function renderDashboard() {
     if (!favs.length) {
       fl.innerHTML =
         '<div class="etat-vide">' +
-          '<div class="etat-vide-icone">⚽</div>' +
+          '<div class="etat-vide-icone">' + icone('ballon') + '</div>' +
           '<div class="etat-vide-titre">Suivez vos championnats</div>' +
           '<div class="etat-vide-texte">Choisissez les compétitions qui vous intéressent : vous serez prévenu dès qu\'une analyse à forte confiance y apparaît.</div>' +
           '<button class="dash-cta" onclick="switchNav(\'alerts\')" style="margin-top:16px">Choisir mes championnats</button>' +
@@ -1648,7 +1840,7 @@ function renderTodayMatches() {
     return true;
   });
   if (!filtered.length) {
-    content.innerHTML = '<div class="today-empty"><div style="font-size:48px">📭</div><div style="margin-top:12px;font-weight:700">Aucun match</div></div>';
+    content.innerHTML = `<div class="etat-vide"><div class="etat-vide-icone">${icone('calendrier')}</div><div class="etat-vide-titre">Aucun match</div><div class="etat-vide-texte">Rien ne correspond à ce filtre aujourd'hui.</div></div>`;
     return;
   }
   const byLeague = {};
@@ -1657,16 +1849,20 @@ function renderTodayMatches() {
     if (!byLeague[key]) byLeague[key] = [];
     byLeague[key].push(m);
   });
-  let html = `<div class="today-summary"><span>⚽ <strong>${filtered.length}</strong> matchs</span></div>`;
+  let html = `<div class="today-summary"><span><strong>${filtered.length}</strong> matchs au programme</span></div>`;
   Object.entries(byLeague).forEach(([league, matches]) => {
-    html += `<div class="today-league-block"><div class="today-league-title">${league}</div>`;
+    html += `<div class="compet-entete">${echapperHtml(league)}<span class="compte">${matches.length} match${matches.length > 1 ? 's' : ''}</span></div><div class="a-analyser">`;
     matches.forEach(m => {
-      const score = (m.score1 != null && m.score2 != null) ? m.score1 + ' - ' + m.score2 : 'vs';
       const idx = state.todayData.indexOf(m);
-      html += `<div class="today-match-row">
-        <div class="today-match-time" style="color:${m.live ? '#ff3333' : 'var(--text2)'}">${m.live ? '🔴 LIVE' : m.time || '--:--'}</div>
-        <div class="today-match-teams"><span class="today-team">${m.team1}</span><span class="today-score">${score}</span><span class="today-team today-team-away">${m.team2}</span></div>
-        <button class="today-analyze-btn" onclick="todayAnalyze(${idx})">⚡</button></div>`;
+      const aScore = m.score1 != null && m.score2 != null;
+      html += `<div class="match-ligne" onclick="todayAnalyze(${idx})">
+        <div class="match-ligne-heure ${m.live ? 'direct' : ''}">${m.live ? 'LIVE' : echapperHtml(m.time || '—')}<small>${m.live ? 'en cours' : (m.date && m.date !== "Aujourd'hui" ? echapperHtml(m.date) : 'coup d\'envoi')}</small></div>
+        <div class="match-ligne-equipes">
+          <div class="match-ligne-equipe">${ecusson(echapperHtml(m.team1), { taille: 26 })}<span>${echapperHtml(m.team1)}</span>${aScore ? `<span class="match-ligne-score">${m.score1}</span>` : ''}</div>
+          <div class="match-ligne-equipe">${ecusson(echapperHtml(m.team2), { taille: 26 })}<span>${echapperHtml(m.team2)}</span>${aScore ? `<span class="match-ligne-score">${m.score2}</span>` : ''}</div>
+        </div>
+        <button class="bouton-analyser" onclick="event.stopPropagation();todayAnalyze(${idx})">${icone('loupe', { taille: 16, epaisseur: 2.4 })}<span>Analyser</span></button>
+      </div>`;
     });
     html += '</div>';
   });
@@ -1683,16 +1879,7 @@ function filterToday(filter, btn) {
 function todayAnalyze(idx) {
   const m = state.todayData[idx];
   if (!m) return;
-  switchNav('victor');
-  const notif = document.getElementById('victorUpdateNotif');
-  if (!notif) {
-    const bar = document.createElement('div');
-    bar.id = 'victorUpdateNotif';
-    bar.className = 'victor-update-notif';
-    bar.innerHTML = `🎙️ Victor analyse <strong>${m.team1} vs ${m.team2}</strong> — consultez les pronostics ci-dessous`;
-    document.body.prepend(bar);
-    setTimeout(() => bar.remove(), 6000);
-  }
+  analyserMatch({ team1: m.team1, team2: m.team2, leagueId: m.leagueId, competition: m.leagueName, live: !!m.live, heure: m.time });
 }
 
 // ══════════════════════════════════════════════
@@ -1794,15 +1981,7 @@ function renderLiveContent() {
 function filterLive() { state.liveFilter = document.getElementById('liveSportFilter').value || 'all'; renderLiveContent(); }
 
 function prefillFromLive(t1, t2) {
-  switchNav('victor');
-  const existing = document.getElementById('victorUpdateNotif');
-  if (existing) existing.remove();
-  const bar = document.createElement('div');
-  bar.id = 'victorUpdateNotif';
-  bar.className = 'victor-update-notif';
-  bar.innerHTML = `🎙️ Victor analyse <strong>${t1} vs ${t2}</strong> — consultez les pronostics ci-dessous`;
-  document.body.prepend(bar);
-  setTimeout(() => bar.remove(), 6000);
+  analyserMatch({ team1: t1, team2: t2, live: true });
 }
 
 function saveLiveKey() { 
@@ -1997,7 +2176,7 @@ function renderPronoVictor() {
     if (victorState.loadError) {
       container.innerHTML = `<div class="card" style="text-align:center;padding:30px;color:#ff6644">
         ⚠️ Serveur inaccessible —
-        <button onclick="victorState.loadError=false;renderPronoVictor()" style="margin-left:8px;padding:4px 12px;border-radius:6px;background:var(--accent);border:none;color:#fff;cursor:pointer">↻ Réessayer</button>
+        <button onclick="victorState.loadError=false;renderPronoVictor()" style="margin-left:8px;padding:4px 12px;border-radius:6px;background:var(--accent);border:none;color:var(--sur-accent,#000);cursor:pointer">↻ Réessayer</button>
       </div>`;
     } else {
       container.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
@@ -2029,7 +2208,7 @@ function _renderPronoList() {
     const estAdmin = !!localStorage.getItem('ps_admin_key');
     container.innerHTML = `<div class="card">
       <div class="etat-vide">
-        <div class="etat-vide-icone">🎙️</div>
+        <div class="etat-vide-icone">${icone('micro')}</div>
         <div class="etat-vide-titre">Aucune analyse pour aujourd'hui</div>
         <div class="etat-vide-texte">
           Victor étudie les matchs chaque matin à 7h. Il ne publie un pronostic que
@@ -2061,7 +2240,7 @@ function _renderPronoList() {
       <strong>${allPicks.length}</strong> analyse${allPicks.length > 1 ? 's' : ''} retenue${allPicks.length > 1 ? 's' : ''} aujourd'hui
       ${updateTime ? `<span class="victor-maj">mise à jour à ${updateTime}</span>` : ''}
     </div>
-    <button class="victor-actualiser" onclick="refreshPronoVictor()">Actualiser</button>
+    <button class="victor-actualiser" onclick="refreshPronoVictor()">${icone('rafraichir', { taille: 16 })}Actualiser</button>
   </div>`;
 
   if (!filtered.length) {
@@ -2072,7 +2251,6 @@ function _renderPronoList() {
   }
 
   const groupsHtml = Object.entries(bySport).map(([sportKey, { label, picks }]) => {
-    const emoji = _getSportEmoji(label);
     // Grouper par compétition dans chaque sport
     const byComp = {};
     picks.forEach(p => {
@@ -2089,18 +2267,22 @@ function _renderPronoList() {
         // le thème clair peut ainsi adapter les teintes.
         const nConf = _confNum(p.confiance);
         const clsConf = nConf >= 80 ? 'haute' : nConf >= 50 ? 'moyenne' : 'basse';
+        const segs = clsConf === 'haute' ? 3 : clsConf === 'moyenne' ? 2 : 1;
+        const cote = parseFloat(p.cote_estimee);
         return `<div class="pick">
-          <div class="pick-tete">
-            <div class="pick-affiche">
-              <div class="pick-equipes">${p.equipe_a || ''} <span class="pick-vs">contre</span> ${p.equipe_b || ''}</div>
-              ${p.heure ? `<div class="pick-heure">${p.heure}</div>` : ''}
-            </div>
-            <div class="pick-conf ${clsConf}">${p.confiance || ''}</div>
+          <div class="pick-ligne-haut">
+            <span class="jauge ${clsConf}"><span class="jauge-segs">${[1, 2, 3].map(k => `<i class="${k <= segs ? 'on' : ''}"></i>`).join('')}</span>Confiance ${(p.confiance || '').toLowerCase()}</span>
+            ${p.heure ? `<span class="pick-heure-puce">${p.heure}</span>` : ''}
+          </div>
+          <div class="affiche">
+            <div class="affiche-equipe">${ecusson(p.equipe_a || '')}<span class="affiche-nom">${p.equipe_a || ''}</span></div>
+            <div class="affiche-centre">VS</div>
+            <div class="affiche-equipe ext">${ecusson(p.equipe_b || '')}<span class="affiche-nom">${p.equipe_b || ''}</span></div>
           </div>
 
           <div class="pick-pari">
-            <span class="pick-pari-libelle">${p.pronostic_principal || ''}</span>
-            ${p.cote_estimee ? `<span class="pick-cote">${parseFloat(p.cote_estimee).toFixed(2)}</span>` : ''}
+            <span><span class="pick-pari-type">Le pari de Victor</span><span class="pick-pari-libelle">${p.pronostic_principal || ''}</span></span>
+            ${Number.isFinite(cote) ? `<span class="cote-puce retenue"><span>${p.cote_confirmee ? 'Cote' : 'Cote est.'}</span><b>${cote.toFixed(2)}</b></span>` : ''}
           </div>
 
           <div class="pick-lignes">
@@ -2121,7 +2303,7 @@ function _renderPronoList() {
     }).join('');
 
     return `<div class="card">
-      <div class="pick-sport">${emoji} ${label} <span>${picks.length}</span></div>
+      <div class="pick-sport">${iconeSport(label)} ${label} <span>${picks.length}</span></div>
       ${compsHtml}
     </div>`;
   }).join('');
@@ -2184,6 +2366,7 @@ async function loadVictorData({ force = false } = {}) {
 
   victorState.loading = true;
   const prevTotal = victorState.today?.total || 0;
+  const dejaCharge = victorState.loaded;
   try {
     const [todayRes, statsRes, patternsRes, historyRes] = await Promise.all([
       fetch('/api/victor/today',        { signal }).then(r => r.json()),
@@ -2200,7 +2383,8 @@ async function loadVictorData({ force = false } = {}) {
     victorState.lastUpdated = new Date();
     victorLastFetch         = Date.now();
     const newTotal = todayRes?.total || 0;
-    if (prevTotal === 0 && newTotal > 0) showVictorUpdateNotif(newTotal);
+    // « Nouveaux » seulement s'ils arrivent pendant la visite, pas au premier chargement.
+    if (dejaCharge && prevTotal === 0 && newTotal > 0) showVictorUpdateNotif(newTotal);
   } catch(e) {
     if (e.name !== 'AbortError') {
       console.warn('[Victor] Données indisponibles:', e.message);
@@ -2216,9 +2400,9 @@ function showVictorUpdateNotif(count) {
   document.getElementById('victorNotif')?.remove();
   const notif = document.createElement('div');
   notif.id = 'victorNotif';
-  notif.style.cssText = 'position:fixed;top:58px;left:50%;transform:translateX(-50%);background:var(--accent);color:#000;padding:8px 18px;border-radius:20px;font-size:12px;font-weight:700;font-family:"Exo 2",sans-serif;z-index:9999;cursor:pointer;box-shadow:0 4px 20px rgba(0,170,255,.4);white-space:nowrap';
-  notif.textContent = `🎙️ ${count} nouveau${count > 1 ? 'x' : ''} pick${count > 1 ? 's' : ''} Victor disponible${count > 1 ? 's' : ''}`;
-  notif.onclick = () => { switchNav('victor'); notif.remove(); };
+  notif.style.cssText = 'position:fixed;bottom:calc(92px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:var(--volt);color:var(--sur-volt);padding:11px 20px;border-radius:30px;font-size:14px;font-weight:800;font-family:var(--ui);z-index:9999;cursor:pointer;box-shadow:0 12px 30px -10px rgba(0,0,0,.7);white-space:nowrap';
+  notif.textContent = `${count} nouveau${count > 1 ? "x" : ""} prono${count > 1 ? "s" : ""} de Victor disponible${count > 1 ? "s" : ""}`;
+  notif.onclick = () => { switchNav('prono'); notif.remove(); };
   document.body.appendChild(notif);
   setTimeout(() => notif.remove(), 8000);
 }
@@ -2267,7 +2451,7 @@ function renderVictorView() {
         <div style="font-size:32px">⚠️</div>
         <div style="margin-top:12px;font-weight:700;color:#ff6644">Impossible de charger Victor</div>
         <div style="font-size:12px;margin-top:6px">Vérifiez la connexion au serveur</div>
-        <button onclick="victorState.loadError=false;renderVictorView()" style="margin-top:12px;padding:6px 16px;border-radius:8px;background:var(--accent);border:none;color:#fff;cursor:pointer">↻ Réessayer</button>
+        <button onclick="victorState.loadError=false;renderVictorView()" style="margin-top:12px;padding:6px 16px;border-radius:8px;background:var(--accent);border:none;color:var(--sur-accent,#000);cursor:pointer">↻ Réessayer</button>
       </div></div>`;
     } else {
       el.innerHTML = `<div class="card"><div style="text-align:center;padding:40px;color:var(--muted)">
@@ -2620,6 +2804,11 @@ document.addEventListener('keydown', e => {
 // ══════════════════════════════════════════════
 window.selectSport = selectSport;
 window.switchNav = switchNav;
+window.ouvrirPlus = ouvrirPlus;
+window.fermerPlus = fermerPlus;
+window.rechargerValeurs = rechargerValeurs;
+window.analyserDepuisAccueil = analyserDepuisAccueil;
+window.ouvrirAnalyseLibre = ouvrirAnalyseLibre;
 window.switchPronoMode = switchPronoMode;
 window.filterLeagues = filterLeagues;
 window.setCat = setCat;
