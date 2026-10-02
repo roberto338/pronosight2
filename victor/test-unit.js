@@ -760,6 +760,150 @@ if (!process.env.API_FOOTBALL_KEY && !process.env.RAPIDAPI_KEY) {
 verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9, true);
 
 // ══════════════════════════════════════════════
+// SECOURS ESPN — rapprochement par le nom, sans jamais deviner
+// ══════════════════════════════════════════════
+{
+  const { ligueEspn, liguesConnues, lireClassementEspn, lireCalendrierEspn, apparierEquipe,
+          getContexteEspn, viderCacheEspn } = await import('./espn.js');
+
+  // ── Ligue d'un match ──
+  verifie('espn : clé The Odds API', ligueEspn({ sportKey: 'soccer_epl', competition: 'EPL' }), 'eng.1');
+  verifie('espn : code football-data', ligueEspn({ codeCompet: 'BSA', competition: 'Campeonato Brasileiro Série A' }), 'bra.1');
+  verifie('espn : nom TheSportsDB', ligueEspn({ competition: 'German Bundesliga' }), 'ger.1');
+  verifie('espn : nom avec accents et ponctuation', ligueEspn({ competition: 'German 2. Bundesliga' }), 'ger.2');
+  // « Premier League » seul : Angleterre, Russie, Ukraine, Égypte… on ne devine pas.
+  verifie('espn : nom ambigu refusé', ligueEspn({ competition: 'Premier League' }), null);
+  verifie('espn : ligue inconnue', ligueEspn({ competition: 'UEFA European Under-21 Championship' }), null);
+  verifie('espn : table de ligues non vide', liguesConnues().length > 20, true);
+
+  // ── Classement ──
+  const st = (rank, gp, pts, pf, pa) => [
+    { name: 'rank', value: rank }, { name: 'gamesPlayed', value: gp }, { name: 'points', value: pts },
+    { name: 'pointsFor', value: pf }, { name: 'pointsAgainst', value: pa },
+  ];
+  const equipe = (id, displayName, shortDisplayName, extra = {}) =>
+    ({ team: { id, displayName, shortDisplayName, name: displayName, location: displayName, ...extra } });
+  const classementPL = {
+    name: 'English Premier League',
+    children: [{ standings: { entries: [
+      { ...equipe('382', 'Manchester City', 'Man City'), stats: st(1, 5, 15, 13, 5) },
+      { ...equipe('360', 'Manchester United', 'Man United'), stats: st(7, 5, 8, 7, 6) },
+      { ...equipe('331', 'Brighton & Hove Albion', 'Brighton'), stats: st(4, 5, 10, 9, 5) },
+      { ...equipe('359', 'Arsenal', 'Arsenal'), stats: st(2, 5, 13, 11, 3) },
+    ] } }],
+  };
+  const lu = lireClassementEspn(classementPL);
+  verifie('espn classement : 4 équipes lues', lu.equipes.length, 4);
+  verifie('espn classement : rang et points', [lu.equipes[0].position, lu.equipes[0].points, lu.equipes[0].joues].join(), '1,15,5');
+  verifie('espn classement : buts pour / contre', [lu.equipes[0].bp, lu.equipes[0].bc].join(), '13,5');
+  verifie('espn classement : taille du tableau', lu.equipes[0].total, 4);
+  verifie('espn classement : nom de compétition', lu.equipes[0].compet, 'English Premier League');
+  verifie('espn classement : vide = erreur', lireClassementEspn({ children: [] }).erreur !== null, true);
+  verifie('espn classement : réponse absente = erreur', lireClassementEspn(null).erreur !== null, true);
+  const mls = lireClassementEspn({ children: [
+    { standings: { entries: [{ ...equipe('1', 'Inter Miami', 'Miami'), stats: st(1, 30, 60, 50, 30) }] } },
+    { standings: { entries: [{ ...equipe('2', 'LA Galaxy', 'Galaxy'), stats: st(1, 30, 58, 55, 35) }] } },
+  ] });
+  verifie('espn classement : deux conférences lues', mls.equipes.map(e => e.id).join(), '1,2');
+
+  // ── Rapprochement par le nom ──
+  const eq = lu.equipes;
+  verifie('apparier : nom identique', apparierEquipe('Manchester City', eq)?.id, '382');
+  verifie('apparier : nom court ESPN', apparierEquipe('Man United', eq)?.id, '360');
+  verifie('apparier : « and » au lieu de « & »', apparierEquipe('Brighton and Hove Albion', eq)?.id, '331');
+  verifie('apparier : nom partiel unique', apparierEquipe('Brighton', eq)?.id, '331');
+  verifie('apparier : alias d\'usage', apparierEquipe('Man Utd', eq)?.id, '360');
+  verifie('apparier : « Manchester » seul est ambigu', apparierEquipe('Manchester', eq), null);
+  verifie('apparier : équipe absente de la ligue', apparierEquipe('Vitória', eq), null);
+  verifie('apparier : nom vide', apparierEquipe('', eq), null);
+  const italie = [
+    { id: '103', noms: ['AC Milan', 'Milan'] },
+    { id: '110', noms: ['Internazionale', 'Inter'] },
+  ];
+  verifie('apparier : Inter Milan n\'est pas l\'AC Milan', apparierEquipe('Inter Milan', italie)?.id, '110');
+  verifie('apparier : AC Milan', apparierEquipe('AC Milan', italie)?.id, '103');
+
+  // ── Forme depuis le calendrier ──
+  const match = (date, idA, nomA, sA, idB, nomB, sB, fini = true) => ({
+    date, competitions: [{ date, status: { type: { completed: fini } }, competitors: [
+      { team: { id: idA, displayName: nomA }, score: sA },
+      { team: { id: idB, displayName: nomB }, score: sB },
+    ] }],
+  });
+  const calendrier = { events: [
+    match('2026-09-27T14:00Z', '359', 'Arsenal', { value: 3, displayValue: '3' }, '388', 'Coventry City', { value: 0, displayValue: '0' }),
+    match('2026-08-22T14:00Z', '359', 'Arsenal', { value: 1 }, '382', 'Manchester City', { value: 1 }),
+    match('2026-09-13T14:00Z', '360', 'Manchester United', '2', '359', 'Arsenal', '1'),
+    match('2026-10-04T14:00Z', '359', 'Arsenal', null, '331', 'Brighton', null, false),
+    match('2026-10-02T19:00Z', '359', 'Arsenal', { value: 9 }, '331', 'Brighton', { value: 0 }),
+  ] };
+  const fo = lireCalendrierEspn(calendrier, '359', '2026-10-02T05:00:00.000Z');
+  verifie('espn forme : ordre chronologique, futur exclu', fo?.forme, 'NDV');
+  verifie('espn forme : buts marqués / encaissés', [fo?.marques, fo?.encaisses].join(), '5,3');
+  verifie('espn forme : matchs comptés', fo?.matchs, 3);
+  verifie('espn forme : bilan lisible', fo?.bilan.split(' | ')[2], 'V 3-0 vs Coventry City');
+  verifie('espn forme : aucun match joué = null', lireCalendrierEspn({ events: [] }, '359'), null);
+  const six = { events: [1, 2, 3, 4, 5, 6].map(j =>
+    match(`2026-09-0${j}T12:00Z`, '9', 'X', { value: j === 1 ? 0 : 2 }, '8', 'Y', { value: 1 })) };
+  verifie('espn forme : cinq derniers seulement', lireCalendrierEspn(six, '9', '2026-10-01T00:00Z')?.forme, 'VVVVV');
+
+  // ── Bout en bout, réseau simulé ──
+  const fetchReel = globalThis.fetch;
+  const appels = [];
+  globalThis.fetch = async (url) => {
+    appels.push(String(url));
+    const corps = String(url).includes('/standings') ? classementPL
+      : String(url).includes('/teams/359/') ? calendrier
+      : { events: [] };
+    return { ok: true, status: 200, json: async () => corps };
+  };
+  try {
+    viderCacheEspn();
+    const fx = [
+      { home: 'Arsenal', away: 'Brighton', homeId: null, awayId: null, sportKey: 'soccer_epl', competition: 'EPL', source: 'odds-api' },
+      { home: 'Man City', away: 'Manchester City', homeId: null, awayId: null, sportKey: 'soccer_epl', competition: 'EPL', source: 'odds-api' },
+      { home: 'France U21', away: 'Luxembourg U21', homeId: 'tsdb:1', awayId: 'tsdb:2', competition: 'UEFA European Under-21 Championship' },
+      { home: 'Manchester United', away: 'Arsenal', homeId: 'fd:66', awayId: 'tsdb:9', sportKey: 'soccer_epl' },
+    ];
+    const dejaConnu = new Map([['fd:66', { position: 3 }]]);
+    const ctx = await getContexteEspn(fx, new Map(), dejaConnu, { maintenant: new Date('2026-10-02T05:00:00Z') });
+
+    verifie('espn bout en bout : identifiant attribué au match sans id', fx[0].homeId, 'espn:359');
+    verifie('espn bout en bout : classement rangé sous cet id', ctx.classement.get('espn:359')?.position, 2);
+    verifie('espn bout en bout : forme calculée', ctx.forme.get('espn:359')?.forme, 'NDV');
+    verifie('espn bout en bout : extérieur rapproché', ctx.classement.get(fx[0].awayId)?.position, 4);
+    // Deux noms, une seule équipe : l'un des deux est faux, on ne garde rien.
+    verifie('espn bout en bout : paire identique écartée', fx[1].homeId === null && fx[1].awayId === null, true);
+    verifie('espn bout en bout : ligue non couverte intacte', fx[2].homeId, 'tsdb:1');
+    verifie('espn bout en bout : id existant conservé', fx[3].awayId, 'tsdb:9');
+    verifie('espn bout en bout : donnée rangée sous l\'id existant', ctx.classement.get('tsdb:9')?.position, 2);
+    verifie('espn bout en bout : donnée déjà connue jamais écrasée', ctx.classement.has('fd:66'), false);
+    verifie('espn bout en bout : rapport explicite', /hors couverture/.test(ctx.rapport) && /sans correspondance/.test(ctx.rapport), true);
+    verifie('espn bout en bout : un seul classement demandé', appels.filter(u => u.includes('/standings')).length, 1);
+
+    // Le second job de la journée réutilise le cache.
+    const avant = appels.length;
+    const fx2 = [{ home: 'Arsenal', away: 'Brighton', homeId: null, awayId: null, sportKey: 'soccer_epl' }];
+    await getContexteEspn(fx2, new Map(), new Map(), { maintenant: new Date('2026-10-02T11:00:00Z') });
+    verifie('espn cache : aucune nouvelle requête', appels.length, avant);
+
+    // Une panne réseau est rapportée, jamais levée.
+    viderCacheEspn();
+    globalThis.fetch = async () => { throw new Error('réseau coupé'); };
+    const enPanne = await getContexteEspn(
+      [{ home: 'Arsenal', away: 'Brighton', homeId: null, awayId: null, sportKey: 'soccer_epl' }], new Map(), new Map());
+    verifie('espn panne : rapportée', /réseau coupé/.test(enPanne.rapport), true);
+    verifie('espn panne : aucune donnée inventée', enPanne.classement.size + enPanne.forme.size, 0);
+
+    const rien = await getContexteEspn([{ home: 'A', away: 'B', competition: 'Inconnue' }]);
+    verifie('espn : aucune ligue couverte annoncée', /aucune ligue couverte/.test(rien.rapport), true);
+  } finally {
+    globalThis.fetch = fetchReel;
+    viderCacheEspn();
+  }
+}
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

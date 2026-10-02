@@ -15,6 +15,7 @@ import {
   demarrerBudgetSources, arreterBudgetSources,
   getContexteApiFootball, couvertureContexte,
 } from './sources.js';
+import { getContexteEspn } from './espn.js';
 import { getOdds, getOddsEvents, evaluerValue, cleMarche } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
@@ -571,6 +572,21 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
     for (const [id, v] of secours.forme) if (!forme.has(id)) forme.set(id, v);
     for (const [id, v] of secours.classement) if (!classement.has(id)) classement.set(id, v);
   }
+
+  // ── Second secours : ESPN, pour ce qui reste sans données ──
+  // Le 02/10, API-Football n'a servi aucun match (plan gratuit) : 68 équipes
+  // au programme, zéro documentée, Victor muet un douzième jour. ESPN a les
+  // classements 2026-27 ; ses équipes sont rapprochées par le nom, dans la
+  // seule ligue du match et sur un candidat unique. Voir victor/espn.js.
+  let secoursEspn = null;
+  if (couvertureContexte(aVenir, forme, classement).sansDonnees > 0) {
+    await etape(42, 'secours ESPN');
+    secoursEspn = await getContexteEspn(aVenir, forme, classement).catch(err => ({
+      forme: new Map(), classement: new Map(), erreurs: [err.message], rapport: `échec : ${err.message}`,
+    }));
+    for (const [id, v] of secoursEspn.forme) if (!forme.has(id)) forme.set(id, v);
+    for (const [id, v] of secoursEspn.classement) if (!classement.has(id)) classement.set(id, v);
+  }
   // 4 et non 8 : chaque H2H coûte une requête football-data, et le
   // plafond de 10/min déclenchait une pause de ~54 s en pleine analyse.
   // Moins de temps passé dans le job = moins d'exposition à ce qui le tue.
@@ -592,7 +608,8 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   // seul composant qui fonctionnait.
   const couverture = couvertureContexte(aVenir, forme, classement);
   const etatSources = `football-data : forme ${formeFootballData} équipe(s), classement ${classementFootballData}`
-    + ` · secours API-Football : ${secours ? secours.rapport : 'non sollicité'}`;
+    + ` · secours API-Football : ${secours ? secours.rapport : 'non sollicité'}`
+    + ` · secours ESPN : ${secoursEspn ? secoursEspn.rapport : 'non sollicité'}`;
   console.log(`   📋 Couverture : ${couverture.avecDonnees}/${couverture.equipes} équipe(s) documentée(s) — ${etatSources}`);
 
   if (couverture.avecDonnees === 0) {
