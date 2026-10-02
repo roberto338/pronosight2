@@ -59,6 +59,16 @@ export function cacheLire(sport) {
   return e.evenements;
 }
 
+/** Toutes les cotes encore fraîches du cache : [{ sport, evenements }]. Aucun appel réseau. */
+export function cachesActifs() {
+  const out = [];
+  for (const sport of [..._cacheCotes.keys()]) {
+    const evenements = cacheLire(sport);
+    if (evenements) out.push({ sport, evenements });
+  }
+  return out;
+}
+
 export function cacheEcrire(sport, evenements) {
   _cacheCotes.set(sport, { evenements, expire: Date.now() + CACHE_COTES_MS });
 }

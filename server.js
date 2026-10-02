@@ -18,7 +18,8 @@ import { startScheduler }          from './cron/scheduler.js';
 import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
 import { getFixturesOfDay }         from './victor/sources.js';
-import { getOddsEvents, sportDe, cacheLire as cotesDeVictor } from './victor/odds.js';
+import { getOddsEvents, sportDe, cacheLire as cotesDeVictor, cachesActifs } from './victor/odds.js';
+import { selectionsDuJour } from './victor/combines.js';
 import { creerCacheProxyCotes }     from './victor/cache-proxy-cotes.js';
 import { bilanVictor, bilanValeursMarche, valeursRecentes } from './victor/valeur-suivi.js';
 import { broadcastDaily }           from './bot/telegram.js';
@@ -667,6 +668,26 @@ app.get('/api/victor/valeurs', generalLimiter, async (req, res) => {
   } catch (err) {
     console.error('[Victor/valeurs]', err.message);
     res.status(500).json({ error: 'Erreur récupération des values de marché' });
+  }
+});
+
+// ── Sélections combinables : values et pronos RÉELS du jour, à leur vraie cote ──
+app.get('/api/combines/selections', generalLimiter, async (req, res) => {
+  try {
+    const [{ rows: valeurs }, { rows: pronos }] = await Promise.all([
+      dbQuery(`SELECT id, match, competition, debut_utc, pari_code, libelle, cote, bookmaker, proba_juste
+               FROM ps_valeurs_marche WHERE date = CURRENT_DATE`),
+      dbQuery(`SELECT id, to_char(date, 'YYYY-MM-DD') AS date, heure, equipe_a, equipe_b, competition,
+                      pari_code, pronostic_principal, cote_estimee, cote_confirmee
+               FROM ps_pronostics WHERE date = CURRENT_DATE AND pronostic_correct IS NULL`),
+    ]);
+    res.json({
+      date: new Date().toISOString().slice(0, 10),
+      selections: selectionsDuJour({ valeurs, pronos, caches: cachesActifs() }),
+    });
+  } catch (err) {
+    console.error('[Combinés]', err.message);
+    res.status(500).json({ error: 'Sélections indisponibles' });
   }
 });
 
