@@ -17,6 +17,7 @@ import { checkResults, updateVictorStats, weeklyVictorReview } from '../victor/c
 import { discoverNewPatterns } from '../victor/patterns.js';
 import { computePatterns }    from '../victor/patterns-compute.js';
 import { sendDailyStats, sendHeartbeat, sendAlert } from '../bot/telegram.js';
+import { noterValeursMarche } from '../victor/valeur-suivi.js';
 import { runHealthcheck }    from '../victor/healthcheck.js';
 import { query }             from '../db/database.js';
 import { pruneOldJobs }      from './victorQueue.js';
@@ -121,6 +122,9 @@ async function processor(job) {
       console.log(`\n🔍 [check-results #${job.id}] Vérification résultats...`);
       await job.updateProgress(20);
       await checkResults();
+      // Les values de marché se notent à part : checkResults s'arrête dès
+      // qu'aucun pronostic de l'IA n'attend de résultat.
+      await noterValeursMarche().catch(err => console.warn(`   ⚠️  Notation des values de marché : ${err.message}`));
       await job.updateProgress(60);
       await updateVictorStats();
       await job.updateProgress(85);

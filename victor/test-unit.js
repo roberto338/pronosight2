@@ -1029,6 +1029,47 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// SUIVI DES VALUES DE MARCHÉ — notation et bilan (victor/valeur-suivi.js)
+// ══════════════════════════════════════════════
+{
+  const { lireScoresEspn, trouverScore, resumerBilan } = await import('./valeur-suivi.js');
+  const { texteBilan } = await import('../bot/telegram.js');
+
+  const evE = (idD, nomD, sd, idE, nomE, se, fini = true) => ({ competitions: [{ status: { type: { completed: fini } },
+    competitors: [
+      { homeAway: 'home', team: { id: idD, displayName: nomD, shortDisplayName: nomD }, score: sd },
+      { homeAway: 'away', team: { id: idE, displayName: nomE, shortDisplayName: nomE }, score: se },
+    ] }] });
+  const scores = lireScoresEspn({ events: [
+    evE('1', 'RC Lens', '2', '2', 'Lille OSC', '1'),
+    evE('3', 'Paris Saint-Germain', { value: 3 }, '4', 'Marseille', { value: 0 }),
+    evE('5', 'Nice', '0', '6', 'Monaco', '0', false),
+  ] });
+  verifie('scores ESPN : matchs terminés seulement', scores.length, 2);
+  verifie('scores ESPN : score objet ou chaîne', [scores[0].butsDom, scores[1].butsDom].join(','), '2,3');
+
+  const trouve = trouverScore({ equipe_a: 'Lens', equipe_b: 'Lille' }, scores);
+  verifie('notation : match retrouvé par le nom', trouve ? `${trouve.butsDom}-${trouve.butsExt}` : null, '2-1');
+  verifie('notation : domicile et extérieur non inversés', trouverScore({ equipe_a: 'Lille', equipe_b: 'Lens' }, scores), null);
+  verifie('notation : match absent', trouverScore({ equipe_a: 'Nice', equipe_b: 'Monaco' }, scores), null);
+
+  const bil = resumerBilan([
+    { gagne: true, cote: 2.20, avantage: 0.05 }, { gagne: false, cote: 1.90, avantage: 0.03 },
+    { gagne: true, cote: 1.80, avantage: 0.04 }, { gagne: null, cote: 3.0, avantage: 0.1 },
+  ]);
+  verifie('bilan : seuls les signaux notés comptent', bil.n, 3);
+  verifie('bilan : profit en unités', Number(bil.profit.toFixed(4)), 1.0);
+  verifie('bilan : rendement', Number(bil.rendement.toFixed(4)), 0.3333);
+  verifie('bilan : vide', resumerBilan([]).rendement, null);
+
+  const txt = texteBilan({ victor: [{ gagne: true, cote: 2 }, { gagne: false, cote: 1.8 }], marche: { total: bil, trenteJours: bil } });
+  verifie('texte du bilan : rendement Victor', /2 paris à cote de marché · 1 gagnés · rendement \+0\.0 %/.test(txt), true);
+  verifie('texte du bilan : values de marché', /3 signaux · 2 gagnés/.test(txt), true);
+  verifie('texte du bilan : mise en garde', /aucune garantie de gain/.test(txt) && /09 74 75 13 13/.test(txt), true);
+  verifie('texte du bilan : suivi vide annoncé', /en cours de constitution/.test(texteBilan({ victor: [] })), true);
+}
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

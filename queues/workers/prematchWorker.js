@@ -5,6 +5,7 @@
 
 import { runVictor } from '../../victor/core.js';
 import { broadcastDaily, sendAlert } from '../../bot/telegram.js';
+import { enregistrerValeursMarche } from '../../victor/valeur-suivi.js';
 
 /**
  * Processeur du job 'prematch'.
@@ -38,6 +39,11 @@ export async function prematchProcessor(job) {
     await broadcastDaily(result);
     telegramSent = true;
     console.log(`   📱 [prematch #${job.id}] Telegram envoyé (${nbPronostics} pronostic(s), ${nbValeurs} value(s) de marché)`);
+    // Enregistrées APRÈS diffusion : on ne note que ce que les abonnés ont reçu.
+    if (nbValeurs > 0) {
+      const ecrits = await enregistrerValeursMarche(result.date, result.valeurs_marche).catch(() => 0);
+      console.log(`   📈 [prematch #${job.id}] ${ecrits} value(s) de marché enregistrée(s) pour le bilan`);
+    }
   }
   if (nbPronostics === 0) {
     const raison = result?.raison || 'cause inconnue';

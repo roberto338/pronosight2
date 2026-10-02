@@ -108,6 +108,32 @@ export function getEmojiBySport(sport = '') {
 export const MENTION_PREVENTION = 'Interdit aux moins de 18 ans. Jouer comporte des risques : endettement, isolement, dépendance. '
   + 'Pour être aidé, appelez le 09 74 75 13 13 (appel non surtaxé).';
 
+/**
+ * Texte du bilan public. Pur : testable sans Telegram.
+ * Tout est en mise fixe d'une unité, sur des cotes réellement proposées.
+ */
+export function texteBilan({ victor = [], marche = null } = {}) {
+  const pct = (x) => (x == null ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)} %`);
+  const notes = victor.filter(r => r.gagne === true || r.gagne === false);
+  const profit = notes.reduce((a, r) => a + (r.gagne ? Number(r.cote) - 1 : -1), 0);
+  let t = `📒 *BILAN PRONOSIGHT* — vérifiable, mise fixe\n━━━━━━━━━━━━━━━\n`;
+  t += `🎙️ *Victor (analyse IA)*\n`;
+  t += notes.length
+    ? `${notes.length} paris à cote de marché · ${notes.filter(r => r.gagne).length} gagnés · rendement ${esc(pct(profit / notes.length))}\n`
+    : `Aucun pari noté pour l'instant.\n`;
+  t += `\n📈 *Values de marché (sans IA)*\n`;
+  if (marche?.total?.n) {
+    const b = marche.total;
+    t += `${b.n} signaux · ${b.gagnes} gagnés · cote moyenne ${esc(b.coteMoyenne.toFixed(2))} · rendement ${esc(pct(b.rendement))}\n`;
+    if (marche.trenteJours?.n) t += `30 derniers jours : ${marche.trenteJours.n} signaux · rendement ${esc(pct(marche.trenteJours.rendement))}\n`;
+  } else {
+    t += `Suivi en cours de constitution.\n`;
+  }
+  t += `\n_${esc('Un rendement sur moins de quelques centaines de paris dépend surtout de la chance. Résultats passés : aucune garantie de gain.')}_\n`;
+  t += `_${esc(MENTION_PREVENTION)}_`;
+  return t;
+}
+
 export async function broadcastDaily(victorData) {
   // Ne JAMAIS sortir en silence : une env var manquante rendait tout le
   // système muet sans la moindre trace dans les logs.
@@ -408,8 +434,51 @@ if (bot && process.env.NODE_ENV !== 'production') {
         `/today — Pronostics du jour\n` +
         `/best — Top 3 confiance Élevé\n` +
         `/stats — Performances du jour\n` +
+        `/value — Values de marché du jour\n` +
+        `/bilan — Bilan vérifiable depuis le début\n` +
         `/aide — Cette aide`
       );
+    });
+
+    // /bilan — le bilan vérifiable, tel quel, sans arrondi flatteur
+    bot.onText(/\/bilan/, async (msg) => {
+      try {
+        const { rows: victor } = await queryDB(
+          `SELECT pronostic_correct AS gagne, cote_estimee AS cote
+           FROM ps_pronostics
+           WHERE pronostic_correct IS NOT NULL AND cote_confirmee = true
+             AND pari_code NOT LIKE 'DC:%'`);
+        let marche = null;
+        try {
+          const { bilanValeursMarche } = await import('../victor/valeur-suivi.js');
+          marche = await bilanValeursMarche();
+        } catch { /* table absente : bilan Victor seul */ }
+        await send(msg.chat.id, texteBilan({ victor, marche }));
+      } catch (err) {
+        await send(msg.chat.id, `❌ Erreur: ${err.message}`);
+      }
+    });
+
+    // /value — les values de marché du jour
+    bot.onText(/\/value/, async (msg) => {
+      try {
+        const { rows } = await queryDB(
+          `SELECT match, libelle, pari_code, cote, bookmaker, proba_juste, avantage
+           FROM ps_valeurs_marche WHERE date = CURRENT_DATE ORDER BY avantage DESC LIMIT 5`);
+        if (rows.length === 0) {
+          await send(msg.chat.id, 'ℹ️ Aucune value de marché aujourd\'hui : aucun bookmaker ne paie au-dessus du prix juste.');
+          return;
+        }
+        let txt = `📈 *Values de marché du jour*\n━━━━━━━━━━━━━\n`;
+        for (const r of rows) {
+          txt += `⚽ *${esc(r.match)}*\n🎯 ${esc(r.libelle || r.pari_code)} @ ${esc(Number(r.cote).toFixed(2))} chez ${esc(r.bookmaker)}\n`;
+          txt += `📐 Prix juste ${esc((1 / Number(r.proba_juste)).toFixed(2))} · avantage +${esc((Number(r.avantage) * 100).toFixed(1))} %\n\n`;
+        }
+        txt += `_${esc(MENTION_PREVENTION)}_`;
+        await send(msg.chat.id, txt);
+      } catch (err) {
+        await send(msg.chat.id, `❌ Erreur: ${err.message}`);
+      }
     });
 
     // /stats
@@ -445,7 +514,7 @@ if (bot && process.env.NODE_ENV !== 'production') {
         let txt = `📅 *Pronostics du jour*\n━━━━━━━━━━━━━\n`;
         rows.forEach(r => {
           txt += `${getEmojiBySport(r.sport)} ${esc(r.match)}\n`;
-          txt += `🎯 ${esc(r.pronostic_principal)} — ~${esc(r.cote_estimee)} \\(${esc(r.confiance)}\\)\n\n`;
+          txt += `🎯 ${esc(r.pronostic_principal)} — ${r.cote_estimee ? `~${esc(r.cote_estimee)}` : 'cote non disponible'} (${esc(r.confiance)})\n\n`;
         });
         await send(msg.chat.id, txt);
       } catch (err) {
@@ -460,19 +529,21 @@ if (bot && process.env.NODE_ENV !== 'production') {
           `SELECT match, sport, pronostic_principal, cote_estimee,
                   value_bet, cote_value, phrase_signature
            FROM ps_pronostics
-           WHERE date = CURRENT_DATE AND confiance = 'Élevé'
+           -- Le libellé stocké est « Élevée » / « Très élevée » : l'égalité
+           -- stricte avec « Élevé » ne trouvait jamais rien.
+           WHERE date = CURRENT_DATE AND confiance ILIKE '%élev%'
            ORDER BY cote_estimee DESC
            LIMIT 3`
         );
         if (rows.length === 0) {
-          await send(msg.chat.id, 'ℹ️ Aucun pronostic confiance Élevé aujourd\'hui.');
+          await send(msg.chat.id, 'ℹ️ Aucun pronostic de confiance élevée aujourd\'hui.');
           return;
         }
-        let txt = `🔥 *Top picks du jour \\(Confiance Élevé\\)*\n━━━━━━━━━━━━━\n`;
+        let txt = `🔥 *Top picks du jour (confiance élevée)*\n━━━━━━━━━━━━━\n`;
         rows.forEach((r, i) => {
-          txt += `${i + 1}\\. ${getEmojiBySport(r.sport)} *${esc(r.match)}*\n`;
+          txt += `${i + 1}. ${getEmojiBySport(r.sport)} *${esc(r.match)}*\n`;
           txt += `🎯 ${esc(r.pronostic_principal)} — ~${esc(r.cote_estimee)}\n`;
-          if (r.value_bet) txt += `💎 Value: ${esc(r.value_bet)} \\(~${esc(r.cote_value)}\\)\n`;
+          if (r.value_bet && r.cote_value) txt += `💎 Value: ${esc(r.value_bet)} (~${esc(r.cote_value)})\n`;
           if (r.phrase_signature) txt += `💬 _${esc(r.phrase_signature)}_\n`;
           txt += '\n';
         });

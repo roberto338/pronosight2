@@ -118,6 +118,10 @@ export function detecterValeursMarche(fixtures = [], cotes = new Map(), {
         coteJuste: 1 / p,
         avantage,
         bookmakers: c.bookmakers,
+        // Pour noter le signal après le match (victor/valeur-suivi.js).
+        debutUTC: f.debutUTC || null,
+        sportKey: f.sportKey || null,
+        codeCompet: f.codeCompet || null,
       });
     }
   }
