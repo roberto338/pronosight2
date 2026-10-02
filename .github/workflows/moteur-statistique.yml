@@ -19,6 +19,7 @@
 #         sweep       → cherche de meilleurs réglages, lecture seule
 #         audit       → note les signaux déjà publiés par Victor, lecture seule
 #         clv         → Victor bat-il la cote de clôture ? lecture seule
+#         historique  → le moteur face au marché sur 6 saisons (fichiers publics, sans base)
 #         diagnostic  → pourquoi Victor ne publie plus, lecture seule
 #         sondes      → football-data répond-il ? 2 requêtes, lecture seule
 #         publiques   → quelles sources gratuites couvrent la saison en cours
@@ -44,7 +45,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, prod]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, prod]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -319,6 +320,15 @@ jobs:
           {
             echo '```'
             node prono/clv.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Le moteur face au marché, sur plusieurs saisons
+        if: steps.choix.outputs.etape == 'historique'
+        run: |
+          {
+            echo '```'
+            node prono/historique.js
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 

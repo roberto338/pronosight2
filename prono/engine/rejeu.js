@@ -132,6 +132,9 @@ export function rejouer(rencontres, params = {}) {
           ligueMesuree: ligue.mesuree,
           lambdaDom,
           lambdaExt,
+          // Données d'accompagnement transmises telles quelles (cotes d'un
+          // fichier historique, par exemple). Jamais lues par le modèle.
+          extra: m.extra,
         },
       ));
     } else {
