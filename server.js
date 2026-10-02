@@ -123,7 +123,9 @@ async function callGroq(messages, maxTokens, jsonMode) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
     body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
+      // Même modèle que le secours de Victor (victor/core.js), bien plus solide
+      // que llama-3.1-8b-instant pour un JSON d'analyse complet.
+      model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
       messages,
       max_tokens: Math.min(maxTokens || 4096, 4096),
       temperature: 0.7,
@@ -183,19 +185,13 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
       }
     }
 
-    // ── Groq en primaire (sauf useSearch — Groq ne supporte pas Google Search) ──
-    if (!useSearch) {
-      try {
-        const groqResult = await callGroq(messages, maxTokens, jsonMode);
-        if (cacheKey) analysisCache.set(cacheKey, { data: groqResult, ts: Date.now() });
-        console.log('[Groq] OK (primaire)');
-        return res.json(groqResult);
-      } catch (groqErr) {
-        console.warn('[Groq primaire]', groqErr.message, '— bascule Gemini');
-      }
-    }
-
-    // ── Gemini (primaire pour useSearch, fallback sinon) ──
+    // ── 1. Gemini (primaire) ──
+    // L'analyse du site passait d'abord par Llama 3.1 8B (Groq) : un petit
+    // modèle, aux JSON parfois mal formés et aux textes génériques. Gemini
+    // 2.5 Flash est le modèle de Victor ; sa « réflexion » est coupée ici
+    // (réponse rapide, et elle consommait le plafond de tokens au point de
+    // tronquer le JSON). Les probabilités affichées, elles, viennent toujours
+    // des cotes du marché, pas du modèle.
     const geminiMessages = [];
     for (const msg of messages) {
       if (msg.role === 'user') {
@@ -211,57 +207,47 @@ app.post('/api/gemini', geminiLimiter, async (req, res) => {
       generationConfig: {
         maxOutputTokens: Math.min(maxTokens || 4096, 8192),
         temperature: 0.7,
-        ...(jsonMode ? { responseMimeType: "application/json" } : {})
+        ...(jsonMode && !useSearch ? { responseMimeType: 'application/json' } : {}),
+        ...(/^gemini-2\.5-flash/.test(modelName) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
       }
     };
     if (useSearch) requestBody.tools = [{ googleSearch: {} }];
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
-    const data = await response.json();
-
-    const isRateLimited = response.status === 429 ||
-      !!(data.error && (data.error.message || '').match(/quota|rate/i));
-
-    // ── Si Gemini aussi limité → dernier recours Groq (sans search) ──
-    if (isRateLimited) {
-      console.warn('[Gemini] 429 — dernier recours Groq sans search');
-      try {
-        const groqResult = await callGroq(messages, maxTokens, jsonMode);
-        if (cacheKey) analysisCache.set(cacheKey, { data: groqResult, ts: Date.now() });
-        console.log('[Groq] OK (dernier recours)');
-        return res.json(groqResult);
-      } catch (groqErr) {
-        console.error('[Groq dernier recours]', groqErr.message);
-        return res.status(429).json({
-          error: { message: '⏳ Limite de débit atteinte sur Gemini et Groq. Réessaie dans 1 minute.' }
-        });
+    let motifEchec = '';
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(45_000),
+      });
+      const data = await response.json().catch(() => ({}));
+      const texte = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+      if (response.ok && !data.error && texte) {
+        const formattedResponse = { content: [{ type: 'text', text: texte }] };
+        if (cacheKey) analysisCache.set(cacheKey, { data: formattedResponse, ts: Date.now() });
+        console.log(`[Gemini] OK (${modelName})`);
+        return res.json(formattedResponse);
       }
+      motifEchec = data.error?.message || `HTTP ${response.status}${texte ? '' : ', réponse vide'}`;
+    } catch (err) {
+      motifEchec = err.name === 'TimeoutError' ? 'délai dépassé' : err.message;
     }
+    console.warn(`[Gemini] échec (${String(motifEchec).slice(0, 140)}) — bascule Groq`);
 
-    if (data.error) {
-      const msg = data.error.message || '';
-      if (msg.includes('billing') || msg.includes('payment')) {
-        return res.status(402).json({
-          error: { message: '💳 Quota API épuisé. Vérifie ton compte Google Cloud.' }
-        });
-      }
-      return res.status(response.status).json(data);
+    // ── 2. Groq (secours, autre fournisseur ; sans recherche Google) ──
+    try {
+      const groqResult = await callGroq(messages, maxTokens, jsonMode);
+      if (cacheKey) analysisCache.set(cacheKey, { data: groqResult, ts: Date.now() });
+      console.log('[Groq] OK (secours)');
+      return res.json(groqResult);
+    } catch (groqErr) {
+      console.error('[Groq secours]', groqErr.message);
+      return res.status(503).json({
+        error: { message: '⏳ Les moteurs d\'analyse sont saturés. Réessaie dans une minute.' }
+      });
     }
-
-    const formattedResponse = {
-      content: data.candidates?.[0]?.content?.parts?.map(p => ({
-        type: 'text',
-        text: p.text || ''
-      })) || []
-    };
-
-    if (cacheKey) analysisCache.set(cacheKey, { data: formattedResponse, ts: Date.now() });
-    res.json(formattedResponse);
   } catch (err) {
     console.error('[Gemini Proxy]', err.message);
     res.status(500).json({ error: { message: 'Erreur serveur proxy: ' + err.message } });
