@@ -31,6 +31,7 @@
 #         prod        → la prod Render tourne-t-elle le dernier commit de master ?
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
+#                       (« migration 015 » : applique la 015 de la même façon)
 #         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
 #
 # SECRETS REQUIS (Settings → Secrets and variables → Actions)
@@ -88,13 +89,13 @@ jobs:
       issues: write          # le suivi mensuel n'alerte que par une issue
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
 
       - run: npm install --no-audit --no-fund
 
@@ -401,14 +402,22 @@ jobs:
       # La règle de CLAUDE.md veut que migration et schéma régénéré soient
       # commités ensemble. Les enchaîner ici garantit qu'ils ne peuvent pas
       # diverger : le schéma est lu sur la base qui vient d'être migrée.
-      - name: Migration 014
+      # « migration » seul rejoue la 014 (historique) ; « migration 015 »
+      # applique la migration numérotée par l'exécuteur générique, avec les
+      # mêmes garde-fous (strictement additive, transaction, aucune perte).
+      - name: Migration
         if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NUMERO: ${{ steps.choix.outputs.jours }}
         run: |
           {
             echo '```'
-            node nexus/migrations/run_014_moteur_statistique.js --appliquer
+            if echo "$NUMERO" | grep -Eq '^[0-9]{3}$'; then
+              node nexus/migrations/run_migration.js "$NUMERO" --appliquer
+            else
+              node nexus/migrations/run_014_moteur_statistique.js --appliquer
+            fi
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
@@ -439,7 +448,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add db/schema_neon.sql
-          git commit -m "Regeneration de db/schema_neon.sql apres la migration 014
+          git commit -m "Regeneration de db/schema_neon.sql apres la migration ${{ steps.choix.outputs.jours }}
 
           Introspection de la prod par db/introspect.js, execute sur le runner
           juste apres l'application de la migration. Regle CLAUDE.md : ce

@@ -4,7 +4,8 @@ Toute modification de structure BDD (table, colonne, index, contrainte) suit
 obligatoirement ce processus, dans un seul et même changement (commit) :
 
 1. Écrire une **migration numérotée** dans `nexus/migrations/`
-   (suivant : `015_xxx.sql`, avec son runner `run_xxx.js` si besoin).
+   (suivant : `016_xxx.sql` ; l'exécuteur générique `run_migration.js NNN`
+   applique n'importe quelle migration additive avec les mêmes garde-fous).
 2. Appliquer la migration sur la base Neon de prod.
 3. **Régénérer `db/schema_neon.sql` par introspection de la prod**
    (information_schema + pg_indexes + pg_constraint), jamais à la main.
@@ -12,8 +13,15 @@ obligatoirement ce processus, dans un seul et même changement (commit) :
 
 **Ne JAMAIS éditer `db/schema_neon.sql` à la main.** Ce fichier est la source
 de vérité de l'état de la base : il reflète la prod, il ne la précède pas.
-Dernière régénération : 18/09/2026, après la migration 014
-(24 tables — 5 ps_* + 14 nexus_* + 3 pa_* + victor_jobs + usage_log).
+Dernière régénération : 02/10/2026, après la migration 015
+(26 tables — 6 ps_* + 14 nexus_* + 3 pa_* + victor_jobs + usage_log + presales).
+
+Cette régénération a révélé une nouvelle dérive : la table `presales`
+(pré-ventes Stripe : email, plan, stripe_customer_id…) existe en prod sans
+aucune migration, et aucun fichier de ce dépôt ne la référence. Elle a été
+créée à la main ou par un autre projet partageant la base. À rapatrier dans
+une migration si PronoSight doit s'en servir — jamais à supprimer sans savoir
+qui l'utilise.
 
 Cette régénération a mesuré le coût de l'avoir négligée. Le fichier ignorait :
 la table `usage_log` entière (10 colonnes), les colonnes `ps_pronostics.moteur`
@@ -26,7 +34,7 @@ L'étape 3 se fait avec **`node db/introspect.js`** (dump complet) ou
 la règle applicable — ne pas revenir à une mise à jour manuelle.
 
 Sans poste de travail, les étapes 2 et 3 s'enchaînent automatiquement via le
-workflow « Moteur statistique » : écrire `migration` dans
+workflow « Moteur statistique » : écrire `migration NNN` (ex. `migration 016`) dans
 `prono/DECLENCHEUR.txt` depuis l'éditeur web de GitHub applique la migration
 puis commite le schéma régénéré. Voir `.github/workflows/moteur-statistique.yml`.
 
