@@ -276,6 +276,25 @@ verifie('cote réelle reprise', evaluerValue(evBon, cotesMatch).cote, 1.40);
 verifie('value bet rejeté',   evaluerValue(evMauvais, cotesMatch).value < 0, true);
 verifie('sans cote -> null',  evaluerValue({ ...evBon, pronostic_principal: 'BTTS' }, cotesMatch), null);
 
+// ── Régression du 02/10 : « Pas de match nul » recevait la cote du NUL ──
+// libelleCode('DC:12') vaut « Pas de match nul » ; cleMarche y lisait « nul ».
+// Sept doubles chances publiées à 3,01–3,80 au lieu d'environ 1,35.
+verifie('« Pas de match nul » n\'est pas un nul',  cleMarche('Pas de match nul', 'Palmeiras', 'Santos'), null);
+verifie('« Pas de nul » n\'est pas un nul',        cleMarche('Pas de nul', 'Palmeiras', 'Santos'), null);
+verifie('« No draw » n\'est pas un nul',           cleMarche('No draw', 'Palmeiras', 'Santos'), null);
+verifie('« Match nul » reste un nul',              cleMarche('Match nul', 'Palmeiras', 'Santos'), '1X2:DRAW');
+const evDc12 = { pari_code: 'DC:12', pronostic_principal: 'Pas de match nul',
+                 equipe_a: 'Palmeiras', equipe_b: 'Santos', probabilite: 0.75 };
+verifie('DC:12 non coté → aucune cote (rejet en amont)', evaluerValue(evDc12, cotesMatch), null);
+// Le code fait foi même quand le libellé dit autre chose.
+const evCodeContreLibelle = { pari_code: 'OU:OVER:2.5', pronostic_principal: 'Victoire Palmeiras',
+                              equipe_a: 'Palmeiras', equipe_b: 'Santos', probabilite: 0.60 };
+verifie('le code de pari fait foi sur le libellé', evaluerValue(evCodeContreLibelle, cotesMatch)?.cote, 1.90);
+verifie('code coté : cote du bon marché', evaluerValue({ ...evBon, pari_code: '1X2:HOME' }, cotesMatch)?.cote, 1.40);
+verifie('code non coté par le marché → null', evaluerValue({ ...evBon, pari_code: '1X2:AWAY' }, cotesMatch), null);
+// Sans code (anciens formats), le libellé reste lu.
+verifie('sans code, le libellé sert encore', evaluerValue(evBon, cotesMatch)?.cote, 1.40);
+
 // ══════════════════════════════════════════════
 // 5 bis. VOCABULAIRE FERMÉ — la fin des regex sur les paris
 //
