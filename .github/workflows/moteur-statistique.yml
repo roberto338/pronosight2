@@ -21,6 +21,7 @@
 #         diagnostic  → pourquoi Victor ne publie plus, lecture seule
 #         sondes      → football-data répond-il ? 2 requêtes, lecture seule
 #         publiques   → quelles sources gratuites couvrent la saison en cours
+#         espn        → format réel des réponses ESPN (secours de Victor)
 #         prod        → la prod Render tourne-t-elle le dernier commit de master ?
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
@@ -40,7 +41,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, prod]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, espn, prod]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -219,6 +220,15 @@ jobs:
           {
             echo '```'
             node scripts/sondes-publiques.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Sonde ESPN
+        if: steps.choix.outputs.etape == 'espn'
+        run: |
+          {
+            echo '```'
+            node scripts/sonde-espn.js
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
