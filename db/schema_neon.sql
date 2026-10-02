@@ -1,4 +1,4 @@
--- 24 tables en prod
+-- 26 tables en prod
 
 CREATE TABLE IF NOT EXISTS nexus_bankroll (
   id               SERIAL,
@@ -284,6 +284,19 @@ CREATE INDEX IF NOT EXISTS idx_pa_results_ext ON public.pa_match_results USING b
 CREATE UNIQUE INDEX idx_pa_results_rencontre ON public.pa_match_results USING btree (joue_le, equipe_dom_id, equipe_ext_id);
 CREATE UNIQUE INDEX idx_pa_results_source ON public.pa_match_results USING btree (source, source_match_id) WHERE (source_match_id IS NOT NULL);
 
+CREATE TABLE IF NOT EXISTS presales (
+  id               SERIAL,
+  email            VARCHAR(255) NOT NULL,
+  name             VARCHAR(255) NOT NULL,
+  plan             VARCHAR(50),
+  created_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  paid             BOOLEAN DEFAULT false,
+  stripe_customer_id VARCHAR(255),
+  stripe_subscription_id VARCHAR(255),
+  paid_at          TIMESTAMP WITHOUT TIME ZONE
+);
+
+
 CREATE TABLE IF NOT EXISTS ps_appariements_ambigus (
   id               SERIAL,
   pronostic_id     INTEGER NOT NULL,
@@ -344,6 +357,33 @@ CREATE INDEX IF NOT EXISTS idx_ps_pronostics_date ON public.ps_pronostics USING 
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_sans_code ON public.ps_pronostics USING btree (date) WHERE (pari_code IS NULL);
 CREATE INDEX IF NOT EXISTS idx_ps_pronostics_sport ON public.ps_pronostics USING btree (sport);
 CREATE UNIQUE INDEX idx_ps_pronostics_unique_jour ON public.ps_pronostics USING btree (date, lower(regexp_replace((match)::text, '\s+'::text, ' '::text, 'g'::text)));
+
+CREATE TABLE IF NOT EXISTS ps_valeurs_marche (
+  id               SERIAL,
+  date             DATE NOT NULL,
+  match            VARCHAR(200) NOT NULL,
+  competition      VARCHAR(100),
+  equipe_a         VARCHAR(100) NOT NULL,
+  equipe_b         VARCHAR(100) NOT NULL,
+  debut_utc        TIMESTAMPTZ,
+  sport_key        VARCHAR(80),
+  code_compet      VARCHAR(10),
+  pari_code        VARCHAR(40) NOT NULL,
+  libelle          VARCHAR(200),
+  cote             NUMERIC NOT NULL,
+  bookmaker        VARCHAR(80),
+  proba_juste      NUMERIC NOT NULL,
+  avantage         NUMERIC NOT NULL,
+  nb_bookmakers    INTEGER,
+  score_reel       VARCHAR(20),
+  gagne            BOOLEAN,
+  note_le          TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_valeurs_marche_a_noter ON public.ps_valeurs_marche USING btree (date) WHERE (gagne IS NULL);
+CREATE INDEX IF NOT EXISTS idx_valeurs_marche_date ON public.ps_valeurs_marche USING btree (date DESC);
+CREATE UNIQUE INDEX uq_valeurs_marche ON public.ps_valeurs_marche USING btree (date, match, pari_code);
 
 CREATE TABLE IF NOT EXISTS ps_victor_patterns (
   id               SERIAL,
