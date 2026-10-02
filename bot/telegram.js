@@ -105,6 +105,9 @@ export function getEmojiBySport(sport = '') {
 // BROADCAST DAILY — Analyse complète du jour
 // ══════════════════════════════════════════════
 
+export const MENTION_PREVENTION = 'Interdit aux moins de 18 ans. Jouer comporte des risques : endettement, isolement, dépendance. '
+  + 'Pour être aidé, appelez le 09 74 75 13 13 (appel non surtaxé).';
+
 export async function broadcastDaily(victorData) {
   // Ne JAMAIS sortir en silence : une env var manquante rendait tout le
   // système muet sans la moindre trace dans les logs.
@@ -172,6 +175,14 @@ export async function broadcastDaily(victorData) {
         msgEvents += `🏷️ *Meilleure cote :* ${esc(ev.cote_max)} chez ${esc(ev.bookmaker_max)}\n`;
       }
 
+      // ── Prix juste et cote minimum ─────────────────────────────
+      // Probabilité du consensus des bookmakers, marge retirée (méthode de
+      // la puissance). En dessous de cette cote, le pari perd sur la durée
+      // face au marché : l'abonné sait à partir d'où il vaut la peine.
+      if (ev.cote_juste && ev.proba_juste) {
+        msgEvents += `📐 *Prix juste :* ${esc(ev.cote_juste.toFixed(2))} (${esc(Math.round(ev.proba_juste * 100))} %) — à jouer seulement au-dessus\n`;
+      }
+
       // ⚠️ Ne JAMAIS échapper les parenthèses : en Markdown v1 Telegram
       // elles ne sont pas spéciales, et « \( » s'affiche littéralement.
       // Le message du 13/08 montrait « aucun \(~0\) » aux abonnés.
@@ -191,10 +202,28 @@ export async function broadcastDaily(victorData) {
       msgEvents += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
     }
 
+    // ── Value de marché : le bon prix, sans IA ──────────────
+    // Voir victor/valeur.js. Mesuré sur six saisons : CLV +3,9 % au seuil
+    // de 2 %. C'est un prix, pas une prédiction : le texte le dit.
+    const valeurs = victorData.valeurs_marche || [];
+    if (valeurs.length > 0) {
+      msgEvents += `📈 *VALUE DE MARCHÉ*\n`;
+      msgEvents += `_${esc('Cotes au-dessus du prix juste du consensus des bookmakers. Calcul sans IA.')}_\n\n`;
+      for (const v of valeurs) {
+        msgEvents += `⚽ *${esc(v.equipe_a)} vs ${esc(v.equipe_b)}*${v.heure ? ` — ${esc(v.heure)}` : ''}\n`;
+        msgEvents += `🎯 ${esc(v.libelle)} @ *${esc(v.cote.toFixed(2))}* chez ${esc(v.bookmaker)}\n`;
+        msgEvents += `📐 Prix juste ${esc(v.coteJuste.toFixed(2))} · avantage +${esc((v.avantage * 100).toFixed(1))} %\n\n`;
+      }
+      msgEvents += `_${esc('Sur 6 saisons : ces écarts ont battu la cote de clôture (+3,9 %). Gain non garanti, cote à vérifier avant de jouer.')}_\n`;
+      msgEvents += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    }
+
     // ── Partie 2 : Combiné + verdict ─────────────
     let msgVerdict = '';
 
-    if (combine?.selections?.length > 0) {
+    // Combinés désactivés par défaut : leur cote était écrite par l'IA et
+    // aucune mesure n'en a jamais été faite. VICTOR_COMBINES=on les rétablit.
+    if (process.env.VICTOR_COMBINES === 'on' && combine?.selections?.length > 0) {
       const lignes = combine.selections.map(selectionLisible).filter(Boolean);
       if (lignes.length > 0) {
         msgVerdict += `🎲 *COMBINÉ VICTOR*\n`;
@@ -210,7 +239,10 @@ export async function broadcastDaily(victorData) {
     }
 
     msgVerdict += `━━━━━━━━━━━━━━━━━━━━━\n`;
-    msgVerdict += `_PronoSight — Victor IA | Jouer responsablement_`;
+    msgVerdict += `_PronoSight — Victor IA | Jouer responsablement_\n`;
+    // Message de prévention exigé en France pour toute communication sur les
+    // jeux d'argent (ANJ). Indispensable avant de vendre un abonnement.
+    msgVerdict += `_${esc(MENTION_PREVENTION)}_`;
 
     // ── Envoi : découpe si > 4000 chars ──────────
     const fullMsg = msgEvents + msgVerdict;
@@ -276,9 +308,8 @@ export async function sendDailyStats(stats) {
       `━━━━━━━━━━━━━━━\n` +
       `✅ Taux global : ${esc(stats.taux_global)}%\n` +
       `🎯 Confiance Élevé : ${esc(stats.taux_confiance_eleve)}%\n` +
-      `📈 Confiance Moyen : ${esc(stats.taux_confiance_moyen)}%\n` +
       `💎 Value bets : ${esc(stats.taux_value_bet)}%\n` +
-      `💰 ROI simulé : ${esc(stats.roi_mise_fixe)}€ \\(mise fixe 10€\\)\n` +
+      `💰 ROI simulé : ${esc(stats.roi_mise_fixe)}€ (mise fixe 10€, cotes de marché uniquement)\n` +
       `📋 Total : ${esc(stats.total_pronostics)} pronostics\n` +
       `━━━━━━━━━━━━━━━\n` +
       `_Mise à jour automatique — PronoSight_`;

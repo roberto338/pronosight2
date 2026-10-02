@@ -30,12 +30,16 @@ export async function prematchProcessor(job) {
   // ── Broadcast Telegram ─────────────────────
   // Zéro pronostic n'est PAS un cas normal à passer sous silence :
   // c'est ainsi que 3 semaines de panne sont passées inaperçues.
+  // La value de marché se diffuse même un matin sans pronostic de l'IA :
+  // elle ne dépend ni des données de forme ni du modèle.
+  const nbValeurs = result?.valeurs_marche?.length || 0;
   let telegramSent = false;
-  if (nbPronostics > 0) {
+  if (nbPronostics > 0 || nbValeurs > 0) {
     await broadcastDaily(result);
     telegramSent = true;
-    console.log(`   📱 [prematch #${job.id}] Telegram envoyé`);
-  } else {
+    console.log(`   📱 [prematch #${job.id}] Telegram envoyé (${nbPronostics} pronostic(s), ${nbValeurs} value(s) de marché)`);
+  }
+  if (nbPronostics === 0) {
     const raison = result?.raison || 'cause inconnue';
     console.warn(`   ⚠️  [prematch #${job.id}] Aucun pronostic généré — ${raison}`);
     await sendAlert(`Victor n'a généré aucun pronostic ce matin (${raison}).`, 'danger')
@@ -55,6 +59,7 @@ export async function prematchProcessor(job) {
     // Lue par le contrôle de santé : une source qui se dégrade se voit ici
     // AVANT de couper Victor (le 21/09, rien ne l'annonçait).
     couverture:    result?.couverture ?? null,
+    nbValeursMarche: nbValeurs,
     generatedAt:   new Date().toISOString(),
   };
 }

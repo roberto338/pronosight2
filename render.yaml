@@ -6,7 +6,7 @@ services:
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "22"   # Node 20 n'est plus maintenu depuis avril 2026
 
       # ── IA ──────────────────────────────────────
       - key: GEMINI_API_KEY

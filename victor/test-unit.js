@@ -973,6 +973,62 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// VALUE DE MARCHÉ — le bon prix, sans IA (victor/valeur.js)
+// ══════════════════════════════════════════════
+{
+  const { probasPuissance, probasJustesMatch, prixJuste, detecterValeursMarche, MIN_BOOKMAKERS } = await import('./valeur.js');
+  const { confianceDepuisProba, EXIGER_COTE_MARCHE } = await import('./core.js');
+  const { MENTION_PREVENTION } = await import('../bot/telegram.js');
+
+  // Méthode de la puissance : somme à 1, plus de poids au favori qu'au prorata.
+  const pp = probasPuissance([1.50, 4.00, 7.00]);
+  const proche = (a, b, t = 1e-9) => Math.abs(a - b) <= t;
+  verifie('puissance : somme à 1', proche(pp[0] + pp[1] + pp[2], 1), true);
+  const somme = 1 / 1.5 + 1 / 4 + 1 / 7;
+  verifie('puissance : outsider moins probable qu\'au prorata', pp[2] < (1 / 7) / somme, true);
+  verifie('puissance : favori plus probable qu\'au prorata', pp[0] > (1 / 1.5) / somme, true);
+  verifie('puissance : cote invalide refusée', probasPuissance([1.0, 2.0]), null);
+  verifie('puissance : marché sans marge inchangé', proche(probasPuissance([2, 2])[0], 0.5), true);
+
+  const marches = { '1X2:HOME': 2.00, '1X2:DRAW': 3.50, '1X2:AWAY': 4.00, 'OU:OVER:2.5': 1.90, 'OU:UNDER:2.5': 2.00 };
+  const pj = probasJustesMatch(marches);
+  verifie('justes : 1X2 complet', proche(pj['1X2:HOME'] + pj['1X2:DRAW'] + pj['1X2:AWAY'], 1), true);
+  verifie('justes : over/under complet', proche(pj['OU:OVER:2.5'] + pj['OU:UNDER:2.5'], 1), true);
+  verifie('justes : marché incomplet ignoré', probasJustesMatch({ '1X2:HOME': 2, '1X2:DRAW': 3.5 })['1X2:HOME'], undefined);
+
+  const cotesMatchV = { marches, bookmakers: 9, meilleures: {
+    '1X2:HOME': { cote: 2.30, bookmaker: 'Betclic' }, '1X2:DRAW': { cote: 3.55, bookmaker: 'Unibet' },
+    '1X2:AWAY': { cote: 4.05, bookmaker: 'Unibet' }, 'OU:OVER:2.5': { cote: 1.92, bookmaker: 'Winamax' },
+    'OU:UNDER:2.5': { cote: 2.02, bookmaker: 'Winamax' } } };
+  const prix = prixJuste(cotesMatchV, '1X2:HOME');
+  verifie('prix juste : cote = 1 / probabilité', proche(prix.coteJuste * prix.probaJuste, 1), true);
+  verifie('prix juste : trop peu de bookmakers, pas de consensus', prixJuste({ ...cotesMatchV, bookmakers: MIN_BOOKMAKERS - 1 }, '1X2:HOME'), null);
+
+  const fxV = [{ fixtureId: 'e1', home: 'Lens', away: 'Lille', heure: '21:00', competition: 'Ligue 1' },
+               { fixtureId: 'e2', home: 'A', away: 'B' }];
+  const sig = detecterValeursMarche(fxV, new Map([['e1', cotesMatchV]]), { seuil: 0.02 });
+  verifie('value de marché : un signal sur le match coté', sig.length, 1);
+  verifie('value de marché : la ligne la plus avantageuse', sig[0]?.pari_code, '1X2:HOME');
+  verifie('value de marché : bookmaker indiqué', sig[0]?.bookmaker, 'Betclic');
+  verifie('value de marché : libellé lisible', sig[0]?.libelle, 'Victoire Lens');
+  verifie('value de marché : avantage = cote × proba juste − 1', proche(sig[0].avantage, 2.30 * sig[0].probaJuste - 1), true);
+  verifie('value de marché : au prix juste, rien', detecterValeursMarche(fxV, new Map([['e1', { ...cotesMatchV,
+    meilleures: { '1X2:HOME': { cote: 1.95, bookmaker: 'X' } } }]])).length, 0);
+  verifie('value de marché : cote extrême ignorée', detecterValeursMarche(fxV, new Map([['e1', { ...cotesMatchV,
+    meilleures: { '1X2:AWAY': { cote: 15, bookmaker: 'X' } } }]])).length, 0);
+  verifie('value de marché : pas de consensus sous 5 bookmakers', detecterValeursMarche(fxV,
+    new Map([['e1', { ...cotesMatchV, bookmakers: 3 }]])).length, 0);
+
+  // La confiance découle de la probabilité, jamais de l'IA.
+  verifie('confiance : 0,80 → Très élevée', confianceDepuisProba(0.80)?.confiance_score, 5);
+  verifie('confiance : 0,70 → Élevée', confianceDepuisProba(0.70)?.confiance, 'Élevée');
+  verifie('confiance : sous le seuil, aucune', confianceDepuisProba(0.60), null);
+  verifie('confiance : probabilité absente', confianceDepuisProba(undefined), null);
+  verifie('cote de marché exigée par défaut', EXIGER_COTE_MARCHE, true);
+  verifie('mention de prévention présente', /09 74 75 13 13/.test(MENTION_PREVENTION) && /18 ans/.test(MENTION_PREVENTION), true);
+}
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

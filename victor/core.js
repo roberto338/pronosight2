@@ -16,6 +16,7 @@ import {
   getContexteApiFootball, couvertureContexte,
 } from './sources.js';
 import { getContexteEspn } from './espn.js';
+import { detecterValeursMarche, prixJuste } from './valeur.js';
 import { getOdds, getOddsEvents, evaluerValue, cleMarche } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
@@ -599,6 +600,13 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
 
   arreterBudgetSources();
 
+  // ── Value de marché : le bon prix, sans IA ──
+  // Calculée AVANT tout appel à l'IA, et indépendante des données de forme :
+  // un matin sans forme ni classement peut quand même offrir des cotes au-
+  // dessus du prix juste du consensus. Voir victor/valeur.js.
+  const valeursMarche = detecterValeursMarche(aVenir, cotes);
+  console.log(`   📈 Value de marché : ${valeursMarche.length} cote(s) au-dessus du prix juste du consensus`);
+
   // ── Couverture du contexte : la vraie raison d'un matin vide ──
   // Sans aucune donnée, prompt.js:30 interdit tout pari : l'IA renverra une
   // liste vide, quel que soit le modèle. On s'arrête AVANT de l'appeler, et
@@ -618,6 +626,7 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
       date: dateISO,
       generated_at: new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }),
       events: [],
+      valeurs_marche: valeursMarche,
       couverture,
       raison: `sources de données vides : aucune forme ni aucun classement pour les ${couverture.equipes} équipe(s) du jour`
         + ` (${etatSources}). L'IA n'a pas été appelée`,
@@ -766,6 +775,9 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     const motifs = validerEvent(ev, clesReelles);
     if (motifs.length > 0) { rejets.push({ match: ev?.match || '(sans nom)', motifs }); continue; }
 
+    const conf = confianceDepuisProba(ev.probabilite);
+    if (conf) Object.assign(ev, conf);
+
     // ── Value calculée, pas déclarée ──────────────────────────
     // Le modèle fournit une probabilité ; la cote vient du marché.
     // value = p × cote − 1. Une value négative signifie que le pari
@@ -819,6 +831,16 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // On rejette ici plutôt que de publier un pari non arbitré. Les matchs
     // SANS aucune cote gardent le droit de passer : c'est le sens de
     // cote_confirmee=false et de la mention affichée à l'abonné.
+    // ── Plus de cote inventée ──────────────────────────────────────
+    // Un match sans aucune cote de marché était publié avec une cote écrite
+    // par l'IA. Audit du 02/10 : ces pronostics « passaient » à 80 % contre
+    // 56 % pour les cotes réelles — l'IA choisissait des paris faciles et
+    // leur donnait le prix qu'elle voulait. Invérifiable, donc invendable.
+    if (!cotesDuMatch && EXIGER_COTE_MARCHE) {
+      rejets.push({ match: ev.match, motifs: ['aucune cote de marché pour ce match : prix invérifiable'] });
+      continue;
+    }
+
     if (cotesDuMatch && !vb) {
       rejets.push({
         match: ev.match,
@@ -855,6 +877,17 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
         ev.value_bet  = 'aucun';
         ev.cote_value = null;
       }
+    }
+
+    // ── Prix juste du marché, et cote minimum à jouer ──
+    // La probabilité de l'IA n'est pas calibrée face au marché (CLV −4,7 %).
+    // Celle du consensus, marge retirée par la méthode de la puissance, est
+    // la meilleure estimation mesurée. En dessous de cette cote, le pari
+    // est perdant sur la durée : c'est le seuil donné à l'abonné.
+    const pj = cotesDuMatch ? prixJuste(cotesDuMatch, ev.pari_code) : null;
+    if (pj) {
+      ev.proba_juste = Number(pj.probaJuste.toFixed(4));
+      ev.cote_juste  = Number(pj.coteJuste.toFixed(2));
     }
 
     if (vb) {
@@ -987,6 +1020,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     ...victorData,
     events,
     nouveaux,   // réellement écrits : c'est ce que le job du soir diffuse
+    valeurs_marche: valeursMarche,
     moteur,
     rejets,
     raison: events.length === 0
@@ -1291,6 +1325,21 @@ export function normaliserPari(ev) {
  * @param {Set<string>} clesReelles  clés "domicile|exterieur" des matchs des sources
  */
 export const PROBA_MIN = Number(process.env.VICTOR_PROBA_MIN || 0.65);
+export const EXIGER_COTE_MARCHE = process.env.VICTOR_EXIGER_COTE !== 'false';
+
+/**
+ * Le libellé de confiance découle de la probabilité, jamais de l'IA.
+ * Le modèle écrivait les deux champs séparément : « Très élevée » pouvait
+ * côtoyer une probabilité de 0,66. L'échelle publiée doit être celle que
+ * l'audit mesure (victor/prompt.js : 5 ≥ 0,75 ; 4 de 0,65 à 0,75).
+ */
+export function confianceDepuisProba(p) {
+  const x = Number(p);
+  if (!Number.isFinite(x)) return null;
+  if (x >= 0.75) return { confiance: 'Très élevée', confiance_score: 5 };
+  if (x >= PROBA_MIN) return { confiance: 'Élevée', confiance_score: 4 };
+  return null;
+}
 
 export function validerEvent(ev, clesReelles = null) {
   const motifs = [];

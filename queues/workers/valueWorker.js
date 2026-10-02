@@ -39,7 +39,8 @@ export async function valueProcessor(job) {
   // Le 14/08, Sporting CP a été ajouté à 13h20 sans que personne le sache.
   let telegramSent = false;
   if (nouveaux.length > 0) {
-    await broadcastDaily({ ...result, events: nouveaux, complement: true });
+    // Les values de marché ont été diffusées le matin : ne pas les répéter.
+    await broadcastDaily({ ...result, events: nouveaux, valeurs_marche: [], complement: true });
     telegramSent = true;
     console.log(`   📱 [value #${job.id}] ${nouveaux.length} ajout(s) diffusé(s)`);
   }
