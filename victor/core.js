@@ -13,11 +13,11 @@ import {
   getFixturesOfDay, getResultsOfDay, buildFormIndex, getStandings, getH2H,
   getScorers, formatFixturesForPrompt, fetchWithTimeout,
   demarrerBudgetSources, arreterBudgetSources,
-  getContexteApiFootball, couvertureContexte,
+  getContexteApiFootball, couvertureContexte, aDesDonnees,
 } from './sources.js';
 import { getContexteEspn } from './espn.js';
 import { detecterValeursMarche, prixJuste } from './valeur.js';
-import { getOdds, getOddsEvents, evaluerValue, cleMarche } from './odds.js';
+import { getOdds, getOddsEvents, evaluerValue, cleMarche, sportDe } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
 const GEMINI_API_KEY    = process.env.GEMINI_API_KEY;
@@ -506,8 +506,16 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   //   3. le fournisseur ne le déclare pas déjà terminé
   const maintenant = Date.now();
   const rejets_horaires = [];
+  let horsCotes = 0;
   const aVenir = fixtures.filter(f => {
     if (f.status === 'FT' || f.status === 'LIVE') return false;
+
+    // ── Un match qu'aucun bookmaker ne cote ne sera jamais publié ──
+    // (EXIGER_COTE_MARCHE). Depuis le retour d'API-Football (02/10), le
+    // calendrier compte 1 300 matchs par jour, Oberliga et 4e division
+    // tchèque comprises : les garder noyait l'IA, et le secours API-Football
+    // dépensait ses 8 ligues sur les plus fournies… donc les moins cotées.
+    if (EXIGER_COTE_MARCHE && !sportDe(f)) { horsCotes++; return false; }
 
     // Sans horodatage exploitable, on ne peut RIEN affirmer. On écarte :
     // publier un pari sur un match dont on ignore l'heure est précisément
@@ -532,13 +540,17 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
     if (rejets_horaires.length > 8) console.log(`      · … et ${rejets_horaires.length - 8} autre(s)`);
   }
 
+  if (horsCotes > 0) console.log(`   🎯 ${horsCotes} match(s) écarté(s) : aucun bookmaker ne les cote (publication impossible)`);
+
   if (aVenir.length === 0) {
     console.warn(`⚠️  Aucun match à venir trouvé pour le ${dateISO} — analyse annulée`);
     return {
       date: dateISO,
       generated_at: new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }),
       events: [],
-      raison: 'aucun match disponible ce jour',
+      raison: horsCotes > 0
+        ? `aucun match coté par les bookmakers ce jour (${horsCotes} match(s) sans cotes écarté(s))`
+        : 'aucun match disponible ce jour',
     };
   }
 
@@ -607,6 +619,25 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   const valeursMarche = detecterValeursMarche(aVenir, cotes);
   console.log(`   📈 Value de marché : ${valeursMarche.length} cote(s) au-dessus du prix juste du consensus`);
 
+  // ── Ce que l'IA analyse : des matchs cotés, documentés d'abord, plafonnés ──
+  // Sans plafond, le prompt aurait porté sur des centaines de matchs : réponse
+  // tronquée ou vide. Un match sans cote sera rejeté de toute façon.
+  const aAnalyser = (EXIGER_COTE_MARCHE ? aVenir.filter(f => f.fixtureId != null && cotes.has(f.fixtureId)) : aVenir)
+    .map(f => ({ f, doc: aDesDonnees(f.homeId, forme, classement) + aDesDonnees(f.awayId, forme, classement) }))
+    .sort((a, b) => b.doc - a.doc)
+    .slice(0, MAX_MATCHS_IA)
+    .map(x => x.f);
+  console.log(`   🎯 À analyser : ${aAnalyser.length} match(s) coté(s)${aVenir.length > aAnalyser.length ? ` sur ${aVenir.length}` : ''}`);
+  if (aAnalyser.length === 0) {
+    return {
+      date: dateISO,
+      generated_at: new Date().toLocaleTimeString('fr-FR', { timeZone: 'Europe/Paris', hour: '2-digit', minute: '2-digit' }),
+      events: [],
+      valeurs_marche: valeursMarche,
+      raison: `aucune cote de marché obtenue pour les ${aVenir.length} match(s) coté(s) au calendrier (quota The Odds API ?)`,
+    };
+  }
+
   // ── Couverture du contexte : la vraie raison d'un matin vide ──
   // Sans aucune donnée, prompt.js:30 interdit tout pari : l'IA renverra une
   // liste vide, quel que soit le modèle. On s'arrête AVANT de l'appeler, et
@@ -614,7 +645,7 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   // prematchWorker — désigne les sources, pas le modèle. Pendant onze jours,
   // l'alerte a dit « aucun pronostic produit par l'IA » : elle accusait le
   // seul composant qui fonctionnait.
-  const couverture = couvertureContexte(aVenir, forme, classement);
+  const couverture = couvertureContexte(aAnalyser, forme, classement);
   const etatSources = `football-data : forme ${formeFootballData} équipe(s), classement ${classementFootballData}`
     + ` · secours API-Football : ${secours ? secours.rapport : 'non sollicité'}`
     + ` · secours ESPN : ${secoursEspn ? secoursEspn.rapport : 'non sollicité'}`;
@@ -633,7 +664,7 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
     };
   }
   await etape(62, 'mise en forme du contexte');
-  const matchsReels = formatFixturesForPrompt(aVenir, { forme, classement, h2h, buteurs, cotes });
+  const matchsReels = formatFixturesForPrompt(aAnalyser, { forme, classement, h2h, buteurs, cotes });
 
   // ── Patterns, filtrés sur les matchs du jour ─────────────────
   // Chargés APRÈS les matchs : injecter les patterns de la Bundesliga
@@ -642,8 +673,8 @@ export async function runVictor({ onEtape, majExistants = true } = {}) {
   await etape(68, 'patterns');
   let patternsTexte = 'Aucun pattern historique significatif pour les matchs du jour.';
   try {
-    const competitions = [...new Set(aVenir.map(f => `Match de ${f.competition}`))];
-    const equipes      = [...new Set(aVenir.flatMap(f => [f.home, f.away]).filter(Boolean))];
+    const competitions = [...new Set(aAnalyser.map(f => `Match de ${f.competition}`))];
+    const equipes      = [...new Set(aAnalyser.flatMap(f => [f.home, f.away]).filter(Boolean))];
 
     const { rows: patternsActifs } = await query(
       `SELECT nom, type, sport, equipe_a, equipe_b,
@@ -691,7 +722,7 @@ ${matchsReels}
 - N'analyse QUE des matchs de la liste ci-dessus. N'en invente AUCUN autre.
 - Reprends les noms d'équipes EXACTEMENT tels qu'écrits ci-dessus.
 - Si la forme d'une équipe n'est pas fournie, ne l'invente pas : n'inclus pas ce match.
-- Sélectionne AU MAXIMUM ${Math.min(aVenir.length, 4)} matchs — les plus solides uniquement.
+- Sélectionne AU MAXIMUM ${Math.min(aAnalyser.length, 4)} matchs — les plus solides uniquement.
   Moins de paris de meilleure qualité vaut mieux qu'une liste complète.
 
 Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON :
@@ -735,8 +766,8 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
 }`;
 
   // ── Appel Claude ─────────────────────────────
-  console.log(`🤖 Analyse IA de ${aVenir.length} match(s) réel(s)...`);
-  await etape(75, `appel IA (${aVenir.length} matchs)`);
+  console.log(`🤖 Analyse IA de ${aAnalyser.length} match(s) réel(s)...`);
+  await etape(75, `appel IA (${aAnalyser.length} matchs)`);
   let claudeResp;
   try {
     claudeResp = await callAI(VICTOR_PROMPT, userMessage, 8000);
@@ -763,7 +794,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   // faire bouger. On le rejette ici plutôt que de le découvrir dans un
   // audit six mois plus tard.
   const moteur      = claudeResp?.source || 'inconnu';
-  const clesReelles = new Set(aVenir.map(f => `${normalizeTeam(f.home)}|${normalizeTeam(f.away)}`));
+  const clesReelles = new Set(aAnalyser.map(f => `${normalizeTeam(f.home)}|${normalizeTeam(f.away)}`));
   const bruts       = victorData.events || [];
   const events      = [];
   const rejets      = [];
@@ -788,9 +819,9 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // étaient collées sur le pronostic. Une seule équipe ne sert plus que
     // de repli, et seulement si elle désigne un match unique.
     const na = normalizeTeam(ev.equipe_a || ''), nb = normalizeTeam(ev.equipe_b || '');
-    const exacts = aVenir.filter(f => normalizeTeam(f.home) === na && normalizeTeam(f.away) === nb);
-    const inverses = aVenir.filter(f => normalizeTeam(f.home) === nb && normalizeTeam(f.away) === na);
-    const partiels = aVenir.filter(f => normalizeTeam(f.home) === na || normalizeTeam(f.away) === nb);
+    const exacts = aAnalyser.filter(f => normalizeTeam(f.home) === na && normalizeTeam(f.away) === nb);
+    const inverses = aAnalyser.filter(f => normalizeTeam(f.home) === nb && normalizeTeam(f.away) === na);
+    const partiels = aAnalyser.filter(f => normalizeTeam(f.home) === na || normalizeTeam(f.away) === nb);
     const fx = exacts.length === 1 ? exacts[0]
              : inverses.length === 1 ? inverses[0]
              : partiels.length === 1 ? partiels[0]
@@ -1325,6 +1356,8 @@ export function normaliserPari(ev) {
  * @param {Set<string>} clesReelles  clés "domicile|exterieur" des matchs des sources
  */
 export const PROBA_MIN = Number(process.env.VICTOR_PROBA_MIN || 0.65);
+/** Matchs envoyés à l'IA au plus : au-delà, la réponse est tronquée ou vide. */
+export const MAX_MATCHS_IA = Number(process.env.VICTOR_MAX_MATCHS || 40);
 export const EXIGER_COTE_MARCHE = process.env.VICTOR_EXIGER_COTE !== 'false';
 
 /**

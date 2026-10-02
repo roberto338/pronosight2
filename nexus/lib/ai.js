@@ -65,7 +65,7 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY non configurée');
 
-  const model = options.model || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const model = options.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   // Retry 3x sur le même modèle — les 503 sont temporaires
   const FALLBACK_MODELS = [model, model, model];
 
@@ -117,7 +117,7 @@ export async function callGemini(systemPrompt, userMessage, options = {}) {
       if (data.error) throw new Error(`Gemini error [${model}]: ${data.error.message}`);
 
       const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
-      if (model !== (options.model || process.env.GEMINI_MODEL || 'gemini-2.0-flash')) {
+      if (model !== (options.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash')) {
         console.log(`[Nexus/AI] Réponse obtenue via fallback: ${model}`);
       }
       return text;

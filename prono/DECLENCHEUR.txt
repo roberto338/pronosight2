@@ -16,6 +16,7 @@ rien
 #   publiques      quelles sources gratuites couvrent la saison en cours
 #   site           le site n'affiche-t-il que du réel ? compétitions, cotes, routes (lecture seule)
 #   prod           la prod Render exécute-t-elle le dernier commit de master ?
+#   essai-victor   Victor aura-t-il des données demain ? (sans IA, sans écriture)
 #
 # Le 1er de chaque mois, le workflow collecte et remesure tout seul, et
 # n'ouvre une issue que si le gain devient significatif. Ce cron ne

@@ -84,7 +84,7 @@ GROQ_API_KEY=           # Fallback Groq si Gemini quota
 FOOTBALL_DATA_KEY=      # football-data.org (calendriers)
 RAPIDAPI_KEY=           # API-Football (stats, blessures)
 ODDS_API_KEY=           # The Odds API (cotes bookmakers)
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 ## Cron Jobs (heure de Paris)
@@ -166,7 +166,7 @@ VICTOR_API_KEY
 FOOTBALL_DATA_KEY
 RAPIDAPI_KEY
 ODDS_API_KEY
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-2.5-flash
 NODE_ENV=production
 ```
 

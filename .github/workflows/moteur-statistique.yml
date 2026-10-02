@@ -26,6 +26,7 @@
 #         espn        → format réel des réponses ESPN (secours de Victor)
 #         essai-espn  → le secours ESPN sur les vrais matchs des 3 prochains jours
 #         site        → compétitions réelles, cotes disponibles, routes du site en prod
+#         essai-victor → Victor aura-t-il des données demain ? (sans IA, sans écriture)
 #         sonde-clv   → données disponibles pour mesurer le CLV de Victor
 #         corriger-dc → aperçu des 7 doubles chances à la cote du nul ;
 #                       « corriger-dc appliquer » pour les corriger
@@ -49,7 +50,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod, site]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod, site, essai-victor]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -273,6 +274,20 @@ jobs:
           {
             echo '```'
             node scripts/sonde-site.js ${{ steps.choix.outputs.jours == '90' && '2' || steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # Lecture seule : rejoue la collecte de Victor, sans IA ni écriture.
+      - name: Essai à blanc de Victor
+        if: steps.choix.outputs.etape == 'essai-victor'
+        env:
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          {
+            echo '```'
+            node scripts/essai-victor.js ${{ steps.choix.outputs.jours == '90' && '1' || steps.choix.outputs.jours }}
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
