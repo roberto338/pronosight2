@@ -23,7 +23,7 @@
 
 import { rejouer } from './engine/rejeu.js';
 import { resumer } from './engine/backtest.js';
-import { comparerLogLoss, apportAuMarche, parisDuModele, parisValeurMarche, bilanParis } from './engine/marche.js';
+import { comparerLogLoss, apportAuMarche, parisDuModele, parisValeurMarche, bilanParis, clotureJuste } from './engine/marche.js';
 import { mulberry32 } from './engine/montecarlo.js';
 import { chargerHistorique } from './data/football-data-uk.js';
 import { MODEL_VERSION } from './engine/index.js';
@@ -122,6 +122,27 @@ for (const saison of saisons) {
   const b = bilanParis(dans, { rnd });
   console.log(`  ${saison}   ${String(b.n).padStart(6)} paris · rendement ${pct(b.roi)} · CLV ${pct(b.clv)}`);
 }
+
+// Même stratégie, marge retirée par la méthode de la puissance, pour le prix
+// juste du consensus ET pour celui de clôture. Si le CLV et le rendement
+// réel se rejoignent, c'est que la méthode proportionnelle les faussait.
+console.log('\n  — avec la méthode de la puissance (corrige le biais favori-outsider) —');
+for (const seuilEdge of [0, 0.02, 0.04]) {
+  const b = bilanParis(parisValeurMarche(rencontres, { seuilEdge, methode: 'puissance' }), { rnd });
+  console.log(`  > ${String(seuilEdge * 100).padStart(2)} %  ${String(b.n).padStart(6)}   ${pct(b.roi)} ${ic(b.icRoi).padEnd(22)}   ${pct(b.clv)} ${ic(b.icClv)}`);
+}
+// Calibration des deux méthodes sur les clôtures : laquelle donne la
+// probabilité la plus juste du résultat réel ?
+let llProp = 0, llPuis = 0, nLl = 0;
+for (const m of rencontres) {
+  const l = m.extra?.ligne; if (!l) continue;
+  const a = clotureJuste(l).x12, b = clotureJuste(l, 'puissance').x12;
+  if (!a || !b) continue;
+  const bd = Number(m.buts_dom), be = Number(m.buts_ext);
+  const iss = bd > be ? '1' : bd < be ? '2' : 'X';
+  llProp -= Math.log(a[iss]); llPuis -= Math.log(b[iss]); nLl++;
+}
+console.log(`  log-loss des clôtures : proportionnelle ${(llProp / nLl).toFixed(5)} · puissance ${(llPuis / nLl).toFixed(5)} (${nLl} matchs)`);
 console.log(`::MARCHE_N::${bilansMarche[0.02].n}`);
 console.log(`::MARCHE_CLV::${bilansMarche[0.02].clv == null ? '' : (bilansMarche[0.02].clv * 100).toFixed(2)}`);
 console.log(`::MARCHE_VERDICT::${bilansMarche[0.02].verdict}`);

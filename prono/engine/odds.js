@@ -57,6 +57,35 @@ export function devigoriser(cotes = {}) {
   return { probaMarche, overround };
 }
 
+/**
+ * Retire la marge par la MÉTHODE DE LA PUISSANCE : p_i = (1/cote_i)^k, avec
+ * k tel que la somme fasse 1.
+ *
+ * La méthode proportionnelle répartit la marge au prorata : elle laisse aux
+ * outsiders une probabilité trop haute (biais favori-outsider). Mesuré le
+ * 02/10 sur six saisons : « meilleure cote contre consensus » affichait un
+ * CLV de +1,5 % mais un rendement réel de −6,9 % — les deux prix « justes »
+ * étaient faussés dans le même sens. La puissance charge davantage la marge
+ * sur les cotes longues, ce que montrent les données de paris.
+ *
+ * @param {number[]} cotes  cotes d'UN marché complet (2 ou 3 issues)
+ * @returns {number[]|null} probabilités dans le même ordre, ou null
+ */
+export function probasPuissance(cotes = []) {
+  const inv = cotes.map(c => 1 / Number(c));
+  if (inv.length < 2 || inv.some(x => !Number.isFinite(x) || x <= 0 || x >= 1)) return null;
+  const somme = (k) => inv.reduce((a, x) => a + x ** k, 0);
+  if (Math.abs(somme(1) - 1) < 1e-12) return inv.slice();
+  // somme(k) décroît avec k (chaque terme est < 1) : dichotomie.
+  let bas = 0.5, haut = 3;
+  for (let i = 0; i < 100; i++) {
+    const k = (bas + haut) / 2;
+    if (somme(k) > 1) bas = k; else haut = k;
+  }
+  const k = (bas + haut) / 2;
+  return inv.map(x => x ** k);
+}
+
 /** Espérance par unité misée : p × cote − 1. Positive = value théorique. */
 export function edge(proba, cote) {
   const p = Number(proba), c = Number(cote);
@@ -89,4 +118,4 @@ export function estValue(edgeCalcule, scoreConfiance, options = {}) {
       && Number.isFinite(scoreConfiance) && scoreConfiance >= seuilConfiance;
 }
 
-export default { coteJuste, devigoriser, edge, kelly, estValue, SEUIL_EDGE, SEUIL_CONFIANCE };
+export default { coteJuste, devigoriser, probasPuissance, edge, kelly, estValue, SEUIL_EDGE, SEUIL_CONFIANCE };

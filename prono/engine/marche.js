@@ -18,7 +18,7 @@
 //
 // Pur : aucune base, aucun réseau.
 
-import { devigoriser } from './odds.js';
+import { devigoriser, probasPuissance } from './odds.js';
 import { bootstrapMoyenne } from './clv.js';
 
 // Colonnes football-data.co.uk.
@@ -45,10 +45,24 @@ export function cotesDe(ligne = {}, cols) {
            over: cote(ligne[cols.over]), under: cote(ligne[cols.under]) };
 }
 
-/** Probabilités sans marge : { '1','X','2' } et { over, under }, chacun null si incomplet. */
-export function probasJustes(ligne = {}, cols) {
+/**
+ * Probabilités sans marge : { '1','X','2' } et { over, under }, chacun null si incomplet.
+ * @param {'proportionnelle'|'puissance'} methode  voir probasPuissance
+ */
+export function probasJustes(ligne = {}, cols, methode = 'proportionnelle') {
   const c = cotesDe(ligne, cols);
   let x12 = null, ou = null;
+  if (methode === 'puissance') {
+    if (c['1'] && c['X'] && c['2']) {
+      const p = probasPuissance([c['1'], c['X'], c['2']]);
+      if (p) x12 = { '1': p[0], 'X': p[1], '2': p[2] };
+    }
+    if (c.over && c.under) {
+      const p = probasPuissance([c.over, c.under]);
+      if (p) ou = { over: p[0], under: p[1] };
+    }
+    return { x12, ou };
+  }
   if (c['1'] && c['X'] && c['2']) {
     const { probaMarche: p } = devigoriser({ '1X2:1': c['1'], '1X2:X': c['X'], '1X2:2': c['2'] });
     x12 = { '1': p['1X2:1'], 'X': p['1X2:X'], '2': p['1X2:2'] };
@@ -61,10 +75,10 @@ export function probasJustes(ligne = {}, cols) {
 }
 
 /** Clôture la plus juste disponible pour une ligne, marché par marché. */
-export function clotureJuste(ligne = {}) {
+export function clotureJuste(ligne = {}, methode = 'proportionnelle') {
   let x12 = null, ou = null, refX12 = null, refOu = null;
   for (const ref of CLOTURES) {
-    const p = probasJustes(ligne, ref);
+    const p = probasJustes(ligne, ref, methode);
     if (!x12 && p.x12) { x12 = p.x12; refX12 = ref.nom; }
     if (!ou && p.ou) { ou = p.ou; refOu = ref.nom; }
   }
@@ -167,14 +181,14 @@ export function parisDuModele(notees = [], { seuilEdge = 0.05, coteMax = 10 } = 
  *
  * @param {Array} rencontres  lignes au format rejouer(), avec extra.ligne
  */
-export function parisValeurMarche(rencontres = [], { seuilEdge = 0.02, coteMax = 10 } = {}) {
+export function parisValeurMarche(rencontres = [], { seuilEdge = 0.02, coteMax = 10, methode = 'proportionnelle' } = {}) {
   const paris = [];
   for (const m of rencontres) {
     const ligne = m.extra?.ligne;
     if (!ligne) continue;
-    const juste = probasJustes(ligne, AVANT_MATCH.moyenne);
+    const juste = probasJustes(ligne, AVANT_MATCH.moyenne, methode);
     const best = cotesDe(ligne, AVANT_MATCH.meilleure);
-    const clo = clotureJuste(ligne);
+    const clo = clotureJuste(ligne, methode);
     const bd = Number(m.buts_dom), be = Number(m.buts_ext);
     const issue = bd > be ? '1' : bd < be ? '2' : 'X';
     const over = bd + be >= 3;
