@@ -1,0 +1,403 @@
+# ══════════════════════════════════════════════
+# Moteur statistique — opérations de base depuis un téléphone
+# ══════════════════════════════════════════════
+#
+# Ce dépôt se pilote désormais sans poste de travail. Ce workflow exécute,
+# sur un runner GitHub, les commandes qui exigent un accès à la base Neon :
+# migration, régénération du schéma, amorçage de la mémoire du moteur.
+#
+# DEUX FAÇONS DE LE DÉCLENCHER
+#
+#  1. Onglet Actions → « Run workflow » (menu déroulant).
+#     Nécessite que ce fichier soit présent sur la branche par défaut.
+#
+#  2. Modifier prono/DECLENCHEUR.txt depuis l'éditeur web de GitHub et
+#     commiter. Fonctionne immédiatement sur N'IMPORTE QUELLE branche, sans
+#     rien fusionner. Le contenu du fichier donne l'étape à exécuter :
+#         etat        → lecture seule
+#         backtest    → note le modèle sur le passé, lecture seule
+#         sweep       → cherche de meilleurs réglages, lecture seule
+#         audit       → note les signaux déjà publiés par Victor, lecture seule
+#         diagnostic  → pourquoi Victor ne publie plus, lecture seule
+#         sondes      → football-data répond-il ? 2 requêtes, lecture seule
+#         publiques   → quelles sources gratuites couvrent la saison en cours
+#         espn        → format réel des réponses ESPN (secours de Victor)
+#         essai-espn  → le secours ESPN sur les vrais matchs des 3 prochains jours
+#         prod        → la prod Render tourne-t-elle le dernier commit de master ?
+#         apercu      → simulation, aucune écriture
+#         migration   → applique la 014 + régénère et commite le schéma
+#         backfill    → collecte 90 jours (backfill 150 pour une autre durée)
+#
+# SECRETS REQUIS (Settings → Secrets and variables → Actions)
+#   DATABASE_URL        chaîne de connexion Neon
+#   FOOTBALL_DATA_KEY   clé football-data.org (étape backfill uniquement)
+
+name: Moteur statistique
+
+on:
+  workflow_dispatch:
+    inputs:
+      etape:
+        description: "Étape à exécuter"
+        required: true
+        default: apercu
+        type: choice
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, espn, essai-espn, prod]
+      jours:
+        description: "Backfill : nombre de jours à collecter"
+        required: false
+        default: "90"
+      confirmation:
+        description: "Pour 'migration' et 'backfill' : taper APPLIQUER"
+        required: false
+        default: ""
+  push:
+    paths: ["prono/DECLENCHEUR.txt"]
+  # ── Suivi mensuel, sans intervention ──
+  # Le 1er de chaque mois : collecte les nouvelles rencontres, remesure le
+  # modèle, et n'ouvre une issue QUE si le gain devient significatif.
+  #
+  # ⚠️ GitHub n'exécute les déclencheurs planifiés que depuis la branche par
+  # DÉFAUT. Tant que cette branche n'est pas fusionnée dans master, ce cron
+  # ne se déclenchera jamais — l'étape reste lançable à la main entre-temps.
+  schedule:
+    - cron: "0 5 1 * *"
+
+concurrency:
+  group: moteur-statistique
+  cancel-in-progress: false
+
+# Sans pipefail, `node script.js | tee` renvoie le code de sortie de tee,
+# jamais celui de node. Constate au premier run reel : etat.js a plante sur
+# une table absente, et l'etape s'est affichee en vert. Une migration en
+# echec aurait fait exactement pareil.
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
+jobs:
+  executer:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # nécessaire pour recommiter db/schema_neon.sql
+      issues: write          # le suivi mensuel n'alerte que par une issue
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install --no-audit --no-fund
+
+      # ── Quelle étape, et l'a-t-on confirmée ? ──
+      # Un déclenchement par fichier porte sa propre confirmation : éditer et
+      # commiter est déjà un geste délibéré. Le menu déroulant, lui, se
+      # mistape à un doigt près sur un écran de téléphone.
+      - id: choix
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ETAPE=mensuel
+            JOURS=180
+            CONFIRME=oui
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            CONTENU=$(head -1 prono/DECLENCHEUR.txt | tr -d '\r' | xargs)
+            ETAPE=$(echo "$CONTENU" | awk '{print $1}')
+            JOURS=$(echo "$CONTENU" | awk '{print $2}')
+            CONFIRME=oui
+          else
+            ETAPE="${{ inputs.etape }}"
+            JOURS="${{ inputs.jours }}"
+            [ "${{ inputs.confirmation }}" = "APPLIQUER" ] && CONFIRME=oui || CONFIRME=non
+          fi
+          [ -z "$JOURS" ] && JOURS=90
+          echo "etape=$ETAPE"     >> $GITHUB_OUTPUT
+          echo "jours=$JOURS"     >> $GITHUB_OUTPUT
+          echo "confirme=$CONFIRME" >> $GITHUB_OUTPUT
+          echo "### Étape : \`$ETAPE\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Contrôles hors base
+        run: npm test
+
+      - name: État de la mémoire
+        if: steps.choix.outputs.etape == 'etat'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node prono/etat.js | tee -a $GITHUB_STEP_SUMMARY
+
+      # Lecture seule, donc aucune confirmation exigée : ce qui ne peut rien
+      # abîmer ne doit pas coûter une saisie de plus sur un téléphone.
+      - name: Backtest du modèle
+        if: steps.choix.outputs.etape == 'backtest'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/backtest.js --seuil=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # ── Suivi mensuel ──
+      # Collecte puis mesure, dans le même job : mesurer sans avoir collecté
+      # rendrait le même verdict que le mois précédent, et laisserait croire
+      # que rien ne bouge alors que personne n'a regardé.
+      - name: Suivi mensuel — collecte puis mesure
+        id: mensuel
+        if: steps.choix.outputs.etape == 'mensuel'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '## Collecte'
+            echo '```'
+            node prono/backfill.js --jours=180 --appliquer
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+          node prono/backtest.js --seuil=5 | tee /tmp/backtest.txt
+          {
+            echo '## Mesure'
+            echo '```'
+            cat /tmp/backtest.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+          echo "verdict=$(sed -n 's/^::VERDICT:://p' /tmp/backtest.txt | tail -1)" >> $GITHUB_OUTPUT
+          echo "gain=$(sed -n 's/^::GAIN:://p' /tmp/backtest.txt | tail -1)"       >> $GITHUB_OUTPUT
+          echo "signif=$(sed -n 's/^::SIGNIFICATIF:://p' /tmp/backtest.txt | tail -1)" >> $GITHUB_OUTPUT
+          echo "n=$(sed -n 's/^::N:://p' /tmp/backtest.txt | tail -1)"             >> $GITHUB_OUTPUT
+
+      # Le silence est le comportement normal. Une issue n'est ouverte que
+      # lorsqu'il y a une décision à prendre — sinon l'alerte devient un
+      # bruit mensuel qu'on finit par ignorer, et elle ne sert plus à rien
+      # le jour où elle compte.
+      - name: Alerter seulement si le modèle devient exploitable
+        if: steps.choix.outputs.etape == 'mensuel' && steps.mensuel.outputs.verdict == 'exploitable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Moteur statistique : gain significatif ($(date +%Y-%m))" \
+            --body "Le suivi mensuel a mesuré un gain **significatif** du moteur statistique par rapport au taux de base.
+
+          | | |
+          |---|---|
+          | Gain de log-loss | ${{ steps.mensuel.outputs.gain }} % |
+          | Significatif | ${{ steps.mensuel.outputs.signif }} |
+          | Rencontres notées | ${{ steps.mensuel.outputs.n }} |
+
+          Le détail chiffré est dans le résumé du run : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Ce n'est pas un feu vert pour publier. C'est le premier moment où la question se pose sérieusement. À vérifier avant toute bascule :
+          - le gain tient-il aussi le mois suivant ?
+          - la courbe de fiabilité est-elle plate, ou penche-t-elle sur les hautes probabilités ?
+          - le favori du modèle bat-il « toujours le domicile » ?
+
+          Aucune de ces réponses ne se lit dans le seul pourcentage ci-dessus." \
+            --label "moteur" 2>/dev/null || gh issue create \
+            --title "Moteur statistique : gain significatif ($(date +%Y-%m))" \
+            --body "Gain ${{ steps.mensuel.outputs.gain }} %, significatif, sur ${{ steps.mensuel.outputs.n }} rencontres. Détail : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Sondes des sources de données
+        if: steps.choix.outputs.etape == 'sondes'
+        env:
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: |
+          {
+            echo '```'
+            node scripts/sondes-sources.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Sondes des sources publiques
+        if: steps.choix.outputs.etape == 'publiques'
+        run: |
+          {
+            echo '```'
+            node scripts/sondes-publiques.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Sonde ESPN
+        if: steps.choix.outputs.etape == 'espn'
+        run: |
+          {
+            echo '```'
+            node scripts/sonde-espn.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Essai du secours ESPN sur les vrais matchs
+        if: steps.choix.outputs.etape == 'essai-espn'
+        env:
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          {
+            echo '```'
+            node scripts/essai-espn.js 3
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # ── Vérifier la prod sans accès à Render ──
+      # Render publie RENDER_GIT_COMMIT, que /api/status expose : on compare au
+      # dernier commit de master, ce qui prouve (ou non) que le déploiement
+      # automatique a suivi la fusion. Aucun secret requis : l'app est
+      # publique. /api/victor/health?sources=0 donne l'état de Victor sans
+      # consommer le quota des API de football.
+      - name: État de la prod Render
+        if: steps.choix.outputs.etape == 'prod'
+        env:
+          APP: https://pronosight2.onrender.com
+        run: |
+          git fetch -q origin master
+          ATTENDU=$(git rev-parse --short=7 origin/master)
+          # Le plan gratuit endort le service : le premier appel peut
+          # prendre une minute, d'où les relances.
+          STATUT=""
+          for i in 1 2 3; do
+            STATUT=$(curl -sS --max-time 90 "$APP/api/status") && break
+            sleep 15
+          done
+          SANTE=$(curl -sS --max-time 120 "$APP/api/victor/health?sources=0" || echo '{"ok":false,"error":"injoignable"}')
+          DEPLOYE=$(echo "$STATUT" | jq -r '.commit // "inconnu"')
+          {
+            echo "## Prod Render"
+            echo
+            echo "- Commit déployé : \`$DEPLOYE\` (branche $(echo "$STATUT" | jq -r '.branche // "?"'))"
+            echo "- Dernier commit de master : \`$ATTENDU\`"
+            echo "- Démarré le : $(echo "$STATUT" | jq -r '.demarre // "?"')"
+            if [ "$DEPLOYE" = "$ATTENDU" ]; then
+              echo "- ✅ La prod exécute le dernier commit de master."
+            else
+              echo "- ❌ La prod n'exécute PAS le dernier commit de master."
+            fi
+            echo
+            echo "### /api/status"
+            echo '```json'
+            echo "$STATUT" | jq . 2>/dev/null || echo "$STATUT"
+            echo '```'
+            echo "### /api/victor/health?sources=0"
+            echo '```json'
+            echo "$SANTE" | jq . 2>/dev/null || echo "$SANTE"
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Diagnostic Victor
+        if: steps.choix.outputs.etape == 'diagnostic'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node scripts/diagnostic-victor.js --jours=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Audit de Victor
+        if: steps.choix.outputs.etape == 'audit'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/audit-victor.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Balayage d'hyper-paramètres
+        if: steps.choix.outputs.etape == 'sweep'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node prono/sweep.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Aperçu — aucune écriture
+        if: steps.choix.outputs.etape == 'apercu'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '```'
+            node nexus/migrations/run_014_moteur_statistique.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # ── Migration + régénération du schéma, dans le même job ──
+      # La règle de CLAUDE.md veut que migration et schéma régénéré soient
+      # commités ensemble. Les enchaîner ici garantit qu'ils ne peuvent pas
+      # diverger : le schéma est lu sur la base qui vient d'être migrée.
+      - name: Migration 014
+        if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node nexus/migrations/run_014_moteur_statistique.js --appliquer
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Régénération de db/schema_neon.sql
+        if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          node db/introspect.js > /tmp/schema.sql
+          # Un dump vide ou tronqué ne doit JAMAIS écraser la source de
+          # vérité du schéma : sans ce garde-fou, une panne réseau au mauvais
+          # moment effacerait la référence de 22 tables.
+          TABLES=$(grep -c '^CREATE TABLE' /tmp/schema.sql || true)
+          echo "Tables introspectées : $TABLES" | tee -a $GITHUB_STEP_SUMMARY
+          if [ "$TABLES" -lt 19 ]; then
+            echo "❌ Dump suspect ($TABLES tables) — schéma NON remplacé." | tee -a $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          mv /tmp/schema.sql db/schema_neon.sql
+
+      - name: Commit du schéma régénéré
+        if: steps.choix.outputs.etape == 'migration' && steps.choix.outputs.confirme == 'oui'
+        run: |
+          if git diff --quiet db/schema_neon.sql; then
+            echo "Schéma inchangé — rien à commiter." | tee -a $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add db/schema_neon.sql
+          git commit -m "Regeneration de db/schema_neon.sql apres la migration 014
+
+          Introspection de la prod par db/introspect.js, execute sur le runner
+          juste apres l'application de la migration. Regle CLAUDE.md : ce
+          fichier reflete la base, il ne la precede pas."
+          git push origin HEAD:${{ github.ref_name }}
+          echo "✅ Schéma régénéré et commité." >> $GITHUB_STEP_SUMMARY
+
+      - name: Amorçage de la mémoire
+        if: steps.choix.outputs.etape == 'backfill' && steps.choix.outputs.confirme == 'oui'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+        run: |
+          {
+            echo '```'
+            node prono/backfill.js --jours=${{ steps.choix.outputs.jours }} --appliquer
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Confirmation manquante
+        if: (steps.choix.outputs.etape == 'migration' || steps.choix.outputs.etape == 'backfill') && steps.choix.outputs.confirme != 'oui'
+        run: |
+          echo "⛔ Étape non exécutée : taper APPLIQUER dans le champ confirmation." | tee -a $GITHUB_STEP_SUMMARY
+          exit 1
