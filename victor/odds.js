@@ -328,6 +328,11 @@ export function cleMarche(pronostic, homeName = '', awayName = '') {
     return `OU:${sens}:${parseFloat(mTot[2])}`;
   }
 
+  // « Pas de match nul » est une double chance 12, l'exact contraire d'un
+  // nul. Ce libellé est celui que libelleCode('DC:12') produit : sans ce
+  // test, il était associé à 1X2:DRAW. Voir evaluerValue.
+  if (/\b(pas de|sans|no)\s+(match\s+)?(nul|draw)\b/.test(p)) return null;
+
   if (/\bnul\b|\bdraw\b/.test(p) && !/double|ou\b/.test(p)) return '1X2:DRAW';
 
   if (/victoire|win|gagne/.test(p) && !/double/.test(p)) {
@@ -346,7 +351,21 @@ export function cleMarche(pronostic, homeName = '', awayName = '') {
  */
 export function evaluerValue(ev, cotesDuMatch) {
   if (!cotesDuMatch?.marches) return null;
-  const cle  = cleMarche(ev?.pronostic_principal, ev?.equipe_a, ev?.equipe_b);
+  // ── Le code fait foi, pas le libellé ──
+  // La cote était cherchée en relisant le LIBELLÉ du pari. Or le libellé de
+  // DC:12 est « Pas de match nul » : cleMarche y lisait « nul » et rendait la
+  // cote du MATCH NUL. Du 06 au 20/09, sept doubles chances ont été publiées
+  // à 3,01–3,80 au lieu d'environ 1,35, marquées « cote confirmée », et
+  // comptées gagnantes à ces cotes dans le rendement de Victor. Mesuré le
+  // 02/10 par le CLV (prono/clv.js) : cote publiée 3,80, prix juste 1,34.
+  //
+  // Le code de pari est validé en amont (validerEvent) : on cherche CETTE
+  // ligne-là, et si le marché ne la cote pas, il n'y a pas de cote — le
+  // pari est alors rejeté comme « non coté par le marché ». Le libellé ne
+  // sert plus que pour les événements sans code (anciens formats).
+  const cle  = ev?.pari_code
+    ? ev.pari_code
+    : cleMarche(ev?.pronostic_principal, ev?.equipe_a, ev?.equipe_b);
   const cote = cle ? cotesDuMatch.marches[cle] : null;
   if (!cote) return null;
 
