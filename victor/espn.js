@@ -42,6 +42,8 @@ export function viderCacheEspn() { _cache.clear(); }
 // jamais : une ligue absente de ces tables n'est simplement pas couverte.
 
 // The Odds API : la clé de sport est stable et sans ambiguïté.
+// Écartées après vérification le 02/10 (classement vide ou HTTP 400 chez
+// ESPN) : Suisse, Pologne, Irlande, Finlande, Corée du Sud.
 const PAR_CLE_ODDS = {
   soccer_epl: 'eng.1', soccer_efl_champ: 'eng.2', soccer_england_league1: 'eng.3', soccer_england_league2: 'eng.4',
   soccer_spain_la_liga: 'esp.1', soccer_spain_segunda_division: 'esp.2',
@@ -51,12 +53,11 @@ const PAR_CLE_ODDS = {
   soccer_netherlands_eredivisie: 'ned.1', soccer_portugal_primeira_liga: 'por.1',
   soccer_belgium_first_div: 'bel.1', soccer_spl: 'sco.1', soccer_turkey_super_league: 'tur.1',
   soccer_greece_super_league: 'gre.1', soccer_austria_bundesliga: 'aut.1', soccer_denmark_superliga: 'den.1',
-  soccer_sweden_allsvenskan: 'swe.1', soccer_norway_eliteserien: 'nor.1', soccer_switzerland_superleague: 'sui.1',
-  soccer_poland_ekstraklasa: 'pol.1', soccer_league_of_ireland: 'irl.1', soccer_finland_veikkausliiga: 'fin.1',
+  soccer_sweden_allsvenskan: 'swe.1', soccer_norway_eliteserien: 'nor.1',
   soccer_usa_mls: 'usa.1', soccer_mexico_ligamx: 'mex.1',
   soccer_brazil_campeonato: 'bra.1', soccer_brazil_serie_b: 'bra.2',
   soccer_argentina_primera_division: 'arg.1', soccer_chile_campeonato: 'chi.1',
-  soccer_japan_j_league: 'jpn.1', soccer_korea_kleague1: 'kor.1', soccer_china_superleague: 'chn.1',
+  soccer_japan_j_league: 'jpn.1', soccer_china_superleague: 'chn.1',
   soccer_australia_aleague: 'aus.1', soccer_saudi_arabia_pro_league: 'ksa.1',
   soccer_uefa_champs_league: 'uefa.champions', soccer_uefa_europa_league: 'uefa.europa',
   soccer_uefa_europa_conference_league: 'uefa.europa.conf',
@@ -82,7 +83,7 @@ const PAR_NOM = {
   'dutch eredivisie': 'ned.1', 'portuguese primeira liga': 'por.1', 'belgian pro league': 'bel.1',
   'scottish premiership': 'sco.1', 'turkish super lig': 'tur.1', 'greek superleague greece': 'gre.1',
   'austrian bundesliga': 'aut.1', 'danish superliga': 'den.1', 'swedish allsvenskan': 'swe.1',
-  'norwegian eliteserien': 'nor.1', 'american major league soccer': 'usa.1', 'mexican primera league': 'mex.1',
+  'norwegian eliteserien': 'nor.1', 'american major league soccer': 'usa.1', 'american usl championship': 'usa.usl.1', 'mexican primera league': 'mex.1',
   'brazilian serie a': 'bra.1', 'argentinian primera division': 'arg.1', 'japanese j league': 'jpn.1',
   'uefa champions league': 'uefa.champions', 'uefa europa league': 'uefa.europa',
   'uefa europa conference league': 'uefa.europa.conf', 'uefa conference league': 'uefa.europa.conf',
@@ -277,6 +278,7 @@ export async function getContexteEspn(fixtures = [], forme = new Map(), classeme
 
   // 2. Un classement par ligue, puis rapprochement des équipes.
   let requetes = 0, cache = 0, apparies = 0, nonApparies = 0;
+  const refuses = [];
   const calendriers = [];                       // { code, espnId, cles: [id du match] }
   for (const [code, matchs] of ligues) {
     if (Date.now() > fin) { sortie.erreurs.push(`${code} : budget de temps épuisé`); continue; }
@@ -299,7 +301,7 @@ export async function getContexteEspn(fixtures = [], forme = new Map(), classeme
       for (const [cote, equipe] of [['home', paire[0]], ['away', paire[1]]]) {
         const champ = cote === 'home' ? 'homeId' : 'awayId';
         if (aDesDonnees(f[champ], forme, classement)) continue;
-        if (!equipe) { nonApparies++; continue; }
+        if (!equipe) { nonApparies++; refuses.push(`${code}:${cote === 'home' ? f.home : f.away}`); continue; }
         if (!f[champ]) f[champ] = `espn:${equipe.id}`;
         const cle = f[champ];
         apparies++;
@@ -335,6 +337,9 @@ export async function getContexteEspn(fixtures = [], forme = new Map(), classeme
     + ` (${requetes} requête(s), ${cache} depuis le cache)`
     + `${sortie.erreurs.length ? ` — ${sortie.erreurs.length} erreur(s) : ${sortie.erreurs.slice(0, 2).join(' | ')}` : ''}`;
   console.log(`   🛟 Secours ESPN : ${sortie.rapport}`);
+  // Dans les logs seulement, pas dans la raison envoyée sur Telegram : ce
+  // sont ces noms qui diront quel alias ajouter.
+  if (refuses.length) console.log(`      sans correspondance sûre : ${refuses.slice(0, 15).join(' · ')}`);
   return sortie;
 }
 
