@@ -11,6 +11,7 @@ import { callClaude, callGemini, extractText, extractJSON, tsdbFetch, getLeagueE
          tsdbToMatch, fdFetch, fdToMatch, fetchRealOdds, fetchApiStatus, fetchMatchDetails, fetchLeagueStandings, fetchLiveStats, fetchH2H, fetchRealStats } from './modules/api.js';
 import { probabilitesDepuisCotes, pourcentages100 } from './modules/probabilites.js';
 import { assainir } from './modules/securite.js';
+import { htmlEcranValeurs } from './modules/valeurs.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -52,6 +53,15 @@ async function initApp() {
     if (status.footballData) { fdBtn.style.borderColor = 'var(--accent)'; fdBtn.style.color = 'var(--accent)'; fdBtn.textContent = '📅 FD ✓'; }
     else fdBtn.title = 'Configurez FOOTBALL_DATA_KEY dans .env sur le serveur';
   }
+
+  // Les boutons de clés API sont des outils d'administration : un visiteur
+  // n'a pas à voir « ❌ GEMINI » ni l'état de l'infrastructure.
+  if (localStorage.getItem('ps_admin_key')) document.body.classList.add('admin');
+  // La barre du bas et la feuille « Plus » sont en position fixe : rattachées
+  // à <body>, sinon un ancêtre transformé (.container) les fait défiler.
+  ['plusFond', 'plusFeuille'].forEach(id => { const n = document.getElementById(id); if (n) document.body.appendChild(n); });
+  const bas = document.querySelector('.bottom-nav'); if (bas) document.body.appendChild(bas);
+  loadValeurs();
 
   const akBtn = document.getElementById('akChange');
   if (akBtn) {
@@ -139,14 +149,24 @@ function switchNav(tab) {
   // Mise à jour visuelle immédiate (pas de debounce sur le CSS)
   const pv = document.getElementById('pronoView');
   if (pv) pv.style.display = tab === 'prono' ? 'block' : 'none';
-  ['history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor'].forEach(t => {
+  ['history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor','valeurs'].forEach(t => {
     const el = document.getElementById(t + 'View');
     if (el) el.classList.toggle('visible', t === tab);
   });
-  ['prono','history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor'].forEach(t => {
+  ['prono','history','parlay','alerts','bankroll','quickpick','combo','dash','live','today','victor','valeurs'].forEach(t => {
     const b = document.getElementById('nav-' + t);
     if (b) b.classList.toggle('active', t === tab);
   });
+  // Barre du bas (mobile) : une rubrique rangée dans « Plus » allume « Plus ».
+  const enBas = ['dash', 'prono', 'valeurs', 'live'];
+  document.querySelectorAll('.bn-btn').forEach(b => {
+    const n = b.dataset.nav;
+    b.classList.toggle('active', n === tab || (n === 'plus' && !enBas.includes(tab)));
+  });
+  document.querySelectorAll('.plus-grille button').forEach(b => b.classList.toggle('active', b.dataset.nav === tab));
+  fermerPlus();
+  // Selon le thème, c'est <body> qui défile (overflow:auto), pas la fenêtre.
+  window.scrollTo(0, 0); document.body.scrollTop = 0;
   // Live : démarre/arrête le refresh indépendamment du debounce
   if (tab === 'live') { fetchLive(false); startLiveAutoRefresh(); } else stopLiveAutoRefresh();
 
@@ -157,6 +177,7 @@ function switchNav(tab) {
     if (tab === 'history') renderHistory();
     if (tab === 'dash') renderDashboard();
     if (tab === 'victor') renderVictorView();
+    if (tab === 'valeurs') renderValeursView();
     if (tab === 'prono') renderPronoVictor();
     if (tab === 'today') fetchTodayMatches(false);
     if (tab === 'alerts') renderAlertFavs();
@@ -165,6 +186,74 @@ function switchNav(tab) {
       addParlayLeg(); addParlayLeg();
     }
   }, 150);
+}
+
+function ouvrirPlus() {
+  document.getElementById('plusFeuille')?.classList.add('ouverte');
+  document.getElementById('plusFond')?.classList.add('ouvert');
+}
+function fermerPlus() {
+  document.getElementById('plusFeuille')?.classList.remove('ouverte');
+  document.getElementById('plusFond')?.classList.remove('ouvert');
+}
+
+// ══════════════════════════════════════════════
+// VALUE DE MARCHÉ — signaux du jour et bilan vérifiable
+// ══════════════════════════════════════════════
+const valeursState = { valeurs: null, bilan: null, erreur: false, ts: 0, enCours: null };
+
+async function loadValeurs({ force = false } = {}) {
+  if (!force && valeursState.ts && Date.now() - valeursState.ts < VICTOR_CACHE_TTL) return;
+  if (valeursState.enCours) return valeursState.enCours;
+  valeursState.enCours = (async () => {
+    try {
+      const [v, b] = await Promise.all([
+        fetch('/api/victor/valeurs').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }),
+        fetch('/api/victor/bilan').then(r => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      // Pas d'assainir() ici : modules/valeurs.js échappe lui-même chaque chaîne.
+      valeursState.valeurs = v; valeursState.bilan = b;
+      valeursState.erreur = false; valeursState.ts = Date.now();
+    } catch (err) {
+      console.warn('[Values] indisponibles :', err.message);
+      valeursState.erreur = !valeursState.valeurs;
+    } finally {
+      valeursState.enCours = null;
+      majBadgeValeurs();
+    }
+  })();
+  return valeursState.enCours;
+}
+
+function majBadgeValeurs() {
+  const n = valeursState.valeurs?.aujourdhui?.length || 0;
+  const badge = document.getElementById('valeursBadge');
+  if (badge) { badge.textContent = n; badge.style.display = n ? '' : 'none'; }
+  const pastille = document.getElementById('valeursPastille');
+  if (pastille) pastille.style.display = n ? '' : 'none';
+}
+
+function bankrollDefinie() {
+  const d = getBankrollData();
+  const b = d.current || d.initial || parseFloat(localStorage.getItem('ps_bankroll'));
+  return Number.isFinite(b) && b > 0 ? b : null;
+}
+
+function dessinerValeurs() {
+  const el = document.getElementById('valeursView');
+  if (el) el.innerHTML = htmlEcranValeurs({ ...valeursState, bankroll: bankrollDefinie() });
+}
+
+async function renderValeursView() {
+  dessinerValeurs();
+  await loadValeurs();
+  dessinerValeurs();
+}
+
+async function rechargerValeurs() {
+  valeursState.erreur = false;
+  await loadValeurs({ force: true });
+  dessinerValeurs();
 }
 
 function toggleTheme() {
@@ -1355,13 +1444,20 @@ window.setHistSearch = setHistSearch;
 // ══════════════════════════════════════════════
 function renderDashboard() {
   const hist = getHist();
-  const br = parseFloat(localStorage.getItem('ps_bankroll') || '1000');
+  // Aucune bankroll inventée : sans montant saisi, on invite à le définir.
+  const br = bankrollDefinie();
   const wins = hist.filter(h => h.result === 'win').length;
   const total = hist.filter(h => h.result !== 'pending').length;
   const pnl = hist.reduce((a, h) => a + (parseFloat(h.pnl) || 0), 0);
   const wr = total > 0 ? Math.round(wins / total * 100) : 0;
 
-  const el1 = document.getElementById('dashBankroll'); if (el1) el1.textContent = br.toFixed(0) + '€';
+  const el1 = document.getElementById('dashBankroll');
+  if (el1) {
+    el1.textContent = br ? br.toFixed(0) + '€' : 'Définir';
+    el1.style.color = br ? '' : 'var(--accent)';
+    el1.style.cursor = 'pointer';
+    el1.onclick = () => switchNav('bankroll');
+  }
 
   // Sans aucun pari résolu, afficher « 0% » laisse croire que rien ne
   // fonctionne, alors qu'il n'y a simplement pas encore de données.
@@ -2620,6 +2716,9 @@ document.addEventListener('keydown', e => {
 // ══════════════════════════════════════════════
 window.selectSport = selectSport;
 window.switchNav = switchNav;
+window.ouvrirPlus = ouvrirPlus;
+window.fermerPlus = fermerPlus;
+window.rechargerValeurs = rechargerValeurs;
 window.switchPronoMode = switchPronoMode;
 window.filterLeagues = filterLeagues;
 window.setCat = setCat;

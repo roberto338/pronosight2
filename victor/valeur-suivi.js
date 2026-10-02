@@ -168,4 +168,33 @@ export async function bilanValeursMarche() {
   };
 }
 
-export default { enregistrerValeursMarche, lireScoresEspn, trouverScore, noterValeursMarche, resumerBilan, bilanValeursMarche };
+/**
+ * Bilan de Victor sur les mêmes règles que /bilan : paris à cote de marché
+ * confirmée, hors doubles chances (aucune n'est cotée par The Odds API).
+ */
+export async function bilanVictor() {
+  const { rows } = await query(
+    `SELECT pronostic_correct AS gagne, cote_estimee AS cote
+     FROM ps_pronostics
+     WHERE pronostic_correct IS NOT NULL AND cote_confirmee = true
+       AND cote_estimee IS NOT NULL AND pari_code NOT LIKE 'DC:%'`);
+  // Victor n'a pas d'« avantage » mesuré : on ne fabrique pas de moyenne.
+  return { ...resumerBilan(rows.map(r => ({ ...r, avantage: 0 }))), avantageMoyen: null };
+}
+
+/** Values de marché des derniers jours, pour l'app web. Les plus récentes d'abord. */
+export async function valeursRecentes({ jours = 14, limite = 120 } = {}) {
+  const { rows } = await query(
+    `SELECT to_char(date, 'YYYY-MM-DD') AS date, match, competition, debut_utc, pari_code, libelle,
+            cote, bookmaker, proba_juste, avantage, nb_bookmakers, score_reel, gagne
+     FROM ps_valeurs_marche
+     WHERE date >= CURRENT_DATE - $1::int
+     ORDER BY date DESC, avantage DESC
+     LIMIT $2`, [jours, limite]);
+  return rows.map(r => ({
+    ...r,
+    cote: Number(r.cote), proba_juste: Number(r.proba_juste), avantage: Number(r.avantage),
+  }));
+}
+
+export default { enregistrerValeursMarche, lireScoresEspn, trouverScore, noterValeursMarche, resumerBilan, bilanValeursMarche, bilanVictor, valeursRecentes };

@@ -390,3 +390,101 @@ body.light-mode .pick-ligne.eviter{ color:#c0303c; }
 
 
 
+
+/* ── 13. ADMIN ─────────────────────────────── */
+/* « ❌ GEMINI » s'affichait en haut à droite pour chaque visiteur. */
+#akChange{ display:none !important; }
+body.admin #akChange{ display:block !important; }
+
+/* ── 14. NAVIGATION MOBILE ─────────────────── */
+/* Ordinateur : une seule ligne défilante, jamais quatre lignes empilées. */
+.main-nav{ flex-wrap:nowrap !important; }
+.bottom-nav, .plus-feuille, .plus-fond{ display:none; }
+
+@media (max-width:640px){
+  .main-nav{ display:none !important; }
+  body{ padding-bottom:calc(76px + env(safe-area-inset-bottom)); }
+  #pwaInstallBtn{ bottom:calc(84px + env(safe-area-inset-bottom)) !important; }
+
+  .bottom-nav{
+    display:flex; position:fixed; left:0; right:0; bottom:0; z-index:5000;
+    background:color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+    border-top:1px solid var(--border);
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+  }
+  .bn-btn{
+    flex:1; position:relative; display:flex; flex-direction:column; align-items:center; gap:2px;
+    background:none; border:none; color:var(--muted); font-family:var(--ui);
+    font-size:11px; font-weight:600; padding:6px 0; border-radius:10px; cursor:pointer;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .bn-ico{ font-size:20px; line-height:1; filter:grayscale(1); opacity:.75; transition:.15s; }
+  .bn-btn.active{ color:var(--accent); }
+  .bn-btn.active .bn-ico{ filter:none; opacity:1; transform:translateY(-1px); }
+  .bn-pastille{
+    position:absolute; top:4px; left:calc(50% + 8px); width:8px; height:8px;
+    border-radius:50%; background:var(--ev-pos); box-shadow:0 0 0 2px var(--surface);
+  }
+
+  .plus-fond{
+    display:block; position:fixed; inset:0; z-index:5001; background:rgba(0,0,0,.5);
+    opacity:0; pointer-events:none; transition:opacity .2s;
+  }
+  .plus-fond.ouvert{ opacity:1; pointer-events:auto; }
+  .plus-feuille{
+    display:block; position:fixed; left:0; right:0; bottom:0; z-index:5002;
+    background:var(--surface); border-top:1px solid var(--border2);
+    border-radius:18px 18px 0 0; padding:8px 16px calc(20px + env(safe-area-inset-bottom));
+    transform:translateY(105%); transition:transform .25s ease;
+  }
+  .plus-feuille.ouverte{ transform:none; }
+  .plus-poignee{ width:40px; height:4px; border-radius:2px; background:var(--border2); margin:2px auto 10px; }
+  .plus-titre{ font-size:12px; font-weight:700; color:var(--muted); margin:10px 2px 8px; }
+  .plus-grille{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .plus-grille button{
+    display:flex; flex-direction:column; align-items:center; gap:6px; font-size:22px;
+    background:var(--surface2); border:1px solid var(--border); border-radius:12px;
+    padding:12px 4px; color:var(--text2); cursor:pointer;
+  }
+  .plus-grille button span{ font-family:var(--ui); font-size:12px; font-weight:600; }
+  .plus-grille button.active{ border-color:var(--accent); color:var(--accent); }
+}
+
+/* ── 15. VALUE DE MARCHÉ ───────────────────── */
+.vm-intro{ font-size:13px; line-height:1.55; color:var(--text2); margin:4px 0 16px; }
+.vm-intro b{ color:var(--text); }
+.vm-carte{
+  background:var(--surface2); border:1px solid var(--border); border-left:3px solid var(--ev-pos);
+  border-radius:12px; padding:14px 15px; margin-bottom:10px;
+}
+.vm-haut{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.vm-match{ font-weight:700; font-size:15px; color:var(--text); }
+.vm-compet{ font-size:12px; color:var(--muted); margin-top:2px; }
+.vm-avantage{
+  font-weight:800; font-size:14px; color:var(--ev-pos); white-space:nowrap;
+  background:color-mix(in srgb, var(--ev-pos) 14%, transparent); padding:3px 9px; border-radius:20px;
+}
+.vm-pari{ font-weight:600; font-size:14px; margin:10px 0; color:var(--text2); }
+.vm-chiffres{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.vm-chiffres > div{ background:var(--surface); border:1px solid var(--border); border-radius:9px; padding:8px; text-align:center; }
+.vm-chiffres span{ display:block; font-size:11px; color:var(--muted); }
+.vm-chiffres b{ display:block; font-size:18px; color:var(--text); margin:2px 0; }
+.vm-chiffres small{ display:block; font-size:10.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.vm-mise{ font-size:12.5px; color:var(--text2); margin-top:10px; }
+.vm-mise b{ color:var(--text); }
+.vm-bilan{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.vm-bilan-col{ background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:14px 10px; text-align:center; }
+.vm-bilan-titre{ font-size:12.5px; font-weight:700; color:var(--text2); }
+.vm-bilan-roi{ font-size:26px; font-weight:800; margin:6px 0 2px; }
+.vm-bilan-det{ font-size:11.5px; color:var(--muted); line-height:1.5; }
+.vm-bilan-vide{ font-size:12px; color:var(--muted); margin-top:10px; }
+.vm-note{ font-size:11.5px; color:var(--muted); line-height:1.5; margin-top:12px; }
+.vm-ligne{ display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); }
+.vm-ligne:last-child{ border-bottom:none; }
+.vm-res{ width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; flex-shrink:0; }
+.vm-res.ok{ background:color-mix(in srgb, var(--ev-pos) 18%, transparent); color:var(--ev-pos); }
+.vm-res.ko{ background:color-mix(in srgb, var(--ev-neg) 18%, transparent); color:var(--ev-neg); }
+.vm-ligne-match{ font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.vm-ligne-pari{ font-size:12px; color:var(--muted); }
+.vm-ligne-date{ font-size:11.5px; color:var(--muted); }

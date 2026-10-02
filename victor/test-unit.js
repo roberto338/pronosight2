@@ -1112,6 +1112,32 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('quota : réponse périmée encore servie', cache.perime('epl')?.[0], 1);
   t += 24 * 3600_000;
   verifie('quota : nouveau jour, budget rechargé', cache.peutPayer(), true);
+
+  // ── Écran « Value de marché » ──
+  const V = await import('../public/js/modules/valeurs.js');
+  verifie('value : mise 1 % de la bankroll', V.miseConseillee(250), 2.5);
+  verifie('value : mise plancher 0,5', V.miseConseillee(10), 0.5);
+  verifie('value : pas de bankroll, pas de mise', V.miseConseillee(null), null);
+  const sig = { match: '<b>Lens</b> vs Lille', competition: 'Ligue 1', libelle: 'Victoire Lens', pari_code: '1X2:1',
+                cote: 2.3, bookmaker: 'Unibet', proba_juste: 0.45, avantage: 0.035, nb_bookmakers: 9,
+                debut_utc: '2026-10-02T19:00:00Z' };
+  const carte = V.carteValeur(sig, { bankroll: 200 });
+  verifie('value : nom échappé', carte.includes('&lt;b&gt;Lens') && !carte.includes('<b>Lens'), true);
+  verifie('value : prix juste = 1 / proba', carte.includes('2.22'), true);
+  verifie('value : avantage affiché', carte.includes('+3.5 %'), true);
+  verifie('value : heure de Paris', carte.includes('21:00'), true);
+  verifie('value : mise affichée', carte.includes('2 €'), true);
+  verifie('value : sans bankroll, aucune mise', V.carteValeur(sig).includes('Mise fixe'), false);
+  const vide = V.htmlEcranValeurs({ valeurs: { aujourdhui: [], notees: [] }, bilan: null });
+  verifie('value : jour sans signal expliqué', vide.includes('Aucune value aujourd'), true);
+  verifie('value : mention de prévention', vide.includes('09 74 75 13 13'), true);
+  const bil = V.htmlBilan({ victor: { n: 55, gagnes: 30, rendement: -0.047, profit: -2.6, coteMoyenne: 1.8 },
+                            marche: { total: { n: 0 } } });
+  verifie('bilan : rendement négatif affiché tel quel', bil.includes('−4.7 %'), true);
+  verifie('bilan : value sans historique', bil.includes('Suivi en cours'), true);
+  const not = V.htmlNotees([{ date: '2026-09-30', match: 'A vs B', libelle: 'Nul', cote: 3.4, gagne: false, score_reel: '1-0' }]);
+  verifie('bilan : perte listée', not.includes('vm-res ko') && not.includes('30/09'), true);
+  verifie('value : erreur serveur', V.htmlEcranValeurs({ erreur: true }).includes('Réessayer'), true);
 }
 
 // ══════════════════════════════════════════════
