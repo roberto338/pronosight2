@@ -22,6 +22,7 @@
 #         sondes      → football-data répond-il ? 2 requêtes, lecture seule
 #         publiques   → quelles sources gratuites couvrent la saison en cours
 #         espn        → format réel des réponses ESPN (secours de Victor)
+#         essai-espn  → le secours ESPN sur les vrais matchs des 3 prochains jours
 #         prod        → la prod Render tourne-t-elle le dernier commit de master ?
 #         apercu      → simulation, aucune écriture
 #         migration   → applique la 014 + régénère et commite le schéma
@@ -41,7 +42,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, espn, prod]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, diagnostic, sondes, publiques, espn, essai-espn, prod]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -229,6 +230,18 @@ jobs:
           {
             echo '```'
             node scripts/sonde-espn.js
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Essai du secours ESPN sur les vrais matchs
+        if: steps.choix.outputs.etape == 'essai-espn'
+        env:
+          FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          {
+            echo '```'
+            node scripts/essai-espn.js 3
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
