@@ -1163,6 +1163,42 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('accueil : bouton Analyser', liste.includes('analyserDepuisAccueil(0)'), true);
   verifie('accueil : journée finie expliquée', A.htmlAAnalyser([prog[2]]).includes('Pas de match à venir'), true);
   verifie('accueil : values mises en avant', A.htmlUne({ aVenir: 12, valeurs: 2, pronos: 3 }).includes("switchNav('valeurs')"), true);
+
+  // ── Mes paris : rien d'inventé ──
+  const PA = await import('../public/js/modules/paris.js');
+  const t0 = new Date('2026-10-02T10:00:00Z');
+  verifie('pari : cote ≤ 1 refusée', PA.creerPari({ match: 'A – B', pari: '1', cote: 1, mise: 5 }).erreur != null, true);
+  verifie('pari : mise manquante refusée', PA.creerPari({ match: 'A – B', pari: '1', cote: 2 }).erreur != null, true);
+  verifie('pari : virgule décimale acceptée', PA.creerPari({ match: 'A – B', pari: '1', cote: '2,10', mise: '5' }, t0).pari.cote, 2.1);
+  const mk = (r, cote, mise, h) => ({ ...PA.creerPari({ match: 'A – B', pari: 'x', cote, mise }, new Date(`2026-10-0${h}T10:00:00Z`)).pari, resultat: r });
+  const lp = [mk('gagne', 2.5, 10, 1), mk('perdu', 1.8, 10, 2), mk('gagne', 2, 5, 3), mk('attente', 3, 4, 4), mk('rembourse', 2, 10, 5)];
+  const bp = PA.bilanParis(lp, { bankrollInitiale: 100 });
+  verifie('pari : gain net exact', bp.profit, 10);
+  verifie('pari : bankroll = départ + gain', bp.bankroll, 110);
+  verifie('pari : rendement sur les mises réglées', Math.abs(bp.roi - 10 / 35) < 1e-9, true);
+  verifie('pari : en attente compté à part', [bp.attente, bp.enJeu].join(','), '1,4');
+  verifie('pari : série la plus récente (remboursé ignoré)', `${bp.serie.n}${bp.serie.sens}`, '1gagne');
+  verifie('pari : sans bankroll, aucune bankroll inventée', PA.bilanParis(lp).bankroll, null);
+  verifie('pari : courbe chronologique', PA.courbeBankroll(lp, 100).join(','), '100,115,105,110,110');
+  verifie('pari : CSV avec en-tête', PA.versCsv(lp).split('\n').length, 6);
+
+  // ── Écrans : Live, Aujourd'hui, compétitions, Victor ──
+  const EC = await import('../public/js/modules/ecrans.js');
+  const live = EC.htmlLive(prog);
+  verifie('live : match en cours affiché', live.includes('Torino') && live.includes('En direct'), true);
+  verifie('live : match terminé sans bouton Analyser', live.includes('Terminés aujourd') && !/Brest[\s\S]{0,400}analyserDepuisAccueil\(2\)/.test(live), true);
+  verifie('live : aucun direct expliqué', EC.htmlLive([prog[1]]).includes('Aucun match en cours'), true);
+  verifie('aujourd\'hui : filtre terminés', EC.filtrerJour(prog, 'termines').length, 1);
+  verifie('aujourd\'hui : reporté masqué', EC.filtrerJour([...prog, { ...prog[0], statut: 'OTHER' }], 'tous').length, 4);
+  const cs = EC.competitionsConnues(prog, ['Ligue 2']);
+  verifie('compétitions : uniquement celles des données + favoris', cs.map(c => c[0]).join('|'), 'Ligue 1|Serie A|Ligue 2|Eredivisie');
+  verifie('compétitions : favori marqué', EC.htmlCompetitions(prog, { favoris: ['Ligue 1'] }).includes('compet-choix suivie'), true);
+  const vic = EC.htmlVictor({ stats: { global: { total: 10, taux_global: 70 } }, bilan: { victor: { n: 8, rendement: -0.05 } },
+    historique: [{ equipe_a: 'A', equipe_b: 'B', pronostic_correct: false, pronostic_principal: 'A gagne', date: '2026-09-30T00:00:00.000Z' }] });
+  verifie('victor : rendement réel négatif affiché', vic.includes('−5,0 %'), true);
+  verifie('victor : prono perdu listé', vic.includes('vm-res ko'), true);
+  const mp = EC.htmlMesParis([], PA.bilanParis([]));
+  verifie('mes paris : vide expliqué', mp.includes('Aucun pari enregistré'), true);
 }
 
 // ══════════════════════════════════════════════

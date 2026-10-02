@@ -24,11 +24,13 @@ export function rangCompet(competition = '') {
 }
 
 /** Les matchs à proposer : pas encore terminés, grandes compétitions d'abord, puis l'heure. */
-export function matchsAAnalyser(matchs = [], { max = 6 } = {}) {
+export function matchsAAnalyser(matchs = [], { max = 6, favoris = [] } = {}) {
+  const fav = new Set(favoris);
   return matchs
     .map((m, index) => ({ ...m, index }))
-    .filter(m => m.statut !== 'FT' && m.equipe_a && m.equipe_b)
+    .filter(m => m.statut !== 'FT' && m.statut !== 'OTHER' && m.equipe_a && m.equipe_b)
     .sort((a, b) => (b.statut === 'LIVE') - (a.statut === 'LIVE')
+      || fav.has(b.competition) - fav.has(a.competition)
       || rangCompet(a.competition) - rangCompet(b.competition)
       || String(a.heure || '99').localeCompare(String(b.heure || '99')))
     .slice(0, max);
@@ -56,22 +58,33 @@ export function htmlUne({ aVenir = null, valeurs = 0, pronos = 0, jour = new Dat
 /** Une affiche cliquable : heure, deux écussons, bouton Analyser. */
 export function ligneMatch(m) {
   const direct = m.statut === 'LIVE';
+  const fini = m.statut === 'FT';
   const [s1, s2] = String(m.score || '').split('-');
   const score = (v) => (m.score ? `<span class="match-ligne-score">${e(v)}</span>` : '');
-  return `<div class="match-ligne" onclick="analyserDepuisAccueil(${m.index})">
-  <div class="match-ligne-heure ${direct ? 'direct' : ''}">${direct ? 'LIVE' : e(m.heure || '—')}<small>${direct ? 'en cours' : 'coup d\'envoi'}</small></div>
+  return `<div class="match-ligne ${fini ? 'fini' : ''}"${fini ? '' : ` onclick="analyserDepuisAccueil(${m.index})"`}>
+  <div class="match-ligne-heure ${direct ? 'direct' : ''}">${direct ? 'LIVE' : fini ? 'FIN' : e(m.heure || '—')}<small>${direct ? 'en cours' : fini ? 'terminé' : 'coup d\'envoi'}</small></div>
   <div class="match-ligne-equipes">
     <div class="match-ligne-equipe">${ecusson(e(m.equipe_a), { taille: 26 })}<span>${e(m.equipe_a)}</span>${score(s1)}</div>
     <div class="match-ligne-equipe">${ecusson(e(m.equipe_b), { taille: 26 })}<span>${e(m.equipe_b)}</span>${score(s2)}</div>
   </div>
-  <button class="bouton-analyser" onclick="event.stopPropagation();analyserDepuisAccueil(${m.index})" aria-label="Analyser ${e(m.equipe_a)} contre ${e(m.equipe_b)}">${icone('loupe', { taille: 16, epaisseur: 2.4 })}<span>Analyser</span></button>
+  ${fini ? '<span></span>' : `<button class="bouton-analyser" onclick="event.stopPropagation();analyserDepuisAccueil(${m.index})" aria-label="Analyser ${e(m.equipe_a)} contre ${e(m.equipe_b)}">${icone('loupe', { taille: 16, epaisseur: 2.4 })}<span>Analyser</span></button>`}
 </div>`;
 }
 
+/** Groupe en gardant l'ordre de première apparition. */
+export function grouperParCompet(matchs = []) {
+  const g = new Map();
+  for (const m of matchs) {
+    if (!g.has(m.competition)) g.set(m.competition, []);
+    g.get(m.competition).push(m);
+  }
+  return [...g.entries()];
+}
+
 /** La liste « À analyser maintenant », groupée par compétition. */
-export function htmlAAnalyser(matchs = [], { max = 6, charge = true } = {}) {
+export function htmlAAnalyser(matchs = [], { max = 6, charge = true, favoris = [] } = {}) {
   if (!charge) return `<div class="vm-note" style="margin:0">Chargement du programme…</div>`;
-  const choisis = matchsAAnalyser(matchs, { max });
+  const choisis = matchsAAnalyser(matchs, { max, favoris });
   if (!choisis.length) {
     return `<div class="etat-vide" style="padding:24px 10px">
   <div class="etat-vide-icone">${icone('calendrier')}</div>
@@ -80,14 +93,11 @@ export function htmlAAnalyser(matchs = [], { max = 6, charge = true } = {}) {
   <button class="dash-cta" style="margin-top:16px" onclick="ouvrirAnalyseLibre()">Analyser un match</button>
 </div>`;
   }
-  let html = '', courante = null;
-  for (const m of choisis) {
-    if (m.competition !== courante) {
-      courante = m.competition;
-      const n = matchs.filter(x => x.competition === courante && x.statut !== 'FT').length;
-      html += `<div class="compet-entete">${e(courante || 'Autres')}<span class="compte">${n} match${n > 1 ? 's' : ''}</span></div>`;
-    }
-    html += ligneMatch(m);
+  let html = '';
+  for (const [compet, liste] of grouperParCompet(choisis)) {
+    const n = matchs.filter(x => x.competition === compet && x.statut !== 'FT').length;
+    html += `<div class="compet-entete">${e(compet || 'Autres')}<span class="compte">${n} match${n > 1 ? 's' : ''}</span></div>`;
+    html += liste.map(ligneMatch).join('');
   }
   const reste = matchs.filter(m => m.statut !== 'FT').length - choisis.length;
   if (reste > 0) {
@@ -96,4 +106,4 @@ export function htmlAAnalyser(matchs = [], { max = 6, charge = true } = {}) {
   return html;
 }
 
-export default { rangCompet, matchsAAnalyser, htmlUne, ligneMatch, htmlAAnalyser };
+export default { rangCompet, matchsAAnalyser, grouperParCompet, htmlUne, ligneMatch, htmlAAnalyser };

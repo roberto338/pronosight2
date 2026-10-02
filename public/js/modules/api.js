@@ -305,8 +305,11 @@ export function fdToMatch(m, leagueMeta) {
 // ══════════════════════════════════════════════
 // ODDS API (via /api/odds)
 // ══════════════════════════════════════════════
-export async function fetchRealOdds(team1, team2, leagueId) {
-  const sportKey = ODDS_SPORT_MAP[leagueId] || 'soccer_epl';
+export async function fetchRealOdds(team1, team2, leagueId, sportKeyConnue = null) {
+  // Sans championnat connu, aucune requête : interroger la Premier League
+  // « par défaut » coûtait un crédit pour un match qui n'y est pas.
+  const sportKey = sportKeyConnue || ODDS_SPORT_MAP[leagueId];
+  if (!sportKey) return null;
   try {
     const resp = await fetch(`/api/odds/${sportKey}?` + new URLSearchParams({
       regions: 'eu', markets: 'h2h', oddsFormat: 'decimal', bookmakers: BOOKMAKERS_EU.join(',')
@@ -317,10 +320,11 @@ export async function fetchRealOdds(team1, team2, leagueId) {
 
     const normalize = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     const n1 = normalize(team1), n2 = normalize(team2);
+    if (!n1 || !n2) return null;
 
     const match = games.find(g => {
       const hn = normalize(g.home_team || ''), an = normalize(g.away_team || '');
-      return (hn.includes(n1) || n1.includes(hn)) && (an.includes(n2) || n2.includes(an));
+      return hn && an && (hn.includes(n1) || n1.includes(hn)) && (an.includes(n2) || n2.includes(an));
     });
     if (!match) return null;
 

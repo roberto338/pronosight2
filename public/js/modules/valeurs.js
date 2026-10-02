@@ -32,7 +32,7 @@ export function miseConseillee(bankroll) {
 }
 
 /** Une value du jour. */
-export function carteValeur(v, { bankroll = null } = {}) {
+export function carteValeur(v, { bankroll = null, index = null } = {}) {
   const cote = Number(v.cote), pj = Number(v.proba_juste);
   const prixJuste = pj > 0 ? (1 / pj).toFixed(2) : '—';
   const mise = miseConseillee(bankroll);
@@ -55,6 +55,7 @@ export function carteValeur(v, { bankroll = null } = {}) {
     <div><span>Consensus</span><b>${v.nb_bookmakers ?? '—'}</b><small>bookmakers</small></div>
   </div>
   ${mise ? `<div class="vm-mise">Mise fixe conseillée : <b>${String(mise).replace('.', ',')} €</b> (1 % de ta bankroll)</div>` : ''}
+  ${index != null ? `<button class="bouton-jouer" onclick="jouerPari('value', ${Number(index)})">${icone('portefeuille', { taille: 16 })}Je joue ce pari</button>` : ''}
 </div>`;
 }
 
@@ -100,7 +101,7 @@ export function htmlEcranValeurs({ valeurs = null, bilan = null, bankroll = null
   }
   const jour = valeurs?.aujourdhui || [];
   const liste = jour.length
-    ? jour.map(v => carteValeur(v, { bankroll })).join('')
+    ? jour.map((v, index) => carteValeur(v, { bankroll, index })).join('')
     : `<div class="etat-vide"><div class="etat-vide-icone">${icone('loupe')}</div>
         <div class="etat-vide-titre">Aucune value aujourd'hui</div>
         <div class="etat-vide-texte">Aucun bookmaker ne paie au-dessus du prix juste du marché. C'est fréquent, et c'est voulu : on ne force jamais un signal.</div></div>`;

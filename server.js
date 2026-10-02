@@ -18,7 +18,7 @@ import { startScheduler }          from './cron/scheduler.js';
 import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
 import { getFixturesOfDay }         from './victor/sources.js';
-import { getOddsEvents }            from './victor/odds.js';
+import { getOddsEvents, sportDe, cacheLire as cotesDeVictor } from './victor/odds.js';
 import { creerCacheProxyCotes }     from './victor/cache-proxy-cotes.js';
 import { bilanVictor, bilanValeursMarche, valeursRecentes } from './victor/valeur-suivi.js';
 import { broadcastDaily }           from './bot/telegram.js';
@@ -302,6 +302,11 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
       return res.status(400).json({ error: 'sportKey invalide' });
     }
     const { bookmakers } = req.query;
+
+    // Victor a souvent déjà payé ces cotes le matin (même process, même
+    // cache) : on les sert gratuitement plutôt que de racheter un crédit.
+    const deVictor = cotesDeVictor(sportKey);
+    if (deVictor) return res.set('X-Cotes-Cache', 'victor').json(deVictor);
 
     const cle = `${sportKey}|${bookmakers && bookmakersValides(bookmakers) ? bookmakers : ''}`;
     const frais = cacheProxyCotes.frais(cle);
@@ -703,7 +708,7 @@ app.get('/api/victor/health', generalLimiter, async (req, res) => {
 // Le front cesse de deviner : il lit ce qui se joue réellement.
 // ══════════════════════════════════════════════
 const _cacheMatchs = new Map();          // dateISO -> { ts, charge }
-const CACHE_MATCHS_MS = 5 * 60 * 1000;   // les calendriers bougent peu
+const CACHE_MATCHS_MS = 2 * 60 * 1000;   // assez frais pour l'onglet Live
 
 app.get('/api/matchs', generalLimiter, async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '')
@@ -738,9 +743,12 @@ app.get('/api/matchs', generalLimiter, async (req, res) => {
       competitions: [...parCompet.values()].sort((a, b) => b.aVenir - a.aVenir || b.nbMatchs - a.nbMatchs),
       matchs: fixtures.map(f => ({
         sport: f.sport, competition: f.competition, match: f.match,
-        equipe_a: f.home, equipe_b: f.away, heure: f.heure,
+        equipe_a: f.home, equipe_b: f.away, heure: f.heure, debut_utc: f.debutUTC || null,
         statut: f.status, score: f.homeGoals != null ? `${f.homeGoals}-${f.awayGoals}` : null,
         source: f.source,
+        // Clé The Odds API : l'analyse du site va chercher LES cotes de CE
+        // championnat, au lieu de la Premier League par défaut.
+        sport_key: sportDe(f),
       })),
     };
 
