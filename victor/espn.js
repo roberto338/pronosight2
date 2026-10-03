@@ -194,10 +194,17 @@ const ALIAS = {
   'inter milan': 'internazionale', 'inter': 'internazionale',
   'psg': 'paris saint germain', 'man utd': 'manchester united', 'man united': 'manchester united',
   'wolves': 'wolverhampton wanderers', 'spurs': 'tottenham hotspur',
+  // Relevés le 03/10 (scripts/sonde-alias-espn.js) : un seul candidat ESPN
+  // chacun. Le Brésil suffixe certains clubs de leur État chez The Odds API.
+  'nautico pe': 'nautico',             // ESPN « Náutico »
+  'atletico mineiro': 'atletico mg',   // ESPN « Atlético-MG »
+  'bragantino sp': 'bragantino',       // ESPN « Red Bull Bragantino / Bragantino »
 };
 
 const forme1 = (nom) => {
-  const n = normalizeTeam(String(nom).replace(/&/g, ' ')).replace(/\band\b|\bthe\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const n = normalizeTeam(String(nom).replace(/&/g, ' ').replace(/['’]/g, ''))   // « Newell's » = « Newells »
+    .replace(/\band\b|\bthe\b|\bsd\b/g, ' ')                                  // « SD Eibar » = « Eibar »
+    .replace(/\s+/g, ' ').trim();
   return ALIAS[n] || n;
 };
 const jetons = (n) => n.split(' ').filter(Boolean);
