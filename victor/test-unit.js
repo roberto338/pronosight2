@@ -1148,6 +1148,15 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('fusion : la fiche API-Football l\'emporte', fusion.length === 1 && fusion[0].source === 'api-football', true);
   verifie('fusion : elle garde la clé de cotes', fusion[0].sportKey, 'soccer_epl');
 
+  // ── Alias ESPN relevés le 03/10 ──
+  const ES = await import('./espn.js');
+  const eq = (id, ...noms) => ({ id, noms });
+  verifie('ESPN : apostrophe (Newells → Newell\'s)', ES.apparierEquipe('Newells Old Boys', [eq('14', "Newell's Old Boys", "Newell's"), eq('5', 'Boca Juniors')])?.id, '14');
+  verifie('ESPN : préfixe SD (SD Eibar → Eibar)', ES.apparierEquipe('SD Eibar', [eq('3752', 'Eibar'), eq('1', 'Real Oviedo')])?.id, '3752');
+  verifie('ESPN : suffixe d\'État (Nautico PE → Náutico)', ES.apparierEquipe('Nautico PE', [eq('7633', 'Náutico'), eq('2', 'Sport Recife')])?.id, '7633');
+  verifie('ESPN : alias Atletico Mineiro → Atlético-MG', ES.apparierEquipe('Atletico Mineiro', [eq('7632', 'Atlético-MG'), eq('3', 'Athletico-PR')])?.id, '7632');
+  verifie('ESPN : alias Bragantino-SP', ES.apparierEquipe('Bragantino-SP', [eq('6079', 'Red Bull Bragantino', 'Bragantino'), eq('4', 'Santos')])?.id, '6079');
+
   // ── Réserve de crédits The Odds API pour Victor ──
   const QC = await import('./quota-cotes.js');
   QC.reinitialiserQuota();
