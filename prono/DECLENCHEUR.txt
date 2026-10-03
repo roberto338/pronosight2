@@ -1,4 +1,4 @@
-diagnostic 3
+rien
 
 # ── Comment s'en servir depuis un téléphone ──
 #
