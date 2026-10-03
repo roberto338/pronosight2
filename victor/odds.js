@@ -16,6 +16,7 @@
 // ══════════════════════════════════════════════
 
 import { fetchWithTimeout, normalizeTeam, heureParis } from './sources.js';
+import { noterQuota } from './quota-cotes.js';
 
 const ODDS_KEY = process.env.ODDS_API_KEY;
 
@@ -190,6 +191,7 @@ async function sportsActifs() {
   if (!ODDS_KEY) return [];
   try {
     const r = await fetchWithTimeout(`https://api.the-odds-api.com/v4/sports/?apiKey=${ODDS_KEY}`, {}, 20_000);
+    noterQuota(r.headers);   // gratuit, mais donne le solde du mois
     if (!r.ok) return [];
     return (await r.json()).filter(s => s.key?.startsWith('soccer_') && s.active);
   } catch { return []; }
@@ -222,6 +224,7 @@ export async function getOddsEvents(dateISO) {
       try {
         const r = await fetchWithTimeout(
           `https://api.the-odds-api.com/v4/sports/${s.key}/events?apiKey=${ODDS_KEY}&dateFormat=iso`, {}, 20_000);
+        noterQuota(r.headers);
         if (!r.ok) return [];
         const evenements = await r.json();
         return (Array.isArray(evenements) ? evenements : [])
@@ -306,6 +309,7 @@ export async function getOdds(fixtures = []) {
           + `?apiKey=${ODDS_KEY}&regions=eu&markets=h2h,totals&oddsFormat=decimal`;
         const resp = await fetchWithTimeout(url, {}, 20_000);
         restants = resp.headers.get('x-requests-remaining') ?? restants;
+        noterQuota(resp.headers);
 
         if (resp.status === 401) { console.warn('   ⚠️  Cotes: clé refusée (401)'); return out; }
         if (resp.status === 429) { console.warn('   ⚠️  Cotes: quota mensuel épuisé'); return out; }

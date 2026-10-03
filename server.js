@@ -20,6 +20,7 @@ import { runVictor }                from './victor/core.js';
 import { getFixturesOfDay }         from './victor/sources.js';
 import { getOddsEvents, sportDe, cacheLire as cotesDeVictor, cachesActifs } from './victor/odds.js';
 import { selectionsDuJour } from './victor/combines.js';
+import { noterQuota, etatQuota, sitePeutAcheter } from './victor/quota-cotes.js';
 import { creerCacheProxyCotes }     from './victor/cache-proxy-cotes.js';
 import { bilanVictor, bilanValeursMarche, valeursRecentes } from './victor/valeur-suivi.js';
 import { broadcastDaily }           from './bot/telegram.js';
@@ -298,10 +299,15 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
     const cle = `${sportKey}|${bookmakers && bookmakersValides(bookmakers) ? bookmakers : ''}`;
     const frais = cacheProxyCotes.frais(cle);
     if (frais) return res.set('X-Cotes-Cache', 'frais').json(frais);
-    if (!cacheProxyCotes.peutPayer()) {
+    // Deux plafonds : le budget du jour du site, et la réserve mensuelle de
+    // Victor (victor/quota-cotes.js). Au-delà, cotes périmées si on en a,
+    // sinon rien : l'analyse s'affiche alors sans chiffres, jamais inventés.
+    if (!cacheProxyCotes.peutPayer() || !sitePeutAcheter()) {
       const perime = cacheProxyCotes.perime(cle);
       if (perime) return res.set('X-Cotes-Cache', 'perime').json(perime);
-      return res.status(503).json({ error: 'Cotes momentanément indisponibles (quota du jour atteint)' });
+      return res.status(503).json({ error: sitePeutAcheter()
+        ? 'Cotes momentanément indisponibles (quota du jour atteint)'
+        : 'Cotes réservées aux analyses de Victor jusqu\'à la fin du mois' });
     }
 
     const params = new URLSearchParams({
@@ -315,6 +321,7 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
 
     const url = `https://api.the-odds-api.com/v4/sports/${encodeURIComponent(sportKey)}/odds/?${params}`;
     const response = await fetch(url);
+    noterQuota(response.headers);
 
     if (!response.ok) {
       return res.status(response.status).json({ error: 'Odds API HTTP ' + response.status });
@@ -455,6 +462,8 @@ app.get('/api/status', (req, res) => {
     liveApi: !!process.env.LIVE_API_KEY,
     apifootball: !!process.env.RAPIDAPI_KEY,
     model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    // Solde The Odds API connu (null tant qu'aucun appel depuis le démarrage).
+    cotes_quota: etatQuota(),
 
     // Quelle version tourne réellement ? Sans ce repère, on en était
     // réduit à deviner via l'uptime après chaque déploiement — et donc

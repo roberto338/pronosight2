@@ -50,7 +50,7 @@ on:
         required: true
         default: apercu
         type: choice
-        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod, site, essai-victor]
+        options: [etat, apercu, migration, backfill, backtest, sweep, audit, clv, historique, diagnostic, sondes, publiques, espn, essai-espn, sonde-clv, corriger-dc, prod, site, essai-victor, alias-espn]
       jours:
         description: "Backfill : nombre de jours à collecter"
         required: false
@@ -288,6 +288,16 @@ jobs:
           {
             echo '```'
             node scripts/essai-victor.js ${{ steps.choix.outputs.jours == '90' && '1' || steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
+      # Lecture seule, aucune clé : les vrais noms ESPN derrière les refus.
+      - name: Sonde des alias ESPN
+        if: steps.choix.outputs.etape == 'alias-espn'
+        run: |
+          {
+            echo '```'
+            node scripts/sonde-alias-espn.js "arg.1:Newells Old Boys" "bra.2:Nautico PE" "esp.2:SD Eibar" "bra.1:Atletico Mineiro" "bra.1:Bragantino-SP"
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
