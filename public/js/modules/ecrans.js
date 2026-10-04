@@ -137,16 +137,25 @@ export function htmlMesParis(paris = [], bilan, { bankrollInitiale = null, filtr
     .map(([k, l]) => `<button class="tab ${k === filtre ? 'active' : ''}" onclick="filtrerParis('${k}')">${l}</button>`).join('');
   const liste = paris.filter(p => filtre === 'tous' || p.resultat === filtre)
     .sort((a, b) => String(b.cree_le).localeCompare(String(a.cree_le)));
+  // Pourquoi un pari passé reste en attente : on le dit plutôt que de laisser croire à une panne.
+  const NOTE_AUTO = {
+    pari_illisible: 'Pari non reconnu automatiquement : choisis le résultat à la main.',
+    match_illisible: 'Match non reconnu (écris « Équipe A – Équipe B ») : choisis le résultat à la main.',
+    introuvable: 'Score introuvable dans nos sources : choisis le résultat à la main.',
+    non_trouve: 'Score pas encore disponible : nouvelle vérification automatique bientôt.',
+  };
   const ligne = (p) => {
     const g = gainNet(p);
     return `<div class="pari-ligne ${p.resultat}">
-    <div class="pari-ligne-haut"><div><div class="pari-match">${e(p.match)}</div><div class="pari-meta">${e(p.competition || '')}${p.competition ? ' · ' : ''}${e(String(p.date).split('-').reverse().join('/'))}</div></div>
+    <div class="pari-ligne-haut"><div><div class="pari-match">${e(p.match)}</div><div class="pari-meta">${e(p.competition || '')}${p.competition ? ' · ' : ''}${e(String(p.date).split('-').reverse().join('/'))}${p.score ? ` · score <b>${e(p.score)}</b>` : ''}</div></div>
       <div class="pari-gain">${g == null ? `${p.mise.toFixed(2).replace('.', ',')} € en jeu` : euros(g)}</div></div>
     <div class="pari-ligne-bas"><span class="pari-pari">${e(p.pari)}</span><span class="cote-puce mini"><b>${p.cote.toFixed(2)}</b></span>
       <select class="pari-resultat" onchange="reglerPari('${e(p.id)}', this.value)" aria-label="Résultat">
         ${Object.entries(lib).map(([k, l]) => `<option value="${k}"${k === p.resultat ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
       <button class="pari-suppr" onclick="supprimerPari('${e(p.id)}')" aria-label="Supprimer">${icone('croix', { taille: 15 })}</button></div>
+    ${p.regle_auto && p.resultat !== 'attente' ? `<div class="pari-auto">${icone('coche', { taille: 13, epaisseur: 3 })}Réglé automatiquement sur le score final</div>` : ''}
+    ${p.resultat === 'attente' && NOTE_AUTO[p.auto_statut] ? `<div class="pari-auto attente">${NOTE_AUTO[p.auto_statut]}</div>` : ''}
   </div>`;
   };
 
@@ -166,7 +175,7 @@ export function htmlMesParis(paris = [], bilan, { bankrollInitiale = null, filtr
   ${liste.length ? liste.map(ligne).join('')
     : vide('portefeuille', paris.length ? 'Aucun pari ici' : 'Aucun pari enregistré',
       'Après une analyse, une value ou un prono de Victor, touche « Je joue ce pari » : ta cote et ta mise sont enregistrées, et ton bilan se calcule tout seul.')}
-  ${paris.length ? `<div class="bk-actions"><button class="bouton-discret" onclick="exporterParis()">Exporter (CSV)</button><button class="bouton-discret danger" onclick="effacerParis()">Tout effacer</button></div>` : ''}
+  ${paris.length ? `<div class="bk-actions"><button class="bouton-discret" onclick="verifierResultats()">Vérifier les résultats</button><button class="bouton-discret" onclick="exporterParis()">Exporter (CSV)</button><button class="bouton-discret danger" onclick="effacerParis()">Tout effacer</button></div>` : ''}
 </div>`;
 }
 

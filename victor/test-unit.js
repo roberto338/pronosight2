@@ -1148,6 +1148,43 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('fusion : la fiche API-Football l\'emporte', fusion.length === 1 && fusion[0].source === 'api-football', true);
   verifie('fusion : elle garde la clé de cotes', fusion[0].sportKey, 'soccer_epl');
 
+  // ── Règlement automatique de « Mes paris » ──
+  const RG = await import('./reglement.js');
+  const finis = [
+    { home: 'Lens', away: 'Lille', homeGoals: 2, awayGoals: 1 },
+    { home: 'Getafe', away: 'Osasuna', homeGoals: 0, awayGoals: 0 },
+    { home: 'Arsenal', away: 'Chelsea', homeGoals: 1, awayGoals: 3 },
+  ];
+  verifie('règlement : match lu dans le texte', RG.equipesDuMatch('Lens – Lille').join('|'), 'Lens|Lille');
+  verifie('règlement : victoire domicile gagnée (code)', RG.regler({ id: 'a', match: 'Lens – Lille', pari_code: '1X2:HOME' }, finis).resultat, 'gagne');
+  verifie('règlement : pari relu dans le texte', RG.regler({ id: 'b', match: 'Getafe - Osasuna', pari: 'Moins de 2,5 buts' }, finis).resultat, 'gagne');
+  verifie('règlement : score vu du bon côté si match inversé', RG.regler({ id: 'c', match: 'Chelsea vs Arsenal', pari: 'Victoire Chelsea' }, finis).resultat, 'gagne');
+  verifie('règlement : score rendu', RG.regler({ id: 'c', match: 'Chelsea vs Arsenal', pari: 'Victoire Chelsea' }, finis).score, '3-1');
+  verifie('règlement : pari perdu', RG.regler({ id: 'd', match: 'Lens – Lille', pari: 'Les deux équipes ne marquent pas' }, finis).resultat, 'perdu');
+  verifie('règlement : match absent → attente', RG.regler({ id: 'e', match: 'Nice – Lyon', pari: 'Victoire Nice' }, finis).statut, 'non_trouve');
+  verifie('règlement : pari illisible → attente', RG.regler({ id: 'f', match: 'Lens – Lille', pari: 'Lens gagne et plus de 2,5 buts' }, finis).statut, 'pari_illisible');
+  verifie('règlement : combiné gagné', RG.regler({ id: 'g', match: 'Lens – Lille + Getafe – Osasuna', pari: 'Victoire Lens + Moins de 2,5 buts' }, finis).resultat, 'gagne');
+  verifie('règlement : combiné perdu dès une sélection perdue', RG.regler({ id: 'h', legs: [
+    { match: 'Lens – Lille', pari_code: '1X2:HOME' }, { match: 'Arsenal – Chelsea', pari_code: '1X2:HOME' }] }, finis).resultat, 'perdu');
+  verifie('règlement : combiné incomplet → attente', RG.regler({ id: 'i', legs: [
+    { match: 'Lens – Lille', pari_code: '1X2:HOME' }, { match: 'Nice – Lyon', pari_code: '1X2:HOME' }] }, finis).statut, 'non_trouve');
+  verifie('règlement : deux candidats → on ne devine pas', RG.trouverScore('Lens', 'Lille', [...finis, { home: 'Lens', away: 'Lille', homeGoals: 0, awayGoals: 0 }]), null);
+
+  const PX = await import('../public/js/modules/paris.js');
+  verifie('mes paris : code depuis le marché d\'une analyse', [PX.codeDepuisMarche('1'), PX.codeDepuisMarche('Over 2.5'), PX.codeDepuisMarche('BTTS')].join(','), '1X2:HOME,OU:OVER:2.5,BTTS:YES');
+  const nowR = new Date('2026-10-04T12:00:00Z');
+  const lst = [
+    { id: '1', date: '2026-10-03', resultat: 'attente' }, { id: '2', date: '2026-10-05', resultat: 'attente' },
+    { id: '3', date: '2026-09-25', resultat: 'attente' }, { id: '4', date: '2026-10-02', resultat: 'gagne' },
+    { id: '5', date: '2026-10-01', resultat: 'attente', auto_statut: 'pari_illisible' },
+  ];
+  verifie('mes paris : seuls les paris passés en attente sont soumis', PX.parisARegler(lst, nowR).map(p => p.id).join(','), '1,3');
+  const app = PX.appliquerReglements(lst, [{ id: '1', resultat: 'gagne', score: '2-1' }, { id: '3', statut: 'non_trouve' }], nowR);
+  verifie('mes paris : résultat appliqué', [app.regles, app.paris[0].resultat, app.paris[0].score, app.paris[0].regle_auto].join(','), '1,gagne,2-1,true');
+  verifie('mes paris : introuvable après 3 jours', app.paris[2].auto_statut, 'introuvable');
+  const pc = PX.creerPari({ match: 'Lens – Lille', pari: 'Victoire Lens', cote: 2, mise: 5, equipe_a: 'Lens', equipe_b: 'Lille', pari_code: '1X2:HOME' }).pari;
+  verifie('mes paris : identité du match conservée', [pc.equipe_a, pc.equipe_b, pc.pari_code].join('|'), 'Lens|Lille|1X2:HOME');
+
   // ── Alias ESPN relevés le 03/10 ──
   const ES = await import('./espn.js');
   const eq = (id, ...noms) => ({ id, noms });

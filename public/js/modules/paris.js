@@ -15,7 +15,8 @@ export const RESULTATS = ['attente', 'gagne', 'perdu', 'rembourse'];
 const nombre = (x) => { const n = Number(String(x ?? '').replace(',', '.')); return Number.isFinite(n) ? n : NaN; };
 
 /** Valide et normalise une saisie. Rend { pari } ou { erreur }. */
-export function creerPari({ match = '', competition = '', pari = '', cote, mise, date = null, source = 'perso' } = {}, maintenant = new Date()) {
+export function creerPari({ match = '', competition = '', pari = '', cote, mise, date = null, source = 'perso',
+  equipe_a = null, equipe_b = null, pari_code = null, legs = null } = {}, maintenant = new Date()) {
   const c = nombre(cote), m = nombre(mise);
   if (!String(match).trim()) return { erreur: 'Indique le match.' };
   if (!String(pari).trim()) return { erreur: 'Indique ton pari.' };
@@ -33,8 +34,56 @@ export function creerPari({ match = '', competition = '', pari = '', cote, mise,
       mise: Math.round(m * 100) / 100,
       source,
       resultat: 'attente',
+      // Ce qui permet de régler le pari tout seul sur le vrai score.
+      // Absents d'un pari saisi à la main : le serveur relit alors le texte.
+      ...(equipe_a && equipe_b ? { equipe_a: String(equipe_a).slice(0, 80), equipe_b: String(equipe_b).slice(0, 80) } : {}),
+      ...(pari_code ? { pari_code: String(pari_code).slice(0, 40) } : {}),
+      ...(Array.isArray(legs) && legs.length ? { legs: legs.slice(0, 6).map(l => ({
+        match: String(l.match || '').slice(0, 120), pari: String(l.pari || '').slice(0, 120),
+        ...(l.pari_code ? { pari_code: String(l.pari_code).slice(0, 40) } : {}),
+      })) } : {}),
     },
   };
+}
+
+/** Code de pari d'une analyse (« 1 », « X », « Over 2.5 »…) ou null. Pur. */
+export function codeDepuisMarche(marche = '') {
+  const m = String(marche).toLowerCase().trim();
+  if (m === '1') return '1X2:HOME';
+  if (m === 'x' || m === 'n' || m === 'nul') return '1X2:DRAW';
+  if (m === '2') return '1X2:AWAY';
+  const ou = m.match(/(over|under|plus|moins)[^0-9]*(\d+(?:[.,]\d+)?)/);
+  if (ou) return `OU:${/under|moins/.test(ou[1]) ? 'UNDER' : 'OVER'}:${parseFloat(ou[2].replace(',', '.'))}`;
+  if (/btts|les deux/.test(m)) return /non|no\b/.test(m) ? 'BTTS:NO' : 'BTTS:YES';
+  return null;
+}
+
+/** Paris en attente dont le match est passé : à soumettre au règlement automatique. */
+export function parisARegler(paris = [], maintenant = new Date()) {
+  const aujourdhui = maintenant.toISOString().slice(0, 10);
+  const definitif = new Set(['match_illisible', 'pari_illisible', 'introuvable']);
+  return paris.filter(p => p.resultat === 'attente' && p.date <= aujourdhui && !definitif.has(p.auto_statut));
+}
+
+/**
+ * Applique les réponses du serveur. Rend { paris, regles }.
+ * Un match introuvable trois jours après la date du pari ne sera plus cherché.
+ */
+export function appliquerReglements(paris = [], resultats = [], maintenant = new Date()) {
+  const parId = new Map(resultats.map(r => [r.id, r]));
+  let regles = 0;
+  const limite = new Date(maintenant.getTime() - 3 * 864e5).toISOString().slice(0, 10);
+  const sortie = paris.map(p => {
+    const r = parId.get(p.id);
+    if (!r || p.resultat !== 'attente') return p;
+    if (r.resultat === 'gagne' || r.resultat === 'perdu') {
+      regles++;
+      return { ...p, resultat: r.resultat, score: r.score || null, regle_auto: true, auto_statut: null };
+    }
+    const statut = r.statut === 'non_trouve' && p.date < limite ? 'introuvable' : r.statut;
+    return { ...p, auto_statut: statut || null };
+  });
+  return { paris: sortie, regles };
 }
 
 /** Gain net d'un pari réglé : +mise×(cote−1), −mise, ou 0. Null s'il est en attente. */
@@ -94,4 +143,4 @@ export function versCsv(paris = []) {
   return '﻿' + [entetes.join(';'), ...lignes].join('\n');
 }
 
-export default { RESULTATS, creerPari, gainNet, bilanParis, courbeBankroll, versCsv };
+export default { RESULTATS, creerPari, codeDepuisMarche, parisARegler, appliquerReglements, gainNet, bilanParis, courbeBankroll, versCsv };

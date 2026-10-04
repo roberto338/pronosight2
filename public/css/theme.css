@@ -503,3 +503,6 @@ body.light-mode .bouton-jouer{ border-color:var(--accent); }
 .cb-choix.pris .cb-case{ background:var(--volt); border-color:var(--volt); color:var(--sur-volt); }
 .live-badge[hidden]{ display:none !important; }
 .cb-totaux b{ font-size:20px; white-space:nowrap; }
+.pari-auto{ display:flex; align-items:center; gap:6px; margin-top:8px; font-size:12px; font-weight:700; color:var(--gagne); }
+.pari-auto.attente{ color:var(--muted); font-weight:600; }
+.pari-meta b{ color:var(--text); }
