@@ -93,6 +93,11 @@ export async function addRecapVeilleJob(data = {}) {
   return addJob('recap-veille', data, { priority: 4, dedupeKey: `recap-veille-${today()}` });
 }
 
+// type : 'semaine' ou 'mois'.
+export async function addBilanPeriodeJob(data = {}) {
+  return addJob('bilan-periode', data, { priority: 4, dedupeKey: `bilan-${data.type}-${today()}` });
+}
+
 export async function addWeeklyReviewJob(data = {}) {
   return addJob('weekly-review', data, { priority: 5 });
 }

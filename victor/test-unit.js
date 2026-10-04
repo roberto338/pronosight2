@@ -1332,6 +1332,68 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
+// ══════════════════════════════════════════════
+{
+  const VS = await import('./valeur-suivi.js');
+  const RC = await import('./recap.js');
+  const { texteBilanPeriode, texteBilan } = await import('../bot/telegram.js');
+  const EC = await import('../public/js/modules/ecrans.js');
+  const maintenant = new Date('2026-10-05T08:00:00Z');            // lundi 5 octobre, Paris
+  const rows = [
+    { date: '2025-09-20', gagne: true, cote: '2.00' },             // plus d'un an : seulement dans le total
+    { date: '2026-03-10', gagne: false, cote: '1.80' },            // 7 mois : dans l'année, pas dans les 6 mois
+    { date: '2026-09-10', gagne: true, cote: '1.50' },             // 30 jours
+    { date: '2026-09-22', gagne: false, cote: '2.00' },            // semaine d'avant
+    { date: '2026-09-29', gagne: true, cote: '2.50' },             // semaine écoulée
+    { date: '2026-10-04', gagne: false, cote: '2.00' },            // semaine écoulée (dimanche)
+    { date: '2026-10-04', gagne: null, cote: '2.00' },             // pas noté : ignoré
+  ];
+  const f = VS.resumerFiabilite(rows.slice(4, 6));
+  verifie('fiabilité : réussite', f.taux, 0.5);
+  verifie('fiabilité : ce que prévoyaient les cotes', Number(f.attendu.toFixed(4)), 0.45);
+  verifie('fiabilité : rendement à mise fixe', Number(f.rendement.toFixed(4)), 0.25);
+  verifie('fiabilité : vide', VS.resumerFiabilite([]).taux, null);
+  const per = VS.bilanParPeriodes(rows, maintenant);
+  verifie('périodes : 7 derniers jours', per.semaine.n, 2);
+  verifie('périodes : 30 derniers jours', per.mois.n, 4);
+  verifie('périodes : 6 derniers mois', per.sixMois.n, 4);
+  verifie('périodes : 12 derniers mois', per.annee.n, 5);
+  verifie('périodes : depuis le début', per.total.n, 6);
+  const evo = VS.evolutionMensuelle(rows, maintenant);
+  verifie('mois par mois : 12 mois, le mois en cours en dernier', [evo.length, evo[11].mois, evo[0].mois].join(','), '12,2026-10,2025-11');
+  verifie('mois par mois : septembre', evo[10].n, 3);
+  verifie('mois par mois : mois sans pari', evo[1].n, 0);
+
+  verifie('semaine écoulée : lundi → du lundi au dimanche', JSON.stringify(RC.bornesPeriode('semaine', maintenant)),
+    JSON.stringify({ type: 'semaine', debut: '2026-09-28', fin: '2026-10-04', precedent: { debut: '2026-09-21', fin: '2026-09-27' } }));
+  verifie('semaine écoulée : un dimanche, la semaine en cours ne compte pas', RC.bornesPeriode('semaine', new Date('2026-10-04T08:00:00Z')).fin, '2026-09-27');
+  verifie('mois écoulé : janvier → décembre de l\'année d\'avant', JSON.stringify(RC.bornesPeriode('mois', new Date('2026-01-01T09:00:00Z'))),
+    JSON.stringify({ type: 'mois', debut: '2025-12-01', fin: '2025-12-31', precedent: { debut: '2025-11-01', fin: '2025-11-30' } }));
+  verifie('mois écoulé : février', RC.bornesPeriode('mois', new Date('2026-03-01T09:00:00Z')).fin, '2026-02-28');
+
+  const b = RC.bornesPeriode('semaine', maintenant);
+  const ds = { ...b, courant: VS.bilanEntre(rows, b.debut, b.fin), avant: VS.bilanEntre(rows, b.precedent.debut, b.precedent.fin), periodes: per };
+  const ts = texteBilanPeriode(ds);
+  verifie('message semaine : titre et dates', ts.includes('BILAN DE LA SEMAINE') && ts.includes('du 28/09 au 04/10'), true);
+  verifie('message semaine : réussite et cotes', ts.includes('Réussite *50 %*') && ts.includes('prévoyaient 45 %'), true);
+  verifie('message semaine : comparé à la semaine d\'avant', ts.includes('↗️ Mieux') && ts.includes('−100.0 %'), true);
+  verifie('message semaine : fiabilité dans la durée', ['30 derniers jours', '6 derniers mois', '12 derniers mois', 'Depuis le début'].every(x => ts.includes(x)), true);
+  verifie('message semaine : petit échantillon signalé', ts.includes('Moins de 30 paris'), true);
+  verifie('message semaine : perdant dit tel quel', texteBilanPeriode({ ...ds, courant: VS.resumerFiabilite([rows[3]]) }).includes('Les bookmakers ont eu raison'), true);
+  const tm = texteBilanPeriode({ ...RC.bornesPeriode('mois', maintenant), courant: per.mois, avant: VS.resumerFiabilite([]), periodes: per });
+  verifie('message mois : nom du mois', tm.includes('BILAN DU MOIS') && tm.includes('septembre 2026'), true);
+  verifie('message mois : sans mois d\'avant, pas de comparaison', tm.includes('que le mois d'), false);
+  verifie('/bilan : fiabilité par période', texteBilan({ victor: { ...VS.resumerFiabilite(rows), periodes: per } }).includes('7 derniers jours : 2 paris'), true);
+
+  const hf = EC.htmlFiabilite({ ...VS.resumerFiabilite(rows), periodes: per, mois: evo });
+  verifie('écran Victor : 5 périodes', (hf.match(/fi-periode/g) || []).length, 5);
+  verifie('écran Victor : petit échantillon grisé', hf.includes('fi-ligne maigre'), true);
+  verifie('écran Victor : mois par mois depuis le premier noté (mars → octobre)', (hf.match(/class="fi-col/g) || []).length, 8);
+  verifie('écran Victor : rien sans pari noté', EC.htmlFiabilite({ n: 0, periodes: VS.bilanParPeriodes([], maintenant) }), '');
+}
+
+// ══════════════════════════════════════════════
 console.log(`\n${'═'.repeat(46)}`);
 if (ko === 0) {
   console.log(`✅ ${ok} test(s) passé(s), 0 échec`);

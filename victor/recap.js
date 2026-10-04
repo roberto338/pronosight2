@@ -9,7 +9,7 @@
 // bilan cumulé. Gains comme pertes : c'est ce qui rend le service crédible.
 
 import { query } from '../db/database.js';
-import { bilanVictor, bilanValeursMarche } from './valeur-suivi.js';
+import { bilanVictor, bilanValeursMarche, parisNotesVictor, bilanEntre, bilanParPeriodes, jourParis, decalerJour } from './valeur-suivi.js';
 
 /** Date ISO de la veille, en heure de Paris. */
 export function veilleParis(maintenant = new Date()) {
@@ -31,4 +31,48 @@ export async function donneesVeille(dateISO = veilleParis()) {
   return { date: dateISO, pronos, valeurs, bilan: { victor, marche } };
 }
 
-export default { veilleParis, donneesVeille };
+// ── Bilan de la semaine et du mois écoulés ──
+
+/** Premier et dernier jour d'un mois « AAAA-MM ». Pur. */
+function bornesMois(a, m) {
+  if (m === 0) { m = 12; a--; }
+  const debut = `${a}-${String(m).padStart(2, '0')}-01`;
+  const suivant = m === 12 ? `${a + 1}-01-01` : `${a}-${String(m + 1).padStart(2, '0')}-01`;
+  return { debut, fin: decalerJour(suivant, -1) };
+}
+
+/**
+ * La dernière période TERMINÉE et celle d'avant, pour comparer. Pur.
+ *  - semaine : du lundi au dimanche ;
+ *  - mois    : le mois civil.
+ */
+export function bornesPeriode(type, maintenant = new Date()) {
+  const auj = jourParis(maintenant);
+  if (type === 'semaine') {
+    const jour = new Date(`${auj}T12:00:00Z`).getUTCDay();          // 0 = dimanche
+    const fin = decalerJour(auj, -(jour === 0 ? 7 : jour));          // dernier dimanche passé
+    const debut = decalerJour(fin, -6);
+    return { type, debut, fin, precedent: { debut: decalerJour(debut, -7), fin: decalerJour(debut, -1) } };
+  }
+  if (type === 'mois') {
+    const [a, m] = auj.split('-').map(Number);
+    const courant = bornesMois(a, m - 1);
+    const [a2, m2] = courant.debut.split('-').map(Number);
+    return { type, ...courant, precedent: bornesMois(a2, m2 - 1) };
+  }
+  throw new Error(`Période inconnue : ${type}`);
+}
+
+/** Tout ce qu'il faut pour le bilan de la semaine ou du mois écoulé. */
+export async function donneesPeriode(type, maintenant = new Date()) {
+  const b = bornesPeriode(type, maintenant);
+  const rows = await parisNotesVictor();
+  return {
+    ...b,
+    courant: bilanEntre(rows, b.debut, b.fin),
+    avant: bilanEntre(rows, b.precedent.debut, b.precedent.fin),
+    periodes: bilanParPeriodes(rows, maintenant),
+  };
+}
+
+export default { veilleParis, donneesVeille, bornesPeriode, donneesPeriode };

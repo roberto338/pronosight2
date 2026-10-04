@@ -179,6 +179,46 @@ export function htmlMesParis(paris = [], bilan, { bankrollInitiale = null, filtr
 </div>`;
 }
 
+// ── VICTOR : sa fiabilité semaine après semaine, mois après mois ─
+const SEUIL_ECHANTILLON = 30;   // même seuil que victor/valeur-suivi.js
+const MOIS_COURTS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+const pctRond = (x) => (x == null ? '—' : `${Math.round(x * 100)} %`);
+const pctSigneRond = (x) => `${x >= 0 ? '+' : '−'}${Math.round(Math.abs(x) * 100)} %`;
+
+export function htmlFiabilite(victor) {
+  const p = victor?.periodes;
+  if (!p?.total?.n) return '';
+  const COURT = { semaine: '7 jours', mois: '30 jours', sixMois: '6 mois', annee: '1 an', total: 'Depuis le début' };
+  const ligne = (cle) => { const b = p[cle] || {}; return `<div class="fi-ligne ${b.n && b.n < SEUIL_ECHANTILLON ? 'maigre' : ''}">
+    <span class="fi-periode">${COURT[cle]}</span>
+    <span>${b.n || '—'}</span><span>${b.n ? pctRond(b.taux) : '—'}</span><span>${b.n ? pctRond(b.attendu) : '—'}</span>
+    <b class="${b.rendement > 0 ? 'pos' : b.rendement < 0 ? 'neg' : ''}">${b.n ? pct(b.rendement) : '—'}</b></div>`; };
+
+  // Mois par mois, à partir du premier mois où Victor a été noté.
+  const mois = victor.mois || [];
+  const debut = mois.findIndex(m => m.n > 0);
+  const suivis = debut === -1 ? [] : mois.slice(debut);
+  const barres = suivis.filter(m => m.n > 0).length >= 2 ? `<div class="fi-sous-titre">Rendement mois par mois</div>
+  <div class="fi-mois">${suivis.map(m => {
+    const h = m.n ? Math.max(4, Math.min(1, Math.abs(m.rendement) / 0.4) * 100) : 0;
+    const sens = m.rendement >= 0 ? 'pos' : 'neg';
+    return `<div class="fi-col ${m.n && m.n < SEUIL_ECHANTILLON ? 'maigre' : ''}">
+      <b class="${m.n ? sens : ''}">${m.n ? pctSigneRond(m.rendement) : '—'}</b>
+      <div class="fi-zone">${m.n ? `<div class="fi-barre ${sens}" style="height:${(h / 2).toFixed(1)}%"></div>` : ''}</div>
+      <span>${MOIS_COURTS[Number(m.mois.slice(5, 7)) - 1]}</span><small>${m.n ? `${m.n} paris` : ''}</small></div>`;
+  }).join('')}</div>` : '';
+
+  return `<div class="card">
+  <div class="titre-section">${icone('hausse')}Sa fiabilité dans le temps</div>
+  <div class="fi-table">
+    <div class="fi-ligne fi-entete"><span>Période</span><span>Paris</span><span>Gagnés</span><span>Cotes</span><span>Rendement</span></div>
+    ${['semaine', 'mois', 'sixMois', 'annee', 'total'].map(ligne).join('')}
+  </div>
+  <div class="vm-note">« Cotes » : la part de paris que les cotes du bookmaker donnaient gagnants. Quand Victor gagne plus souvent que ça, il bat le bookmaker. En grisé : moins de ${SEUIL_ECHANTILLON} paris, trop peu pour conclure.</div>
+  ${barres}
+</div>`;
+}
+
 // ── VICTOR : son bilan, pas une deuxième liste de pronos ─
 export function htmlVictor({ stats = null, bilan = null, patterns = [], historique = [], aujourdhui = 0 } = {}) {
   const g = stats?.global || {};
@@ -197,6 +237,7 @@ export function htmlVictor({ stats = null, bilan = null, patterns = [], historiq
   <div class="vm-note">Réussite : sur tous les pronos notés. Rendement : uniquement sur les pronos publiés à une cote du marché, mise fixe, pertes comprises. Un taux de réussite élevé sur des petites cotes peut perdre de l'argent : c'est le rendement qui compte.</div>
   ${aujourdhui ? `<button class="dash-cta" style="width:100%;margin-top:14px" onclick="switchNav('prono')">${aujourdhui > 1 ? `Voir ses ${aujourdhui} pronos du jour` : 'Voir son prono du jour'}</button>` : ''}
 </div>
+${htmlFiabilite(roi)}
 ${sports.length ? `<div class="card"><div class="titre-section">${icone('stats')}Par sport</div>
   ${sports.map(s => `<div class="an-forme"><span>${e(s.sport || 'Autre')}</span><span>${Number(s.corrects)}/${Number(s.total)} · <b>${Math.round(Number(s.taux))} %</b></span></div>`).join('')}</div>` : ''}
 ${notes.length ? `<div class="card"><div class="titre-section">${icone('historique')}Derniers pronos notés</div>
@@ -213,4 +254,4 @@ ${tendances.length ? `<div class="card"><div class="titre-section">${icone('haus
     <b class="tendance-pct">${Math.round(Number(p.taux_confirmation) || 0)} %</b></div>`).join('')}</div>` : ''}`;
 }
 
-export default { htmlLive, htmlAujourdhui, filtrerJour, competitionsConnues, htmlCompetitions, htmlMesParis, htmlVictor, FILTRES_JOUR };
+export default { htmlLive, htmlAujourdhui, filtrerJour, competitionsConnues, htmlCompetitions, htmlMesParis, htmlFiabilite, htmlVictor, FILTRES_JOUR };
