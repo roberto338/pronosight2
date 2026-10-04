@@ -1148,6 +1148,26 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   verifie('fusion : la fiche API-Football l\'emporte', fusion.length === 1 && fusion[0].source === 'api-football', true);
   verifie('fusion : elle garde la clé de cotes', fusion[0].sportKey, 'soccer_epl');
 
+  // ── Bilan des pronos de la veille (Telegram, 10h) ──
+  const { texteRecapVeille } = await import('../bot/telegram.js');
+  const RC = await import('./recap.js');
+  verifie('veille : la veille en heure de Paris', RC.veilleParis(new Date('2026-10-04T23:30:00Z')), '2026-10-04');
+  verifie('veille : un matin à Paris', RC.veilleParis(new Date('2026-10-04T08:00:00Z')), '2026-10-03');
+  const rv = texteRecapVeille({ date: '2026-10-03', pronos: [
+    { equipe_a: 'Lens', equipe_b: 'Lille', pronostic_principal: 'Victoire Lens', pari_code: '1X2:HOME', cote_estimee: '2.45', cote_confirmee: true, pronostic_correct: true, score_reel: '2-1' },
+    { equipe_a: 'Getafe', equipe_b: 'Osasuna', pronostic_principal: 'Plus de 2,5 buts', pari_code: 'OU:OVER:2.5', cote_estimee: '2.10', cote_confirmee: true, pronostic_correct: false, score_reel: '0-0' },
+    { equipe_a: 'Flamengo', equipe_b: 'Santos', pronostic_principal: 'Victoire Flamengo', pari_code: '1X2:HOME', cote_estimee: '1.60', cote_confirmee: true, pronostic_correct: null } ],
+    valeurs: [{ match: 'A vs B', cote: 3.2, gagne: false }, { match: 'C vs D', cote: 2.2, gagne: true }],
+    bilan: { victor: { n: 66, rendement: -0.041 }, marche: { total: { n: 2, rendement: 0.1 } } } });
+  verifie('veille : chaque prono avec son résultat', ['✅ *Lens', '❌ *Getafe', '⏳ *Flamengo'].every(x => rv.includes(x)), true);
+  verifie('veille : score affiché', rv.includes('2-1') && rv.includes('0-0'), true);
+  verifie('veille : prono en attente signalé', rv.includes('résultat pas encore connu') && rv.includes('(1 en attente)'), true);
+  verifie('veille : gain à mise fixe (+1,45 − 1)', rv.includes('+0.45 u'), true);
+  verifie('veille : values de la veille', rv.includes('1/2'), true);
+  verifie('veille : bilan cumulé négatif affiché', rv.includes('−4.1 %'), true);
+  verifie('veille : mention de prévention', rv.includes('09 74 75 13 13') || rv.includes('18 ans'), true);
+  verifie('veille : jour sans prono', texteRecapVeille({ date: '2026-10-03', pronos: [], valeurs: [], bilan: {} }).includes('aucun prono'), true);
+
   // ── Règlement automatique de « Mes paris » ──
   const RG = await import('./reglement.js');
   const finis = [

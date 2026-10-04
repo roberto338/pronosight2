@@ -89,6 +89,10 @@ export async function addCheckResultsJob(data = {}) {
   return addJob('check-results', data, { priority: 3, dedupeKey: `check-results-${today()}` });
 }
 
+export async function addRecapVeilleJob(data = {}) {
+  return addJob('recap-veille', data, { priority: 4, dedupeKey: `recap-veille-${today()}` });
+}
+
 export async function addWeeklyReviewJob(data = {}) {
   return addJob('weekly-review', data, { priority: 5 });
 }

@@ -10,6 +10,7 @@ import {
   addPrematchJob,
   addValueJob,
   addCheckResultsJob,
+  addRecapVeilleJob,
   addWeeklyReviewJob,
   addHeartbeatJob,
 } from '../queues/victorQueue.js';
@@ -57,6 +58,16 @@ const jobResultats = cron.schedule('30 23 * * *', async () => {
 }, { timezone: 'Europe/Paris', scheduled: false });
 
 // ══════════════════════════════════════════════
+// JOB 3 bis — Bilan des pronos de la veille (10h00 chaque jour)
+// ══════════════════════════════════════════════
+// 10h et non 7h : les matchs d'Amérique du Sud finissent vers 4-5h (Paris),
+// et les sources mettent un moment à publier les scores.
+const jobRecapVeille = cron.schedule('0 10 * * *', async () => {
+  console.log(`\n📒 [${now()}] Victor — Ajout job bilan de la veille...`);
+  await enqueue('recap-veille', addRecapVeilleJob, { source: 'cron-recap' });
+}, { timezone: 'Europe/Paris', scheduled: false });
+
+// ══════════════════════════════════════════════
 // JOB 4 — Review hebdomadaire (dimanche 01h00)
 // ══════════════════════════════════════════════
 const jobHebdo = cron.schedule('0 1 * * 0', async () => {
@@ -88,6 +99,8 @@ export function startScheduler() {
   console.log('   Job Soir      (13h00 Paris) démarré');
   jobResultats.start();
   console.log('   Job Résultats (23h30 Paris) démarré');
+  jobRecapVeille.start();
+  console.log('   Job Bilan veille (10h00 Paris) démarré');
   jobHebdo.start();
   console.log('   Job Hebdo     (Dim 01h00 Paris) démarré');
   jobHeartbeat.start();

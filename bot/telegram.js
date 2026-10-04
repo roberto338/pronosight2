@@ -134,6 +134,62 @@ export function texteBilan({ victor = [], marche = null } = {}) {
   return t;
 }
 
+/**
+ * Le bilan des pronos de la veille, un par un. Pur (testé sans Telegram).
+ * @param {{date, pronos, valeurs, bilan: {victor, marche}}} d  voir victor/recap.js
+ */
+export function texteRecapVeille(d) {
+  const pct = (x) => (x == null ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)} %`);
+  const u = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)} u`;
+  const jour = String(d.date).split('-').reverse().slice(0, 2).join('/');
+  const icone = (g) => (g === true ? '✅' : g === false ? '❌' : '⏳');
+  let t = `📒 *LES PRONOS D'HIER — ${esc(jour)}*\n━━━━━━━━━━━━━━━\n`;
+
+  if (d.pronos?.length) {
+    for (const p of d.pronos) {
+      const cote = Number(p.cote_estimee) > 1 ? ` @ ${Number(p.cote_estimee).toFixed(2)}` : '';
+      t += `${icone(p.pronostic_correct)} *${esc(p.equipe_a)} – ${esc(p.equipe_b)}*\n`
+        + `    ${esc(p.pronostic_principal)}${esc(cote)}${p.score_reel ? ` · ${esc(p.score_reel)}` : p.pronostic_correct == null ? ' · résultat pas encore connu' : ''}\n`;
+    }
+    const n = d.pronos.length;
+    const g = d.pronos.filter(p => p.pronostic_correct === true).length;
+    const notes = d.pronos.filter(p => p.pronostic_correct != null).length;
+    const comptes = d.pronos.filter(p => p.pronostic_correct != null && p.cote_confirmee
+      && Number(p.cote_estimee) > 1 && !String(p.pari_code || '').startsWith('DC:'));
+    const profit = comptes.reduce((a, p) => a + (p.pronostic_correct ? Number(p.cote_estimee) - 1 : -1), 0);
+    t += `\n🎙️ Victor hier : *${g}/${notes}* gagné${g > 1 ? 's' : ''}${notes < n ? ` (${n - notes} en attente)` : ''}`
+      + `${comptes.length ? ` · ${esc(u(profit))} à mise fixe` : ''}\n`;
+  } else {
+    t += `🎙️ Victor n'a publié aucun prono hier.\n`;
+  }
+
+  const notees = (d.valeurs || []).filter(v => v.gagne === true || v.gagne === false);
+  if (d.valeurs?.length) {
+    const gv = notees.filter(v => v.gagne).length;
+    const pv = notees.reduce((a, v) => a + (v.gagne ? Number(v.cote) - 1 : -1), 0);
+    t += `📈 Values hier : *${gv}/${notees.length}* gagnée${gv > 1 ? 's' : ''}`
+      + `${notees.length ? ` · ${esc(u(pv))}` : ''}${notees.length < d.valeurs.length ? ` (${d.valeurs.length - notees.length} en attente)` : ''}\n`;
+  }
+
+  const bv = d.bilan?.victor, bm = d.bilan?.marche?.total;
+  if (bv?.n || bm?.n) {
+    t += `\n📊 *Depuis le début* (mise fixe, cotes de marché)\n`;
+    if (bv?.n) t += `Victor : ${esc(pct(bv.rendement))} sur ${bv.n} paris\n`;
+    if (bm?.n) t += `Values : ${esc(pct(bm.rendement))} sur ${bm.n} paris\n`;
+  }
+  t += `\n_${esc('Les pertes sont comptées comme les gains. Résultats passés : aucune garantie de gain.')}_\n_${esc(MENTION_PREVENTION)}_`;
+  return t;
+}
+
+/** Envoie le bilan de la veille sur le canal. Silencieux sans bot. */
+export async function sendRecapVeille(donnees) {
+  if (!bot || !CHANNEL_ID || !donnees) return false;
+  if (!donnees.pronos?.length && !donnees.valeurs?.length) return false;
+  await send(CHANNEL_ID, texteRecapVeille(donnees));
+  console.log(`📒 Bilan de la veille (${donnees.date}) envoyé sur Telegram`);
+  return true;
+}
+
 export async function broadcastDaily(victorData) {
   // Ne JAMAIS sortir en silence : une env var manquante rendait tout le
   // système muet sans la moindre trace dans les logs.
@@ -435,9 +491,23 @@ if (bot && process.env.NODE_ENV !== 'production') {
         `/best — Top 3 confiance Élevé\n` +
         `/stats — Performances du jour\n` +
         `/value — Values de marché du jour\n` +
+        `/hier — Résultats des pronos d'hier\n` +
         `/bilan — Bilan vérifiable depuis le début\n` +
         `/aide — Cette aide`
       );
+    });
+
+    // /hier — les pronos de la veille, un par un, avec leur résultat
+    bot.onText(/\/hier/, async (msg) => {
+      try {
+        const { donneesVeille } = await import('../victor/recap.js');
+        const d = await donneesVeille();
+        await send(msg.chat.id, d.pronos.length || d.valeurs.length
+          ? texteRecapVeille(d)
+          : 'ℹ️ Aucun prono ni value publiés hier.');
+      } catch (err) {
+        await send(msg.chat.id, `❌ Erreur: ${err.message}`);
+      }
     });
 
     // /bilan — le bilan vérifiable, tel quel, sans arrondi flatteur
