@@ -17,9 +17,10 @@ import {
 import { startScheduler }          from './cron/scheduler.js';
 import { query as dbQuery }         from './db/database.js';
 import { runVictor }                from './victor/core.js';
-import { getFixturesOfDay }         from './victor/sources.js';
+import { getFixturesOfDay, getResultsOfDay } from './victor/sources.js';
 import { getOddsEvents, sportDe, cacheLire as cotesDeVictor, cachesActifs } from './victor/odds.js';
 import { selectionsDuJour } from './victor/combines.js';
+import { regler } from './victor/reglement.js';
 import { noterQuota, etatQuota, sitePeutAcheter } from './victor/quota-cotes.js';
 import { creerCacheProxyCotes }     from './victor/cache-proxy-cotes.js';
 import { bilanVictor, bilanValeursMarche, valeursRecentes } from './victor/valeur-suivi.js';
@@ -683,6 +684,44 @@ app.get('/api/combines/selections', generalLimiter, async (req, res) => {
   } catch (err) {
     console.error('[Combinés]', err.message);
     res.status(500).json({ error: 'Sélections indisponibles' });
+  }
+});
+
+// ── Règlement automatique de « Mes paris » sur les vrais scores ──
+// Les résultats d'un jour sont mis en cache : un jour passé ne change plus,
+// et chaque lecture coûte des requêtes aux sources (API-Football : 100/jour).
+const _cacheResultats = new Map();   // dateISO -> { ts, finis }
+async function resultatsDu(dateISO) {
+  const recent = Date.now() - Date.parse(`${dateISO}T00:00:00Z`) < 2 * 864e5;
+  const ttl = recent ? 15 * 60 * 1000 : 12 * 3600 * 1000;
+  const c = _cacheResultats.get(dateISO);
+  if (c && Date.now() - c.ts < ttl) return c.finis;
+  const finis = await getResultsOfDay(dateISO).catch(() => []);
+  _cacheResultats.set(dateISO, { ts: Date.now(), finis });
+  return finis;
+}
+
+app.post('/api/paris/regler', generalLimiter, async (req, res) => {
+  try {
+    const aujourdhui = new Date().toISOString().slice(0, 10);
+    const paris = (Array.isArray(req.body?.paris) ? req.body.paris : []).slice(0, 40)
+      .filter(p => p && typeof p.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.date || '') && p.date <= aujourdhui);
+    // Le jour du pari et le lendemain (matchs du soir en heure UTC) ; 7 jours distincts au plus.
+    const jours = [...new Set(paris.flatMap(p => {
+      const lendemain = new Date(Date.parse(`${p.date}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+      return lendemain <= aujourdhui ? [p.date, lendemain] : [p.date];
+    }))].sort().slice(-7);
+    const parJour = new Map();
+    for (const j of jours) parJour.set(j, await resultatsDu(j));
+    const resultats = paris.map(p => {
+      const lendemain = new Date(Date.parse(`${p.date}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+      const finis = [...(parJour.get(p.date) || []), ...(parJour.get(lendemain) || [])];
+      return regler(p, finis);
+    });
+    res.json({ resultats });
+  } catch (err) {
+    console.error('[Paris/régler]', err.message);
+    res.status(500).json({ error: 'Règlement indisponible' });
   }
 });
 

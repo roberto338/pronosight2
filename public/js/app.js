@@ -12,7 +12,7 @@ import { htmlEcranValeurs } from './modules/valeurs.js';
 import { icone, iconeSport, ecusson } from './modules/icones.js';
 import { htmlUne, htmlAAnalyser, ligneMatch, rangCompet, analysable } from './modules/accueil.js';
 import { htmlLive, htmlAujourdhui, htmlCompetitions, htmlMesParis, htmlVictor } from './modules/ecrans.js';
-import { creerPari, bilanParis, courbeBankroll, versCsv } from './modules/paris.js';
+import { creerPari, bilanParis, courbeBankroll, versCsv, codeDepuisMarche, parisARegler, appliquerReglements } from './modules/paris.js';
 import { htmlCombines, genererCombines, evaluerCombine } from './modules/combines.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
@@ -92,6 +92,7 @@ async function initApp() {
   // Notifications sur les compétitions suivies : uniquement à partir de
   // données réelles (pronos publiés, values détectées), jamais d'un scan IA.
   Promise.all([loadVictorData(), loadValeurs()]).then(notifierFavoris);
+  setTimeout(() => reglerAuto(), 4000);
 }
 
 // ══════════════════════════════════════════════
@@ -323,6 +324,7 @@ function jouerCombine(i) {
   ouvrirFormPari({
     match: legs.map(l => l.match).join(' + '), competition: 'Combiné',
     pari: legs.map(l => l.libelle).join(' + '), cote: r.cote, part: 0.005,
+    legs: legs.map(l => ({ match: l.match, pari: l.libelle, pari_code: l.pari_code })),
   });
 }
 
@@ -1218,11 +1220,44 @@ function majBadgeParis() {
   if (b) { b.textContent = n; b.style.display = n ? '' : 'none'; }
 }
 
+/**
+ * Règle tout seul les paris dont le match est passé, sur les vrais scores
+ * (POST /api/paris/regler). Au plus une fois toutes les 10 minutes.
+ */
+async function reglerAuto({ force = false } = {}) {
+  let dernier = 0;
+  try { dernier = Number(localStorage.getItem('ps_reglement_ts') || 0); } catch { /* stockage indisponible */ }
+  if (!force && Date.now() - dernier < 10 * 60 * 1000) return 0;
+  const aRegler = parisARegler(lireParis());
+  if (!aRegler.length) return 0;
+  try { localStorage.setItem('ps_reglement_ts', String(Date.now())); } catch { /* idem */ }
+  try {
+    const r = await fetch('/api/paris/regler', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paris: aRegler.map(p => ({
+        id: p.id, date: p.date, match: p.match, pari: p.pari,
+        equipe_a: p.equipe_a, equipe_b: p.equipe_b, pari_code: p.pari_code, legs: p.legs,
+      })) }),
+    });
+    if (!r.ok) return 0;
+    const { resultats = [] } = await r.json();
+    const { paris, regles } = appliquerReglements(lireParis(), resultats);
+    ecrireParis(paris);
+    if (regles) {
+      afficherToast(`${regles} pari${regles > 1 ? 's' : ''} réglé${regles > 1 ? 's' : ''} automatiquement`);
+      renderDashboard();
+      if (document.getElementById('historyView')?.classList.contains('visible')) dessinerMesParis();
+    }
+    return regles;
+  } catch { return 0; }
+}
+
 function dessinerMesParis() {
   const el = document.getElementById('historyView');
   if (!el) return;
   const paris = lireParis(), b0 = bankrollDepart();
   el.innerHTML = htmlMesParis(paris, bilanParis(paris, { bankrollInitiale: b0 }), { bankrollInitiale: b0, filtre: _filtreParis });
+  reglerAuto();
   dessinerCourbe(courbeBankroll(paris, b0));
 }
 
@@ -1257,7 +1292,7 @@ function definirBankroll() {
 function filtrerParis(f) { _filtreParis = f; dessinerMesParis(); }
 function reglerPari(id, resultat) {
   const l = lireParis(); const p = l.find(x => x.id === id);
-  if (p) { p.resultat = resultat; ecrireParis(l); dessinerMesParis(); renderDashboard(); }
+  if (p) { p.resultat = resultat; p.regle_auto = false; ecrireParis(l); dessinerMesParis(); renderDashboard(); }
 }
 function supprimerPari(id) {
   if (!confirm('Supprimer ce pari ?')) return;
@@ -1288,17 +1323,25 @@ function desassainir(v) {
 function jouerPari(source, i) {
   if (source === 'victor') {
     const p = victorState.today?.pronostics?.[i]; if (!p) return;
-    ouvrirFormPari({ match: brut(`${p.equipe_a} – ${p.equipe_b}`), competition: brut(p.competition), pari: brut(p.pronostic_principal), cote: p.cote_estimee });
+    ouvrirFormPari({ match: brut(`${p.equipe_a} – ${p.equipe_b}`), competition: brut(p.competition), pari: brut(p.pronostic_principal), cote: p.cote_estimee,
+      equipe_a: brut(p.equipe_a), equipe_b: brut(p.equipe_b), pari_code: p.pari_code, date: String(p.date || '').slice(0, 10) || null });
   } else if (source === 'value') {
     const v = valeursState.valeurs?.aujourdhui?.[i]; if (!v) return;
-    ouvrirFormPari({ match: v.match.replace(/\s+vs\s+/i, ' – '), competition: v.competition, pari: v.libelle || v.pari_code, cote: v.cote });
+    ouvrirFormPari({ match: v.match.replace(/\s+vs\s+/i, ' – '), competition: v.competition, pari: v.libelle || v.pari_code, cote: v.cote,
+      equipe_a: v.equipe_a, equipe_b: v.equipe_b, pari_code: v.pari_code, date: v.date });
   } else {
     const d = state.chatCtx; if (!d) return;
-    ouvrirFormPari({ match: brut(`${d.team1} – ${d.team2}`), competition: brut(d.league), pari: brut(d.best_bet), cote: '' });
+    ouvrirFormPari({ match: brut(`${d.team1} – ${d.team2}`), competition: brut(d.league), pari: brut(d.best_bet), cote: '',
+      equipe_a: brut(d.team1), equipe_b: brut(d.team2), pari_code: codeDepuisMarche(d.best_bet_market) });
   }
 }
 
-function ouvrirFormPari({ match = '', competition = '', pari = '', cote = '', part = 0.01 } = {}) {
+// Identité du pari ouvert dans la feuille : de quoi le régler seul plus tard.
+let _identitePari = {};
+
+function ouvrirFormPari({ match = '', competition = '', pari = '', cote = '', part = 0.01,
+  equipe_a = null, equipe_b = null, pari_code = null, legs = null, date = null } = {}) {
+  _identitePari = { match, pari, equipe_a, equipe_b, pari_code, legs, date };
   const val = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
   val('fpMatch', match); val('fpPari', pari); val('fpCote', cote ? Number(cote).toFixed(2) : ''); val('fpCompet', competition);
   const b0 = bankrollDepart(), bilan = bilanParis(lireParis(), { bankrollInitiale: b0 });
@@ -1317,7 +1360,18 @@ function fermerFormPari() {
 }
 function enregistrerPari() {
   const v = (id) => document.getElementById(id)?.value || '';
-  const { pari, erreur } = creerPari({ match: v('fpMatch'), competition: v('fpCompet'), pari: v('fpPari'), cote: v('fpCote'), mise: v('fpMise') });
+  const id = _identitePari, match = v('fpMatch'), texte = v('fpPari');
+  // Texte retouché par l'utilisateur : l'identité d'origine ne vaut plus, le
+  // serveur relira le texte (codeDepuisTexte) au moment du règlement.
+  const memeMatch = match.trim() === String(id.match || '').trim();
+  const memePari = texte.trim() === String(id.pari || '').trim();
+  const { pari, erreur } = creerPari({
+    match, competition: v('fpCompet'), pari: texte, cote: v('fpCote'), mise: v('fpMise'),
+    date: memeMatch && id.date && id.date >= new Date().toISOString().slice(0, 10) ? id.date : null,
+    equipe_a: memeMatch ? id.equipe_a : null, equipe_b: memeMatch ? id.equipe_b : null,
+    pari_code: memeMatch && memePari ? id.pari_code : null,
+    legs: memeMatch && memePari ? id.legs : null,
+  });
   if (erreur) { document.getElementById('fpErreur').textContent = erreur; return; }
   ecrireParis([pari, ...lireParis()]);
   fermerFormPari();
@@ -1816,6 +1870,7 @@ Object.assign(window, {
   filtrerAujourdhui, basculerFavori, activerNotifs, definirBankroll, filtrerParis, reglerPari, supprimerPari,
   effacerParis, exporterParis, ouvrirFormPari, fermerFormPari, enregistrerPari, choisirCompet, saisieLibre, jouerPari,
   chargerCombines, basculerSelection, jouerCombine,
+  verifierResultats: async () => { const n = await reglerAuto({ force: true }); if (!n) afficherToast('Aucun nouveau résultat pour l\'instant'); dessinerMesParis(); },
 });
 window.ouvrirAnalyseLibre = ouvrirAnalyseLibre;
 window.switchPronoMode = switchPronoMode;

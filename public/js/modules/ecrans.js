@@ -137,16 +137,25 @@ export function htmlMesParis(paris = [], bilan, { bankrollInitiale = null, filtr
     .map(([k, l]) => `<button class="tab ${k === filtre ? 'active' : ''}" onclick="filtrerParis('${k}')">${l}</button>`).join('');
   const liste = paris.filter(p => filtre === 'tous' || p.resultat === filtre)
     .sort((a, b) => String(b.cree_le).localeCompare(String(a.cree_le)));
+  // Pourquoi un pari passé reste en attente : on le dit plutôt que de laisser croire à une panne.
+  const NOTE_AUTO = {
+    pari_illisible: 'Pari non reconnu automatiquement : choisis le résultat à la main.',
+    match_illisible: 'Match non reconnu (écris « Équipe A – Équipe B ») : choisis le résultat à la main.',
+    introuvable: 'Score introuvable dans nos sources : choisis le résultat à la main.',
+    non_trouve: 'Score pas encore disponible : nouvelle vérification automatique bientôt.',
+  };
   const ligne = (p) => {
     const g = gainNet(p);
     return `<div class="pari-ligne ${p.resultat}">
-    <div class="pari-ligne-haut"><div><div class="pari-match">${e(p.match)}</div><div class="pari-meta">${e(p.competition || '')}${p.competition ? ' · ' : ''}${e(String(p.date).split('-').reverse().join('/'))}</div></div>
+    <div class="pari-ligne-haut"><div><div class="pari-match">${e(p.match)}</div><div class="pari-meta">${e(p.competition || '')}${p.competition ? ' · ' : ''}${e(String(p.date).split('-').reverse().join('/'))}${p.score ? ` · score <b>${e(p.score)}</b>` : ''}</div></div>
       <div class="pari-gain">${g == null ? `${p.mise.toFixed(2).replace('.', ',')} € en jeu` : euros(g)}</div></div>
     <div class="pari-ligne-bas"><span class="pari-pari">${e(p.pari)}</span><span class="cote-puce mini"><b>${p.cote.toFixed(2)}</b></span>
       <select class="pari-resultat" onchange="reglerPari('${e(p.id)}', this.value)" aria-label="Résultat">
         ${Object.entries(lib).map(([k, l]) => `<option value="${k}"${k === p.resultat ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
       <button class="pari-suppr" onclick="supprimerPari('${e(p.id)}')" aria-label="Supprimer">${icone('croix', { taille: 15 })}</button></div>
+    ${p.regle_auto && p.resultat !== 'attente' ? `<div class="pari-auto">${icone('coche', { taille: 13, epaisseur: 3 })}Réglé automatiquement sur le score final</div>` : ''}
+    ${p.resultat === 'attente' && NOTE_AUTO[p.auto_statut] ? `<div class="pari-auto attente">${NOTE_AUTO[p.auto_statut]}</div>` : ''}
   </div>`;
   };
 
@@ -166,7 +175,47 @@ export function htmlMesParis(paris = [], bilan, { bankrollInitiale = null, filtr
   ${liste.length ? liste.map(ligne).join('')
     : vide('portefeuille', paris.length ? 'Aucun pari ici' : 'Aucun pari enregistré',
       'Après une analyse, une value ou un prono de Victor, touche « Je joue ce pari » : ta cote et ta mise sont enregistrées, et ton bilan se calcule tout seul.')}
-  ${paris.length ? `<div class="bk-actions"><button class="bouton-discret" onclick="exporterParis()">Exporter (CSV)</button><button class="bouton-discret danger" onclick="effacerParis()">Tout effacer</button></div>` : ''}
+  ${paris.length ? `<div class="bk-actions"><button class="bouton-discret" onclick="verifierResultats()">Vérifier les résultats</button><button class="bouton-discret" onclick="exporterParis()">Exporter (CSV)</button><button class="bouton-discret danger" onclick="effacerParis()">Tout effacer</button></div>` : ''}
+</div>`;
+}
+
+// ── VICTOR : sa fiabilité semaine après semaine, mois après mois ─
+const SEUIL_ECHANTILLON = 30;   // même seuil que victor/valeur-suivi.js
+const MOIS_COURTS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+const pctRond = (x) => (x == null ? '—' : `${Math.round(x * 100)} %`);
+const pctSigneRond = (x) => `${x >= 0 ? '+' : '−'}${Math.round(Math.abs(x) * 100)} %`;
+
+export function htmlFiabilite(victor) {
+  const p = victor?.periodes;
+  if (!p?.total?.n) return '';
+  const COURT = { semaine: '7 jours', mois: '30 jours', sixMois: '6 mois', annee: '1 an', total: 'Depuis le début' };
+  const ligne = (cle) => { const b = p[cle] || {}; return `<div class="fi-ligne ${b.n && b.n < SEUIL_ECHANTILLON ? 'maigre' : ''}">
+    <span class="fi-periode">${COURT[cle]}</span>
+    <span>${b.n || '—'}</span><span>${b.n ? pctRond(b.taux) : '—'}</span><span>${b.n ? pctRond(b.attendu) : '—'}</span>
+    <b class="${b.rendement > 0 ? 'pos' : b.rendement < 0 ? 'neg' : ''}">${b.n ? pct(b.rendement) : '—'}</b></div>`; };
+
+  // Mois par mois, à partir du premier mois où Victor a été noté.
+  const mois = victor.mois || [];
+  const debut = mois.findIndex(m => m.n > 0);
+  const suivis = debut === -1 ? [] : mois.slice(debut);
+  const barres = suivis.filter(m => m.n > 0).length >= 2 ? `<div class="fi-sous-titre">Rendement mois par mois</div>
+  <div class="fi-mois">${suivis.map(m => {
+    const h = m.n ? Math.max(4, Math.min(1, Math.abs(m.rendement) / 0.4) * 100) : 0;
+    const sens = m.rendement >= 0 ? 'pos' : 'neg';
+    return `<div class="fi-col ${m.n && m.n < SEUIL_ECHANTILLON ? 'maigre' : ''}">
+      <b class="${m.n ? sens : ''}">${m.n ? pctSigneRond(m.rendement) : '—'}</b>
+      <div class="fi-zone">${m.n ? `<div class="fi-barre ${sens}" style="height:${(h / 2).toFixed(1)}%"></div>` : ''}</div>
+      <span>${MOIS_COURTS[Number(m.mois.slice(5, 7)) - 1]}</span><small>${m.n ? `${m.n} paris` : ''}</small></div>`;
+  }).join('')}</div>` : '';
+
+  return `<div class="card">
+  <div class="titre-section">${icone('hausse')}Sa fiabilité dans le temps</div>
+  <div class="fi-table">
+    <div class="fi-ligne fi-entete"><span>Période</span><span>Paris</span><span>Gagnés</span><span>Cotes</span><span>Rendement</span></div>
+    ${['semaine', 'mois', 'sixMois', 'annee', 'total'].map(ligne).join('')}
+  </div>
+  <div class="vm-note">« Cotes » : la part de paris que les cotes du bookmaker donnaient gagnants. Quand Victor gagne plus souvent que ça, il bat le bookmaker. En grisé : moins de ${SEUIL_ECHANTILLON} paris, trop peu pour conclure.</div>
+  ${barres}
 </div>`;
 }
 
@@ -188,6 +237,7 @@ export function htmlVictor({ stats = null, bilan = null, patterns = [], historiq
   <div class="vm-note">Réussite : sur tous les pronos notés. Rendement : uniquement sur les pronos publiés à une cote du marché, mise fixe, pertes comprises. Un taux de réussite élevé sur des petites cotes peut perdre de l'argent : c'est le rendement qui compte.</div>
   ${aujourdhui ? `<button class="dash-cta" style="width:100%;margin-top:14px" onclick="switchNav('prono')">${aujourdhui > 1 ? `Voir ses ${aujourdhui} pronos du jour` : 'Voir son prono du jour'}</button>` : ''}
 </div>
+${htmlFiabilite(roi)}
 ${sports.length ? `<div class="card"><div class="titre-section">${icone('stats')}Par sport</div>
   ${sports.map(s => `<div class="an-forme"><span>${e(s.sport || 'Autre')}</span><span>${Number(s.corrects)}/${Number(s.total)} · <b>${Math.round(Number(s.taux))} %</b></span></div>`).join('')}</div>` : ''}
 ${notes.length ? `<div class="card"><div class="titre-section">${icone('historique')}Derniers pronos notés</div>
@@ -204,4 +254,4 @@ ${tendances.length ? `<div class="card"><div class="titre-section">${icone('haus
     <b class="tendance-pct">${Math.round(Number(p.taux_confirmation) || 0)} %</b></div>`).join('')}</div>` : ''}`;
 }
 
-export default { htmlLive, htmlAujourdhui, filtrerJour, competitionsConnues, htmlCompetitions, htmlMesParis, htmlVictor, FILTRES_JOUR };
+export default { htmlLive, htmlAujourdhui, filtrerJour, competitionsConnues, htmlCompetitions, htmlMesParis, htmlFiabilite, htmlVictor, FILTRES_JOUR };

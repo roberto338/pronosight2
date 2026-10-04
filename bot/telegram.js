@@ -108,19 +108,38 @@ export function getEmojiBySport(sport = '') {
 export const MENTION_PREVENTION = 'Interdit aux moins de 18 ans. Jouer comporte des risques : endettement, isolement, dépendance. '
   + 'Pour être aidé, appelez le 09 74 75 13 13 (appel non surtaxé).';
 
+const pctSigne = (x) => (x == null ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)} %`);
+const pctBrut = (x) => (x == null ? '—' : `${Math.round(x * 100)} %`);
+const unites = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)} u`;
+
+/** Une ligne de fiabilité : paris, réussite, ce que prévoyaient les cotes, rendement. */
+function ligneFiabilite(libelle, b) {
+  if (!b?.n) return `${esc(libelle)} : aucun pari noté\n`;
+  return `${esc(libelle)} : ${b.n} paris · ${esc(pctBrut(b.taux))} gagnés (cotes : ${esc(pctBrut(b.attendu))}) · *${esc(pctSigne(b.rendement))}*\n`;
+}
+
 /**
  * Texte du bilan public. Pur : testable sans Telegram.
  * Tout est en mise fixe d'une unité, sur des cotes réellement proposées.
+ * `victor` : la liste des paris notés, ou le résultat de bilanVictor()
+ * (alors avec la fiabilité par période).
  */
 export function texteBilan({ victor = [], marche = null } = {}) {
-  const pct = (x) => (x == null ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)} %`);
-  const notes = victor.filter(r => r.gagne === true || r.gagne === false);
-  const profit = notes.reduce((a, r) => a + (r.gagne ? Number(r.cote) - 1 : -1), 0);
+  const pct = pctSigne;
+  const bv = Array.isArray(victor) ? null : victor;
+  const notes = Array.isArray(victor) ? victor.filter(r => r.gagne === true || r.gagne === false) : [];
+  const n = bv ? bv.n : notes.length;
+  const gagnes = bv ? bv.gagnes : notes.filter(r => r.gagne).length;
+  const rendement = bv ? bv.rendement : n ? notes.reduce((a, r) => a + (r.gagne ? Number(r.cote) - 1 : -1), 0) / n : null;
   let t = `📒 *BILAN PRONOSIGHT* — vérifiable, mise fixe\n━━━━━━━━━━━━━━━\n`;
   t += `🎙️ *Victor (analyse IA)*\n`;
-  t += notes.length
-    ? `${notes.length} paris à cote de marché · ${notes.filter(r => r.gagne).length} gagnés · rendement ${esc(pct(profit / notes.length))}\n`
+  t += n
+    ? `${n} paris à cote de marché · ${gagnes} gagnés · rendement ${esc(pct(rendement))}\n`
     : `Aucun pari noté pour l'instant.\n`;
+  if (n && bv?.periodes) {
+    t += `\n📈 *Fiabilité dans la durée*\n`;
+    for (const cle of ['semaine', 'mois', 'sixMois', 'annee']) t += ligneFiabilite(bv.periodes[cle].libelle, bv.periodes[cle]);
+  }
   t += `\n📈 *Values de marché (sans IA)*\n`;
   if (marche?.total?.n) {
     const b = marche.total;
@@ -129,9 +148,112 @@ export function texteBilan({ victor = [], marche = null } = {}) {
   } else {
     t += `Suivi en cours de constitution.\n`;
   }
-  t += `\n_${esc('Un rendement sur moins de quelques centaines de paris dépend surtout de la chance. Résultats passés : aucune garantie de gain.')}_\n`;
+  t += `\n_${esc('« Cotes » : la part de paris que les cotes donnaient gagnants. Gagner plus souvent que ça, c\'est battre le bookmaker.')}_\n`;
+  t += `_${esc('Un rendement sur moins de quelques centaines de paris dépend surtout de la chance. Résultats passés : aucune garantie de gain.')}_\n`;
   t += `_${esc(MENTION_PREVENTION)}_`;
   return t;
+}
+
+const jjmm = (iso) => String(iso).split('-').reverse().slice(0, 2).join('/');
+
+/**
+ * Bilan de la semaine ou du mois écoulé, comparé à la période d'avant,
+ * puis la fiabilité dans la durée. Pur (testé sans Telegram).
+ * @param {{type, debut, fin, courant, avant, periodes}} d  voir victor/recap.js
+ */
+export function texteBilanPeriode(d) {
+  const semaine = d.type === 'semaine';
+  const nomMois = new Date(`${d.debut}T12:00:00Z`).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const c = d.courant || {}, av = d.avant || {};
+  let t = `📊 *BILAN ${semaine ? 'DE LA SEMAINE' : 'DU MOIS'}* — ${esc(semaine ? `du ${jjmm(d.debut)} au ${jjmm(d.fin)}` : nomMois)}\n━━━━━━━━━━━━━━━\n`;
+  t += `🎙️ *Victor*\n`;
+  if (c.n) {
+    t += `${c.n} paris notés · ${c.gagnes} gagnés · ${c.n - c.gagnes} perdus\n`;
+    t += `Réussite *${esc(pctBrut(c.taux))}* — les cotes prévoyaient ${esc(pctBrut(c.attendu))}\n`;
+    t += `Rendement *${esc(pctSigne(c.rendement))}* (${esc(unites(c.profit))} à mise fixe)\n`;
+    t += c.rendement >= 0 ? `✅ Victor a battu les bookmakers ${semaine ? 'cette semaine' : 'ce mois-ci'}.\n`
+      : `❌ Les bookmakers ont eu raison de Victor ${semaine ? 'cette semaine' : 'ce mois-ci'}.\n`;
+    if (av.n) {
+      const fleche = c.rendement > av.rendement ? '↗️ Mieux' : c.rendement < av.rendement ? '↘️ Moins bien' : '➡️ Pareil';
+      t += `${fleche} que ${semaine ? 'la semaine' : 'le mois'} d'avant (${esc(pctSigne(av.rendement))} sur ${av.n} paris)\n`;
+    }
+  } else {
+    t += `Aucun pari noté ${semaine ? 'cette semaine' : 'ce mois-ci'}.\n`;
+  }
+  const p = d.periodes;
+  if (p?.total?.n) {
+    t += `\n📈 *Fiabilité dans la durée*\n`;
+    for (const cle of ['mois', 'sixMois', 'annee', 'total']) t += ligneFiabilite(p[cle].libelle, p[cle]);
+  }
+  t += `\n_${esc(c.n && c.n < 30
+    ? `Moins de 30 paris : trop peu pour juger, la chance pèse plus que la méthode. C'est la tendance sur plusieurs mois qui compte.`
+    : `Mise fixe d'une unité, aux cotes réellement proposées. Les pertes sont comptées comme les gains.`)}_\n`;
+  t += `_${esc('Résultats passés : aucune garantie de gain.')}_\n_${esc(MENTION_PREVENTION)}_`;
+  return t;
+}
+
+/** Envoie le bilan de la semaine ou du mois sur le canal. Rien sans pari noté. */
+export async function sendBilanPeriode(donnees) {
+  if (!bot || !CHANNEL_ID || !donnees?.courant?.n) return false;
+  await send(CHANNEL_ID, texteBilanPeriode(donnees));
+  console.log(`📊 Bilan ${donnees.type} (${donnees.debut} → ${donnees.fin}) envoyé sur Telegram`);
+  return true;
+}
+
+/**
+ * Le bilan des pronos de la veille, un par un. Pur (testé sans Telegram).
+ * @param {{date, pronos, valeurs, bilan: {victor, marche}}} d  voir victor/recap.js
+ */
+export function texteRecapVeille(d) {
+  const pct = (x) => (x == null ? '—' : `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)} %`);
+  const u = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(2)} u`;
+  const jour = String(d.date).split('-').reverse().slice(0, 2).join('/');
+  const icone = (g) => (g === true ? '✅' : g === false ? '❌' : '⏳');
+  let t = `📒 *LES PRONOS D'HIER — ${esc(jour)}*\n━━━━━━━━━━━━━━━\n`;
+
+  if (d.pronos?.length) {
+    for (const p of d.pronos) {
+      const cote = Number(p.cote_estimee) > 1 ? ` @ ${Number(p.cote_estimee).toFixed(2)}` : '';
+      t += `${icone(p.pronostic_correct)} *${esc(p.equipe_a)} – ${esc(p.equipe_b)}*\n`
+        + `    ${esc(p.pronostic_principal)}${esc(cote)}${p.score_reel ? ` · ${esc(p.score_reel)}` : p.pronostic_correct == null ? ' · résultat pas encore connu' : ''}\n`;
+    }
+    const n = d.pronos.length;
+    const g = d.pronos.filter(p => p.pronostic_correct === true).length;
+    const notes = d.pronos.filter(p => p.pronostic_correct != null).length;
+    const comptes = d.pronos.filter(p => p.pronostic_correct != null && p.cote_confirmee
+      && Number(p.cote_estimee) > 1 && !String(p.pari_code || '').startsWith('DC:'));
+    const profit = comptes.reduce((a, p) => a + (p.pronostic_correct ? Number(p.cote_estimee) - 1 : -1), 0);
+    t += `\n🎙️ Victor hier : *${g}/${notes}* gagné${g > 1 ? 's' : ''}${notes < n ? ` (${n - notes} en attente)` : ''}`
+      + `${comptes.length ? ` · ${esc(u(profit))} à mise fixe` : ''}\n`;
+  } else {
+    t += `🎙️ Victor n'a publié aucun prono hier.\n`;
+  }
+
+  const notees = (d.valeurs || []).filter(v => v.gagne === true || v.gagne === false);
+  if (d.valeurs?.length) {
+    const gv = notees.filter(v => v.gagne).length;
+    const pv = notees.reduce((a, v) => a + (v.gagne ? Number(v.cote) - 1 : -1), 0);
+    t += `📈 Values hier : *${gv}/${notees.length}* gagnée${gv > 1 ? 's' : ''}`
+      + `${notees.length ? ` · ${esc(u(pv))}` : ''}${notees.length < d.valeurs.length ? ` (${d.valeurs.length - notees.length} en attente)` : ''}\n`;
+  }
+
+  const bv = d.bilan?.victor, bm = d.bilan?.marche?.total;
+  if (bv?.n || bm?.n) {
+    t += `\n📊 *Depuis le début* (mise fixe, cotes de marché)\n`;
+    if (bv?.n) t += `Victor : ${esc(pct(bv.rendement))} sur ${bv.n} paris\n`;
+    if (bm?.n) t += `Values : ${esc(pct(bm.rendement))} sur ${bm.n} paris\n`;
+  }
+  t += `\n_${esc('Les pertes sont comptées comme les gains. Résultats passés : aucune garantie de gain.')}_\n_${esc(MENTION_PREVENTION)}_`;
+  return t;
+}
+
+/** Envoie le bilan de la veille sur le canal. Silencieux sans bot. */
+export async function sendRecapVeille(donnees) {
+  if (!bot || !CHANNEL_ID || !donnees) return false;
+  if (!donnees.pronos?.length && !donnees.valeurs?.length) return false;
+  await send(CHANNEL_ID, texteRecapVeille(donnees));
+  console.log(`📒 Bilan de la veille (${donnees.date}) envoyé sur Telegram`);
+  return true;
 }
 
 export async function broadcastDaily(victorData) {
@@ -435,25 +557,45 @@ if (bot && process.env.NODE_ENV !== 'production') {
         `/best — Top 3 confiance Élevé\n` +
         `/stats — Performances du jour\n` +
         `/value — Values de marché du jour\n` +
-        `/bilan — Bilan vérifiable depuis le début\n` +
+        `/hier — Résultats des pronos d'hier\n` +
+        `/semaine — Bilan de la semaine écoulée\n` +
+        `/mois — Bilan du mois écoulé\n` +
+        `/bilan — Fiabilité de Victor : 7 jours, 30 jours, 6 mois, 1 an\n` +
         `/aide — Cette aide`
       );
+    });
+
+    // /hier — les pronos de la veille, un par un, avec leur résultat
+    bot.onText(/\/hier/, async (msg) => {
+      try {
+        const { donneesVeille } = await import('../victor/recap.js');
+        const d = await donneesVeille();
+        await send(msg.chat.id, d.pronos.length || d.valeurs.length
+          ? texteRecapVeille(d)
+          : 'ℹ️ Aucun prono ni value publiés hier.');
+      } catch (err) {
+        await send(msg.chat.id, `❌ Erreur: ${err.message}`);
+      }
     });
 
     // /bilan — le bilan vérifiable, tel quel, sans arrondi flatteur
     bot.onText(/\/bilan/, async (msg) => {
       try {
-        const { rows: victor } = await queryDB(
-          `SELECT pronostic_correct AS gagne, cote_estimee AS cote
-           FROM ps_pronostics
-           WHERE pronostic_correct IS NOT NULL AND cote_confirmee = true
-             AND pari_code NOT LIKE 'DC:%'`);
+        const { bilanVictor, bilanValeursMarche } = await import('../victor/valeur-suivi.js');
+        const victor = await bilanVictor();
         let marche = null;
-        try {
-          const { bilanValeursMarche } = await import('../victor/valeur-suivi.js');
-          marche = await bilanValeursMarche();
-        } catch { /* table absente : bilan Victor seul */ }
+        try { marche = await bilanValeursMarche(); } catch { /* table absente : bilan Victor seul */ }
         await send(msg.chat.id, texteBilan({ victor, marche }));
+      } catch (err) {
+        await send(msg.chat.id, `❌ Erreur: ${err.message}`);
+      }
+    });
+
+    // /semaine et /mois — la dernière semaine (lundi-dimanche) ou le dernier mois terminé
+    bot.onText(/\/(semaine|mois)\b/, async (msg, m) => {
+      try {
+        const { donneesPeriode } = await import('../victor/recap.js');
+        await send(msg.chat.id, texteBilanPeriode(await donneesPeriode(m[1])));
       } catch (err) {
         await send(msg.chat.id, `❌ Erreur: ${err.message}`);
       }

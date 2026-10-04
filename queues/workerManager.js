@@ -16,7 +16,8 @@ import { liveProcessor }     from './workers/liveWorker.js';
 import { checkResults, updateVictorStats, weeklyVictorReview } from '../victor/core.js';
 import { discoverNewPatterns } from '../victor/patterns.js';
 import { computePatterns }    from '../victor/patterns-compute.js';
-import { sendDailyStats, sendHeartbeat, sendAlert } from '../bot/telegram.js';
+import { sendDailyStats, sendHeartbeat, sendAlert, sendRecapVeille, sendBilanPeriode } from '../bot/telegram.js';
+import { donneesVeille, veilleParis, donneesPeriode } from '../victor/recap.js';
 import { noterValeursMarche } from '../victor/valeur-suivi.js';
 import { runHealthcheck }    from '../victor/healthcheck.js';
 import { query }             from '../db/database.js';
@@ -143,6 +144,31 @@ async function processor(job) {
 
       await job.updateProgress(100);
       return { done: true, date: new Date().toISOString().slice(0, 10) };
+    }
+
+    case 'recap-veille': {
+      // Le lendemain matin : les matchs de la nuit sont finis. On note encore
+      // une fois (pronos et values), puis on publie le bilan de la veille.
+      const date = veilleParis();
+      console.log(`\n📒 [recap-veille #${job.id}] Bilan du ${date}...`);
+      await checkResults().catch(err => console.warn(`   ⚠️  Notation des pronos : ${err.message}`));
+      await noterValeursMarche().catch(err => console.warn(`   ⚠️  Notation des values : ${err.message}`));
+      await job.updateProgress(60);
+      const d = await donneesVeille(date);
+      const envoye = await sendRecapVeille(d).catch(err => { console.warn(`   ⚠️  Envoi Telegram : ${err.message}`); return false; });
+      await job.updateProgress(100);
+      return { date, pronos: d.pronos.length, valeurs: d.valeurs.length, envoye };
+    }
+
+    case 'bilan-periode': {
+      // Semaine écoulée (lundi) ou mois écoulé (le 1er) : après le bilan de
+      // la veille de 10h, qui vient de noter les derniers matchs.
+      const type = job.data?.type === 'mois' ? 'mois' : 'semaine';
+      const d = await donneesPeriode(type);
+      console.log(`\n📊 [bilan-periode #${job.id}] ${type} du ${d.debut} au ${d.fin} : ${d.courant.n} paris notés`);
+      const envoye = await sendBilanPeriode(d).catch(err => { console.warn(`   ⚠️  Envoi Telegram : ${err.message}`); return false; });
+      await job.updateProgress(100);
+      return { type, debut: d.debut, fin: d.fin, paris: d.courant.n, envoye };
     }
 
     case 'weekly-review': {

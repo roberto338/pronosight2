@@ -168,18 +168,88 @@ export async function bilanValeursMarche() {
   };
 }
 
+// ── Fiabilité dans le temps : semaine, mois, 6 mois, année ──
+
+/** Date AAAA-MM-JJ en heure de Paris. */
+export const jourParis = (maintenant = new Date()) => maintenant.toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
+/** AAAA-MM-JJ décalé de n jours. Pur. */
+export const decalerJour = (iso, n) => new Date(Date.parse(`${iso}T12:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+
+/** Fenêtres glissantes, aujourd'hui compris. */
+export const PERIODES = [
+  { cle: 'semaine', libelle: '7 derniers jours', jours: 7 },
+  { cle: 'mois', libelle: '30 derniers jours', jours: 30 },
+  { cle: 'sixMois', libelle: '6 derniers mois', jours: 182 },
+  { cle: 'annee', libelle: '12 derniers mois', jours: 365 },
+];
+
+/** En dessous, un taux de réussite dit peu de chose : c'est surtout la chance. */
+export const SEUIL_ECHANTILLON = 30;
+
 /**
- * Bilan de Victor sur les mêmes règles que /bilan : paris à cote de marché
- * confirmée, hors doubles chances (aucune n'est cotée par The Odds API).
+ * Bilan d'une liste de paris notés {date, gagne, cote}, avec ce que les
+ * cotes prévoyaient : la moyenne de 1/cote. Gagner plus souvent que ça,
+ * c'est battre le bookmaker ; moins souvent, c'est perdre de l'argent,
+ * quel que soit le taux de réussite affiché. Pur.
  */
-export async function bilanVictor() {
+export function resumerFiabilite(rows = []) {
+  const notes = rows.filter(r => (r.gagne === true || r.gagne === false) && Number(r.cote) > 1);
+  const b = resumerBilan(notes.map(r => ({ ...r, avantage: 0 })));
+  return {
+    ...b,
+    avantageMoyen: null,          // Victor n'a pas d'« avantage » mesuré : on ne fabrique pas de moyenne.
+    taux: b.n ? b.gagnes / b.n : null,
+    attendu: b.n ? notes.reduce((a, r) => a + 1 / Number(r.cote), 0) / b.n : null,
+  };
+}
+
+/** Bilan entre deux dates incluses (AAAA-MM-JJ). Pur. */
+export const bilanEntre = (rows, debut, fin) => resumerFiabilite(rows.filter(r => r.date >= debut && r.date <= fin));
+
+/** Les fenêtres glissantes et le total. Pur. */
+export function bilanParPeriodes(rows = [], maintenant = new Date()) {
+  const auj = jourParis(maintenant);
+  const sortie = {};
+  for (const p of PERIODES) sortie[p.cle] = { libelle: p.libelle, ...bilanEntre(rows, decalerJour(auj, -(p.jours - 1)), auj) };
+  sortie.total = { libelle: 'Depuis le début', ...resumerFiabilite(rows) };
+  return sortie;
+}
+
+/** Mois par mois, du plus ancien au mois en cours. Pur. */
+export function evolutionMensuelle(rows = [], maintenant = new Date(), nbMois = 12) {
+  let [a, m] = jourParis(maintenant).split('-').map(Number);
+  const mois = [];
+  for (let i = 0; i < nbMois; i++) {
+    mois.unshift(`${a}-${String(m).padStart(2, '0')}`);
+    if (--m === 0) { m = 12; a--; }
+  }
+  return mois.map(cle => ({ mois: cle, ...resumerFiabilite(rows.filter(r => String(r.date).startsWith(cle))) }));
+}
+
+/**
+ * Les paris de Victor qui comptent pour le bilan, mêmes règles que /bilan :
+ * cote de marché confirmée, hors doubles chances (aucune n'est cotée par
+ * The Odds API). Du plus ancien au plus récent.
+ */
+export async function parisNotesVictor() {
   const { rows } = await query(
-    `SELECT pronostic_correct AS gagne, cote_estimee AS cote
+    `SELECT to_char(date, 'YYYY-MM-DD') AS date, pronostic_correct AS gagne, cote_estimee AS cote
      FROM ps_pronostics
      WHERE pronostic_correct IS NOT NULL AND cote_confirmee = true
-       AND cote_estimee IS NOT NULL AND pari_code NOT LIKE 'DC:%'`);
-  // Victor n'a pas d'« avantage » mesuré : on ne fabrique pas de moyenne.
-  return { ...resumerBilan(rows.map(r => ({ ...r, avantage: 0 }))), avantageMoyen: null };
+       AND cote_estimee IS NOT NULL AND pari_code NOT LIKE 'DC:%'
+     ORDER BY date`);
+  return rows;
+}
+
+/** Bilan de Victor : depuis le début, par période et mois par mois. */
+export async function bilanVictor(maintenant = new Date()) {
+  const rows = await parisNotesVictor();
+  return {
+    ...resumerFiabilite(rows),
+    premier: rows[0]?.date ?? null,
+    periodes: bilanParPeriodes(rows, maintenant),
+    mois: evolutionMensuelle(rows, maintenant),
+  };
 }
 
 /** Values de marché des derniers jours, pour l'app web. Les plus récentes d'abord. */
@@ -197,4 +267,7 @@ export async function valeursRecentes({ jours = 14, limite = 120 } = {}) {
   }));
 }
 
-export default { enregistrerValeursMarche, lireScoresEspn, trouverScore, noterValeursMarche, resumerBilan, bilanValeursMarche, bilanVictor, valeursRecentes };
+export default {
+  enregistrerValeursMarche, lireScoresEspn, trouverScore, noterValeursMarche, resumerBilan, bilanValeursMarche,
+  jourParis, decalerJour, resumerFiabilite, bilanEntre, bilanParPeriodes, evolutionMensuelle, parisNotesVictor, bilanVictor, valeursRecentes,
+};
