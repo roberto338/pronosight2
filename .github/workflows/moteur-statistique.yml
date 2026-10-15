@@ -432,6 +432,17 @@ jobs:
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
+      - name: Enquête domicile/extérieur inversés (lecture seule)
+        if: steps.choix.outputs.etape == 'orientation'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node scripts/enquete-orientation.js --jours=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
       - name: Audit de Victor
         if: steps.choix.outputs.etape == 'audit'
         env:

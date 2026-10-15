@@ -14,6 +14,7 @@ rien
 #   diagnostic 16  pourquoi Victor ne publie plus, sur N jours (lecture seule)
 #   bilan 12       pronos un par un, fiabilité, values, bilans Telegram partis (lecture seule)
 #   notation-espn 14  ESPN noterait-il les pronos en attente ? (lecture seule)
+#   orientation 45 doublons dans les deux sens, pronos notés à l'envers (lecture seule)
 #   sondes         football-data répond-il encore ? (2 requêtes)
 #   publiques      quelles sources gratuites couvrent la saison en cours
 #   site           le site n'affiche-t-il que du réel ? compétitions, cotes, routes (lecture seule)

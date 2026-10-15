@@ -1388,6 +1388,25 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// MÊME MATCH DANS LES DEUX SENS (Juventus / Celta, 15/10)
+// ══════════════════════════════════════════════
+{
+  const { clePaire, estInverse } = await import('./core.js');
+  const { evaluerCode } = await import('./paris.js');
+  verifie('paire : même clé quel que soit le sens', clePaire('Juventus', 'Celta Vigo') === clePaire('Celta Vigo', 'Juventus'), true);
+  verifie('paire : équipes différentes, clés différentes', clePaire('Juventus', 'Celta Vigo') === clePaire('Juventus', 'Lazio'), false);
+  verifie('paire : équipe manquante → pas de clé', clePaire('Juventus', ''), null);
+  const reel = { home: 'Celta Vigo', away: 'Juventus', homeGoals: 2, awayGoals: 1 };
+  verifie('sens : prono à l\'envers détecté', estInverse('Juventus vs Celta Vigo', reel), true);
+  verifie('sens : prono dans le bon sens', estInverse('Celta Vigo vs Juventus', reel), false);
+  // Prono « Juventus vs Celta Vigo », victoire Celta = 1X2:AWAY. Celta gagne 2-1 à domicile.
+  const inv = estInverse('Juventus vs Celta Vigo', reel);
+  const butsA = inv ? reel.awayGoals : reel.homeGoals, butsB = inv ? reel.homeGoals : reel.awayGoals;
+  verifie('sens : victoire Celta notée GAGNÉE malgré le prono à l\'envers', evaluerCode('1X2:AWAY', butsA, butsB), true);
+  verifie('sens : sans correction, elle aurait été notée perdue', evaluerCode('1X2:AWAY', reel.homeGoals, reel.awayGoals), false);
+}
+
+// ══════════════════════════════════════════════
 // FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
 // ══════════════════════════════════════════════
 {

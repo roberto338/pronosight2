@@ -987,7 +987,35 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   // jamais communiqué).
   const nouveaux = [];
 
+  // Un match ne se publie qu'une fois par jour, QUEL QUE SOIT l'ordre des
+  // équipes. L'index unique porte sur le libellé « A vs B » : le 15/10,
+  // le job de 7h a publié « Juventus vs Celta Vigo » (victoire Celta) et
+  // celui de 13h « Celta Vigo vs Juventus » (victoire Juventus), deux
+  // pronos contradictoires sur un même match. On compare la paire.
+  const dejaPublies = new Map();   // paire sans ordre → sens publié « a|b »
+  const ecartes = new Set();       // écartés car déjà publiés à l'envers : ni diffusés ni comptés
+  const sens = (a, b) => `${normalizeTeam(a || '')}|${normalizeTeam(b || '')}`;
+  try {
+    const { rows } = await query(
+      `SELECT equipe_a, equipe_b FROM ps_pronostics WHERE date = $1`, [dateISO]);
+    for (const r of rows) {
+      const k = clePaire(r.equipe_a, r.equipe_b);
+      if (k) dejaPublies.set(k, sens(r.equipe_a, r.equipe_b));
+    }
+  } catch (err) {
+    console.warn(`   ⚠️  Pronos déjà publiés illisibles : ${err.message}`);
+  }
+
   for (const ev of events) {
+    const paire = clePaire(ev.equipe_a, ev.equipe_b);
+    const publie = paire ? dejaPublies.get(paire) : undefined;
+    // Le job de 13h ne touche jamais au matin ; celui de 7h peut mettre à
+    // jour son propre prono (même sens), jamais en créer un second à l'envers.
+    if (publie && (!majExistants || publie !== sens(ev.equipe_a, ev.equipe_b))) {
+      console.log(`   ↩️  ${ev.match} — déjà publié${publie !== sens(ev.equipe_a, ev.equipe_b) ? ' dans l\'autre sens' : ' ce matin'}, ignoré`);
+      if (publie !== sens(ev.equipe_a, ev.equipe_b)) ecartes.add(ev);
+      continue;
+    }
     try {
       const { rows: ecrit } = await query(
         `INSERT INTO ps_pronostics
@@ -1061,6 +1089,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
       );
       // Aucune ligne renvoyée = ON CONFLICT DO NOTHING, le pronostic
       // existait déjà et a été publié plus tôt.
+      if (paire) dejaPublies.set(paire, sens(ev.equipe_a, ev.equipe_b));
       if (ecrit.length > 0) {
         nouveaux.push(ev);
         console.log(`   ✅ ${ev.match} — ${ev.pronostic_principal} (${ev.confiance})`);
@@ -1072,6 +1101,7 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     }
   }
 
+  if (ecartes.size) events.splice(0, events.length, ...events.filter(e => !ecartes.has(e)));
   console.log(`\n✅ Victor a généré ${events.length} pronostic(s) exploitable(s)\n`);
 
   // events = uniquement les pronostics validés : le broadcast Telegram
@@ -1191,6 +1221,26 @@ function forceAppariement(a, b) {
 /** Conservée pour la lisibilité des appelants : deux noms se correspondent-ils ? */
 function teamsMatch(a, b) {
   return forceAppariement(a, b) > APP_AUCUN;
+}
+
+/** Clé d'un match indépendante de l'ordre des équipes. Pur. */
+export function clePaire(a, b) {
+  const na = normalizeTeam(a || ''), nb = normalizeTeam(b || '');
+  return na && nb ? [na, nb].sort().join('|') : null;
+}
+
+/**
+ * Le match retrouvé est-il dans l'autre sens que le prono ? Le score doit
+ * alors être lu à l'envers : un code 1X2:HOME désigne l'équipe A du prono,
+ * pas l'équipe qui reçoit dans la source. Pur.
+ */
+export function estInverse(pronoMatch, fixture) {
+  const [a, b] = String(pronoMatch || '').split(/\s+vs\.?\s+/i).map(normalizeTeam);
+  if (!a || !b || !fixture) return false;
+  const dom = normalizeTeam(fixture.home || ''), ext = normalizeTeam(fixture.away || '');
+  const droit = Math.min(forceAppariement(dom, a), forceAppariement(ext, b));
+  const invers = Math.min(forceAppariement(dom, b), forceAppariement(ext, a));
+  return invers > droit;
 }
 
 /**
@@ -1562,28 +1612,42 @@ export async function checkResults() {
           continue;
         }
 
-        const hg = fixture.homeGoals ?? 0;
-        const ag = fixture.awayGoals ?? 0;
+        // Le score est lu dans le SENS DU PRONO : un code 1X2:AWAY désigne
+        // son équipe B. Si la source a le match dans l'autre sens (le 15/10 :
+        // prono « Juventus vs Celta Vigo », match réel Celta – Juventus),
+        // lire ses buts tels quels notait le pari sur la mauvaise équipe.
+        const inverse = estInverse(p.match, fixture);
+        const hg = (inverse ? fixture.awayGoals : fixture.homeGoals) ?? 0;   // buts de l'équipe A du prono
+        const ag = (inverse ? fixture.homeGoals : fixture.awayGoals) ?? 0;   // buts de l'équipe B
+        const nomA = inverse ? fixture.away : fixture.home;
+        const nomB = inverse ? fixture.home : fixture.away;
         scoreReel = `${hg}-${ag}`;
-        resultatReel = `${fixture.home} ${hg}-${ag} ${fixture.away}`;
+        resultatReel = `${fixture.home} ${fixture.homeGoals ?? 0}-${fixture.awayGoals ?? 0} ${fixture.away}`;
         // Le CODE fait foi. Le libellé n'est qu'un repli pour les
         // pronostics antérieurs à la migration 011.
         pronosticCorrect = codeValide(p.pari_code)
           ? evaluerCode(p.pari_code, hg, ag)
-          : evalPronostic(p.pronostic_principal, hg, ag, fixture.home, fixture.away);
-        valueBetCorrect  = evalValueBet(p.value_bet, hg, ag, fixture.home, fixture.away);
+          : evalPronostic(p.pronostic_principal, hg, ag, nomA, nomB);
+        valueBetCorrect  = evalValueBet(p.value_bet, hg, ag, nomA, nomB);
         source = fixture.source;
       }
 
       // ── Secours ESPN : même exigence (match terminé, les deux équipes
       // reconnues, un seul candidat), sans quota.
       if (!fixture) {
-        const sc = await scoreEspnProno(p, lireEspn).catch(() => null);
+        // Dans le sens du prono d'abord, puis dans l'autre (même exigence
+        // d'unicité) : le score est alors relu dans le sens du prono.
+        let sc = await scoreEspnProno(p, lireEspn).catch(() => null);
+        let inverse = false;
+        if (!sc) {
+          const envers = await scoreEspnProno({ ...p, equipe_a: p.equipe_b, equipe_b: p.equipe_a }, lireEspn).catch(() => null);
+          if (envers) { sc = { butsDom: envers.butsExt, butsExt: envers.butsDom }; inverse = true; }
+        }
         if (sc) {
-          const hg = sc.butsDom, ag = sc.butsExt;
+          const hg = sc.butsDom, ag = sc.butsExt;   // buts des équipes A et B du prono
           fixture = { home: p.equipe_a, away: p.equipe_b, homeGoals: hg, awayGoals: ag, status: 'FT', source: 'espn' };
           scoreReel = `${hg}-${ag}`;
-          resultatReel = `${p.equipe_a} ${hg}-${ag} ${p.equipe_b}`;
+          resultatReel = inverse ? `${p.equipe_b} ${ag}-${hg} ${p.equipe_a}` : `${p.equipe_a} ${hg}-${ag} ${p.equipe_b}`;
           pronosticCorrect = codeValide(p.pari_code)
             ? evaluerCode(p.pari_code, hg, ag)
             : evalPronostic(p.pronostic_principal, hg, ag, p.equipe_a, p.equipe_b);
