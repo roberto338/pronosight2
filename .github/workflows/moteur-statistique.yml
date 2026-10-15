@@ -405,6 +405,22 @@ jobs:
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
+      - name: Bilan Victor (pronos, fiabilité, values, bilans Telegram)
+        if: steps.choix.outputs.etape == 'bilan'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APP: https://pronosight2.onrender.com
+        run: |
+          git fetch -q origin master
+          STATUT=$(curl -sS --max-time 90 "$APP/api/status" || echo '{}')
+          {
+            echo "Prod : commit \`$(echo "$STATUT" | jq -r '.commit // "injoignable"')\` · master \`$(git rev-parse --short=7 origin/master)\` · démarrée le $(echo "$STATUT" | jq -r '.demarre // "?"')"
+            echo
+            echo '```'
+            node scripts/bilan-victor.js --jours=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
       - name: Audit de Victor
         if: steps.choix.outputs.etape == 'audit'
         env:
