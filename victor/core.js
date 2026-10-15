@@ -16,6 +16,7 @@ import {
   getContexteApiFootball, couvertureContexte, aDesDonnees,
 } from './sources.js';
 import { getContexteEspn } from './espn.js';
+import { scoreEspnProno, lecteurScoresEspn } from './valeur-suivi.js';
 import { detecterValeursMarche, prixJuste } from './valeur.js';
 import { getOdds, getOddsEvents, evaluerValue, cleMarche, sportDe } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
@@ -1437,6 +1438,11 @@ export function evalValueBet(valueBet, homeGoals, awayGoals, homeName = '', away
 // disparaissaient silencieusement de l'échantillon — constaté le 04/08/2026 :
 // 4 pronostics sur 5 jamais notés pour cette seule raison.
 const CHECK_JOURS = Number(process.env.CHECK_RESULTS_JOURS || 3);
+// ESPN (gratuit, sans quota) note en secours ce que les sources ci-dessus
+// ne trouvent pas : divisions inférieures, Argentine, Chine… Du 03 au 14/10,
+// 17 pronos sur 40 sont restés « en attente » faute de score. Sa fenêtre est
+// plus longue : elle ne coûte aucun quota et rattrape les pronos anciens.
+const CHECK_JOURS_ESPN = Math.max(CHECK_JOURS, Number(process.env.CHECK_RESULTS_JOURS_ESPN || 14));
 
 /** Décale une date ISO de n jours. Midi UTC en pivot : aucun fuseau ne peut
  *  faire basculer le jour au passage. */
@@ -1453,13 +1459,18 @@ export async function checkResults() {
 
   const { rows: pronostics } = await query(
     `SELECT id, to_char(date, 'YYYY-MM-DD') AS date_iso,
-            match, sport, pronostic_principal, value_bet, pari_code
+            match, sport, competition, equipe_a, equipe_b, pronostic_principal, value_bet, pari_code
      FROM ps_pronostics
      WHERE date >= CURRENT_DATE - $1::int
        AND resultat_reel IS NULL
      ORDER BY date DESC, id`,
-    [CHECK_JOURS]
+    [CHECK_JOURS_ESPN]
   );
+  // Au-delà de CHECK_JOURS, seul ESPN est interrogé : les autres sources
+  // ont un quota, et elles ont déjà eu leur chance.
+  const age = (p) => Math.round((new Date(aujourdhui) - new Date(p.date_iso)) / 864e5);
+  const recent = (p) => age(p) <= CHECK_JOURS;
+  const lireEspn = lecteurScoresEspn();
 
   if (pronostics.length === 0) {
     console.log('ℹ️  Aucun pronostic en attente de résultat.');
@@ -1473,7 +1484,7 @@ export async function checkResults() {
   // soir bascule au jour suivant selon le fuseau de la source (un match
   // à 23h00 Paris est daté du lendemain côté API américaine).
   const datesUtiles = new Set();
-  for (const p of pronostics) {
+  for (const p of pronostics.filter(recent)) {
     datesUtiles.add(p.date_iso);
     const lendemain = decalerJour(p.date_iso, 1);
     if (lendemain <= aujourdhui) datesUtiles.add(lendemain);
@@ -1499,7 +1510,7 @@ export async function checkResults() {
       // L'ambiguïté est consignée : refuser de noter sans laisser de trace
       // reviendrait à perdre le pronostic en silence — il resterait « non
       // noté » sans que rien n'indique pourquoi (migration 013).
-      const fixture = matchFixture(p.match, candidats, {
+      let fixture = !recent(p) ? null : matchFixture(p.match, candidats, {
         onAmbigu: async ({ candidats: noms, force }) => {
           try {
             await query(
@@ -1536,6 +1547,23 @@ export async function checkResults() {
         source = fixture.source;
       }
 
+      // ── Secours ESPN : même exigence (match terminé, les deux équipes
+      // reconnues, un seul candidat), sans quota.
+      if (!fixture) {
+        const sc = await scoreEspnProno(p, lireEspn).catch(() => null);
+        if (sc) {
+          const hg = sc.butsDom, ag = sc.butsExt;
+          fixture = { home: p.equipe_a, away: p.equipe_b, homeGoals: hg, awayGoals: ag, status: 'FT', source: 'espn' };
+          scoreReel = `${hg}-${ag}`;
+          resultatReel = `${p.equipe_a} ${hg}-${ag} ${p.equipe_b}`;
+          pronosticCorrect = codeValide(p.pari_code)
+            ? evaluerCode(p.pari_code, hg, ag)
+            : evalPronostic(p.pronostic_principal, hg, ag, p.equipe_a, p.equipe_b);
+          valueBetCorrect = evalValueBet(p.value_bet, hg, ag, p.equipe_a, p.equipe_b);
+          source = 'espn';
+        }
+      }
+
       // ── Match introuvable dans les sources : on NE DEMANDE PAS
       // le score à l'IA. Sans accès web elle l'inventerait, et c'est
       // exactement l'hallucination qu'on cherche à éliminer. On laisse
@@ -1543,9 +1571,8 @@ export async function checkResults() {
       if (!fixture) {
         // Au-delà de la fenêtre, le pronostic ne sera plus jamais repris :
         // on le signale explicitement plutôt que de le perdre en silence.
-        const age = Math.round((new Date(aujourdhui) - new Date(p.date_iso)) / 864e5);
-        if (age >= CHECK_JOURS) {
-          console.warn(`   ⚠️  ${p.match} (${p.date_iso}) — introuvable après ${age}j, DERNIER passage`);
+        if (age(p) >= CHECK_JOURS_ESPN) {
+          console.warn(`   ⚠️  ${p.match} (${p.date_iso}) — introuvable après ${age(p)}j, DERNIER passage`);
         } else {
           console.log(`   ❔ ${p.match} (${p.date_iso}) — absent des sources, réessai demain`);
         }
@@ -1644,7 +1671,7 @@ Utilise null si un pari est impossible à trancher.`;
  * on l'a enfin trouvé. Ne recalculer que CURRENT_DATE laisserait les
  * statistiques des jours précédents figées et fausses.
  */
-export async function updateVictorStats({ jours = CHECK_JOURS } = {}) {
+export async function updateVictorStats({ jours = CHECK_JOURS_ESPN } = {}) {
   console.log('\n📊 Calcul des stats...\n');
 
   const { rows: dates } = await query(

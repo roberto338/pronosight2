@@ -1332,6 +1332,40 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// NOTATION DES PRONOS DE VICTOR PAR ESPN (secours des divisions inférieures)
+// ══════════════════════════════════════════════
+{
+  const { liguesCandidates } = await import('./espn.js');
+  const VS = await import('./valeur-suivi.js');
+  verifie('ESPN : titre The Odds API', ['La Liga 2 - Spain', 'Brazil Série B', 'Super League - China', 'Primera División - Argentina', 'Ligue 2 - France']
+    .map(c => liguesCandidates(c).join()).join('|'), 'esp.2|bra.2|chn.1|arg.1|fra.2');
+  verifie('ESPN : nom API-Football', ['League Two', 'League 1', 'Championship', 'Segunda División'].map(c => liguesCandidates(c).join()).join('|'), 'eng.4|eng.3|eng.2|esp.2');
+  verifie('ESPN : étiquette ambiguë → plusieurs ligues', liguesCandidates('Serie B').join(), 'ita.2,bra.2');
+  verifie('ESPN : ligue inconnue → rien', liguesCandidates('Ligue imaginaire').length, 0);
+
+  const ev = (idD, nomD, sd, idE, nomE, se) => ({ competitions: [{ status: { type: { completed: true } }, competitors: [
+    { homeAway: 'home', team: { id: idD, displayName: nomD }, score: sd },
+    { homeAway: 'away', team: { id: idE, displayName: nomE }, score: se }] }] });
+  const jeu = {
+    'eng.4:20261003': VS.lireScoresEspn({ events: [ev('1', 'Walsall', '2', '2', 'Crawley Town', '2')] }),
+    'ita.2:20261010': VS.lireScoresEspn({ events: [ev('5', 'Palermo', '1', '6', 'Bari', '0')] }),
+    'bra.2:20261011': VS.lireScoresEspn({ events: [ev('7', 'Avaí', '0', '8', 'Londrina', '3')] }),
+  };
+  const appels = [];
+  const lire = async (ligue, iso) => { appels.push(`${ligue}:${iso}`); return jeu[`${ligue}:${iso.replace(/-/g, '')}`] || []; };
+  const s1 = await VS.scoreEspnProno({ equipe_a: 'Walsall', equipe_b: 'Crawley Town', competition: 'League Two', date_iso: '2026-10-03' }, lire);
+  verifie('ESPN prono : score trouvé', s1 ? `${s1.butsDom}-${s1.butsExt}` : null, '2-2');
+  verifie('ESPN prono : jour et lendemain interrogés', appels.join(), 'eng.4:2026-10-03,eng.4:2026-10-04');
+  const s2 = await VS.scoreEspnProno({ equipe_a: 'Avai', equipe_b: 'Londrina', competition: 'Serie B', date_iso: '2026-10-10' }, lire);
+  verifie('ESPN prono : match du soir daté du lendemain, ligue ambiguë', s2 ? `${s2.butsDom}-${s2.butsExt}` : null, '0-3');
+  verifie('ESPN prono : domicile et extérieur non inversés',
+    await VS.scoreEspnProno({ equipe_a: 'Crawley Town', equipe_b: 'Walsall', competition: 'League Two', date_iso: '2026-10-03' }, lire), null);
+  verifie('ESPN prono : compétition non couverte → pas de requête', await (async () => { appels.length = 0;
+    const r = await VS.scoreEspnProno({ equipe_a: 'A', equipe_b: 'B', competition: 'Ligue imaginaire', date_iso: '2026-10-03' }, lire);
+    return r === null && appels.length === 0; })(), true);
+}
+
+// ══════════════════════════════════════════════
 // FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
 // ══════════════════════════════════════════════
 {
