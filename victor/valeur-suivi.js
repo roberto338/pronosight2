@@ -17,7 +17,7 @@
 
 import { query } from '../db/database.js';
 import { fetchWithTimeout } from './sources.js';
-import { ligueEspn, apparierEquipe } from './espn.js';
+import { ligueEspn, liguesCandidates, apparierEquipe } from './espn.js';
 import { evaluerCode } from './paris.js';
 
 const BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
@@ -83,6 +83,40 @@ const ymd = (iso) => String(iso).slice(0, 10).replace(/-/g, '');
 const lendemain = (iso) => new Date(Date.parse(`${String(iso).slice(0, 10)}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
 
 /**
+ * Lecteur des matchs terminés d'une ligue ESPN un jour donné, avec cache
+ * par passage : (ligue, AAAA-MM-JJ) → matchs. Une erreur réseau rend [].
+ */
+export function lecteurScoresEspn() {
+  const cache = new Map();
+  return async (ligue, iso) => {
+    const cle = `${ligue}:${ymd(iso)}`;
+    if (!cache.has(cle)) {
+      try {
+        const r = await fetchWithTimeout(`${BASE}/${ligue}/scoreboard?dates=${ymd(iso)}`,
+          { headers: { 'User-Agent': 'PronoSight/1.0' } }, 10_000);
+        cache.set(cle, r.ok ? lireScoresEspn(await r.json()) : []);
+      } catch { cache.set(cle, []); }
+    }
+    return cache.get(cle);
+  };
+}
+
+/**
+ * Score ESPN d'un prono de Victor { equipe_a, equipe_b, competition, date_iso },
+ * ou null. Le jour du prono et le lendemain (match du soir daté en UTC), sur
+ * toutes les ligues candidates : le match doit y être unique.
+ */
+export async function scoreEspnProno(p, lire = lecteurScoresEspn()) {
+  const ligues = liguesCandidates(p.competition);
+  if (!ligues.length || !p.equipe_a || !p.equipe_b) return null;
+  const matchs = [];
+  for (const ligue of ligues) {
+    matchs.push(...await lire(ligue, p.date_iso), ...await lire(ligue, lendemain(p.date_iso)));
+  }
+  return trouverScore(p, matchs);
+}
+
+/**
  * Note les signaux dont le match est terminé. Rend { notes, restants }.
  * Appelé par le job check-results du soir.
  */
@@ -101,18 +135,7 @@ export async function noterValeursMarche({ jours = 4 } = {}) {
   }
   if (rows.length === 0) return { notes: 0, restants: 0 };
 
-  const cache = new Map();   // "ligue:AAAAMMJJ" → matchs terminés
-  const scoresDu = async (ligue, iso) => {
-    const cle = `${ligue}:${ymd(iso)}`;
-    if (!cache.has(cle)) {
-      try {
-        const r = await fetchWithTimeout(`${BASE}/${ligue}/scoreboard?dates=${ymd(iso)}`,
-          { headers: { 'User-Agent': 'PronoSight/1.0' } }, 10_000);
-        cache.set(cle, r.ok ? lireScoresEspn(await r.json()) : []);
-      } catch { cache.set(cle, []); }
-    }
-    return cache.get(cle);
-  };
+  const scoresDu = lecteurScoresEspn();
 
   let notes = 0;
   for (const r of rows) {
@@ -268,6 +291,6 @@ export async function valeursRecentes({ jours = 14, limite = 120 } = {}) {
 }
 
 export default {
-  enregistrerValeursMarche, lireScoresEspn, trouverScore, noterValeursMarche, resumerBilan, bilanValeursMarche,
+  enregistrerValeursMarche, lireScoresEspn, trouverScore, lecteurScoresEspn, scoreEspnProno, noterValeursMarche, resumerBilan, bilanValeursMarche,
   jourParis, decalerJour, resumerFiabilite, bilanEntre, bilanParPeriodes, evolutionMensuelle, parisNotesVictor, bilanVictor, valeursRecentes,
 };

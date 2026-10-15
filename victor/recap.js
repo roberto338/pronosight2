@@ -75,4 +75,27 @@ export async function donneesPeriode(type, maintenant = new Date()) {
   };
 }
 
-export default { veilleParis, donneesVeille, bornesPeriode, donneesPeriode };
+// ── Rattrapage des bilans du matin ──
+
+/**
+ * Bilans du matin dont l'heure est passée, en heure de Paris : ce que le
+ * rattrapage doit (ré)enfiler. Le 11/10, le bilan de 10h n'a jamais été
+ * enfilé alors que le serveur tournait à 8h30 et à 13h. Réenfiler un bilan
+ * déjà envoyé ne fait rien (clé du jour) : on peut le faire à chaque heure.
+ * Pur. Rend une liste parmi 'recap-veille', 'semaine', 'mois'.
+ */
+export function rattrapagesDus(maintenant = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Paris', weekday: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
+  }).formatToParts(maintenant).map(x => [x.type, x.value]));
+  const minutes = Number(p.hour) * 60 + Number(p.minute);
+  // Après 23h, la clé du jour (en UTC) bascule bientôt : on s'arrête.
+  if (minutes >= 23 * 60) return [];
+  const dus = [];
+  if (minutes >= 10 * 60 + 5) dus.push('recap-veille');
+  if (p.weekday === 'Mon' && minutes >= 10 * 60 + 25) dus.push('semaine');
+  if (Number(p.day) === 1 && minutes >= 10 * 60 + 45) dus.push('mois');
+  return dus;
+}
+
+export default { veilleParis, donneesVeille, bornesPeriode, donneesPeriode, rattrapagesDus };

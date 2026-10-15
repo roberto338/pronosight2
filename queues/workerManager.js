@@ -44,6 +44,11 @@ const POLL_ACTIF_MS    = 10_000;
 // à une valeur en millisecondes pour rétablir un filet périodique.
 const POLL_REPOS_MS    = Number(process.env.JOB_POLL_IDLE_MS ?? 0);
 const BACKOFF_BASE_MS  = 5_000;  // backoff exponentiel : 5s, 10s, 20s…
+// Tous les moteurs IA en panne en même temps : c'est une saturation passagère
+// (Gemini 503 « high demand » le 14/10). Trois essais en quinze secondes
+// tombaient tous dedans. On réessaie dans 5 puis 10 minutes.
+const BACKOFF_IA_MS    = 5 * 60_000;
+export const estPanneIA = (err) => /Tous les moteurs IA ont échoué/.test(String(err?.message || err));
 
 // Doit rester INFÉRIEUR au seuil de requeue du balayage (20 min), sinon
 // un job lent est repris pendant qu'il tourne encore et consomme ses
@@ -310,7 +315,7 @@ async function processClaimedJob(row) {
     console.log(`✅ [Worker] Job terminé : ${row.name} #${row.id}`, JSON.stringify(result ?? {}).slice(0, 100));
   } catch (err) {
     const willRetry = row.attempts < row.maxAttempts;
-    const backoffMs = BACKOFF_BASE_MS * 2 ** (row.attempts - 1);
+    const backoffMs = (estPanneIA(err) ? BACKOFF_IA_MS : BACKOFF_BASE_MS) * 2 ** (row.attempts - 1);
     console.error(`❌ [Worker] Job échoué : ${row.name} #${row.id} (tentative ${row.attempts}/${row.maxAttempts}) — ${err.message}`);
 
     // Un nouvel essai programmé dans 5 s ne doit pas attendre la cadence
@@ -417,6 +422,15 @@ function reveiller(raison = 'ajout de job') {
   console.log(`⚡ [Worker] Réveil — ${raison}`);
 }
 
+/** Millisecondes avant le prochain job programmé (nouvel essai), ou null. */
+async function prochainEssaiDans() {
+  const { rows } = await query(
+    `SELECT EXTRACT(EPOCH FROM (MIN(scheduled_for) - NOW())) * 1000 AS ms
+     FROM victor_jobs WHERE status = 'pending' AND scheduled_for > NOW()`);
+  const ms = Number(rows[0]?.ms);
+  return Number.isFinite(ms) ? Math.max(1000, Math.ceil(ms) + 500) : null;
+}
+
 async function tick() {
   if (!_running) return;
   _enCours = true;
@@ -427,6 +441,14 @@ async function tick() {
     if (row) {
       aTravaille = true;
       await processClaimedJob(row); // séquentiel : 1 job IA à la fois
+    }
+    else {
+      // Rien d'exécutable maintenant, mais un nouvel essai est peut-être
+      // programmé (5 min après une panne IA). Sans ce rappel, un autre job
+      // passé entre-temps remettait le worker en sommeil et l'essai
+      // attendait le prochain cron.
+      const ms = await prochainEssaiDans();
+      if (ms !== null) _replanifierDans = ms;
     }
 
     // Purge quotidienne des vieux jobs terminés

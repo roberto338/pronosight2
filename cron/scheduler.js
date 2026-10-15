@@ -15,6 +15,7 @@ import {
   addWeeklyReviewJob,
   addHeartbeatJob,
 } from '../queues/victorQueue.js';
+import { rattrapagesDus } from '../victor/recap.js';
 
 // ── Helper : timestamp Paris ──────────────────
 function now() {
@@ -84,6 +85,21 @@ const jobBilanMois = cron.schedule('40 10 1 * *', async () => {
 }, { timezone: 'Europe/Paris', scheduled: false });
 
 // ══════════════════════════════════════════════
+// JOB 3 quater — Rattrapage des bilans du matin (toutes les heures, et au démarrage)
+// ══════════════════════════════════════════════
+// Un cron manqué (redémarrage, mise en veille) ne doit pas faire sauter un
+// bilan : le 11/10, celui de 10h n'a jamais été enfilé. Réenfiler un bilan
+// déjà fait ne fait rien (clé du jour), un bilan en échec est relancé.
+async function rattraperBilans(source) {
+  for (const du of rattrapagesDus()) {
+    if (du === 'recap-veille') await enqueue('recap-veille', addRecapVeilleJob, { source });
+    else await enqueue('bilan-periode', addBilanPeriodeJob, { type: du, source });
+  }
+}
+const jobRattrapage = cron.schedule('50 * * * *', () => rattraperBilans('cron-rattrapage'),
+  { timezone: 'Europe/Paris', scheduled: false });
+
+// ══════════════════════════════════════════════
 // JOB 4 — Review hebdomadaire (dimanche 01h00)
 // ══════════════════════════════════════════════
 const jobHebdo = cron.schedule('0 1 * * 0', async () => {
@@ -121,6 +137,11 @@ export function startScheduler() {
   console.log('   Job Bilan semaine (Lun 10h20 Paris) démarré');
   jobBilanMois.start();
   console.log('   Job Bilan mois (le 1er, 10h40 Paris) démarré');
+  jobRattrapage.start();
+  console.log('   Rattrapage des bilans (toutes les heures à :50) démarré');
+  // Au démarrage aussi : un redémarrage pendant le créneau de 10h ne doit
+  // pas coûter le bilan du jour. Une minute de délai : le worker démarre.
+  setTimeout(() => rattraperBilans('demarrage'), 60_000).unref?.();
   jobHebdo.start();
   console.log('   Job Hebdo     (Dim 01h00 Paris) démarré');
   jobHeartbeat.start();

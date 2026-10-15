@@ -100,6 +100,43 @@ export function ligueEspn(f = {}) {
   return PAR_NOM[nomLigue(f.competition)] || null;
 }
 
+// Pronos de Victor : la compétition enregistrée est l'étiquette de la source
+// du match — titre The Odds API (« La Liga 2 - Spain », « Brazil Série B »)
+// ou nom API-Football / football-data (« Serie B », « League Two »). Une
+// étiquette ambiguë donne PLUSIEURS ligues candidates : le score n'est
+// retenu que si un seul match, sur toutes ces ligues, oppose les deux
+// équipes ce jour-là (trouverScore). Une ligue absente : prono non noté.
+const PAR_ETIQUETTE = {
+  'epl': ['eng.1'], 'premier league': ['eng.1'], 'championship': ['eng.2'],
+  'league 1': ['eng.3'], 'league one': ['eng.3'], 'league 2': ['eng.4'], 'league two': ['eng.4'],
+  'la liga': ['esp.1'], 'la liga spain': ['esp.1'], 'laliga': ['esp.1'], 'primera division': ['esp.1', 'arg.1'],
+  'la liga 2 spain': ['esp.2'], 'la liga 2': ['esp.2'], 'segunda division': ['esp.2'], 'laliga2': ['esp.2'],
+  'bundesliga': ['ger.1', 'aut.1'], 'bundesliga germany': ['ger.1'], '2 bundesliga': ['ger.2'], 'bundesliga 2 germany': ['ger.2'],
+  'serie a': ['ita.1', 'bra.1'], 'serie a italy': ['ita.1'], 'serie b': ['ita.2', 'bra.2'], 'serie b italy': ['ita.2'],
+  'ligue 1': ['fra.1'], 'ligue 1 france': ['fra.1'], 'ligue 2': ['fra.2'], 'ligue 2 france': ['fra.2'],
+  'eredivisie': ['ned.1'], 'primeira liga': ['por.1'], 'primeira liga portugal': ['por.1'],
+  'belgium first div': ['bel.1'], 'jupiler pro league': ['bel.1'], 'premiership': ['sco.1'],
+  'super lig': ['tur.1'], 'turkey super league': ['tur.1'], 'super league greece': ['gre.1'],
+  'austrian football bundesliga': ['aut.1'], 'superliga denmark': ['den.1'], 'allsvenskan sweden': ['swe.1'], 'eliteserien norway': ['nor.1'],
+  'mls': ['usa.1'], 'liga mx': ['mex.1'],
+  'brazil serie a': ['bra.1'], 'campeonato brasileiro serie a': ['bra.1'], 'brasileirao serie a': ['bra.1'],
+  'brazil serie b': ['bra.2'], 'campeonato brasileiro serie b': ['bra.2'],
+  'primera division argentina': ['arg.1'], 'liga profesional argentina': ['arg.1'], 'primera division chile': ['chi.1'],
+  'j league': ['jpn.1'], 'super league china': ['chn.1'], 'chinese super league': ['chn.1'], 'a league': ['aus.1'],
+  'saudi pro league': ['ksa.1'], 'pro league': ['ksa.1', 'bel.1'],
+  'uefa champions league': ['uefa.champions'], 'champions league': ['uefa.champions'],
+  'uefa europa league': ['uefa.europa'], 'europa league': ['uefa.europa'],
+  'uefa europa conference league': ['uefa.europa.conf'], 'uefa conference league': ['uefa.europa.conf'], 'conference league': ['uefa.europa.conf'],
+  'copa libertadores': ['conmebol.libertadores'], 'copa sudamericana': ['conmebol.sudamericana'],
+};
+
+/** Ligues ESPN candidates pour l'étiquette de compétition d'un prono. */
+export function liguesCandidates(competition = '') {
+  const exacte = ligueEspn({ competition });
+  if (exacte) return [exacte];
+  return PAR_ETIQUETTE[nomLigue(competition)] || [];
+}
+
 /** Toutes les ligues ESPN que le secours peut interroger (sonde). */
 export function liguesConnues() {
   return [...new Set([...Object.values(PAR_CLE_ODDS), ...Object.values(PAR_CODE_FD), ...Object.values(PAR_NOM)])];
