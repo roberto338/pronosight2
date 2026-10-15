@@ -1366,6 +1366,28 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// ROBUSTESSE : rattrapage des bilans, Groq 413, panne IA
+// ══════════════════════════════════════════════
+{
+  const RC = await import('./recap.js');
+  const { maxTokensApres413 } = await import('./core.js');
+  const { estPanneIA } = await import('../queues/workerManager.js');
+  const r = (iso) => RC.rattrapagesDus(new Date(iso)).join(',');
+  verifie('rattrapage : rien avant 10h05 (Paris)', r('2026-10-11T08:04:00Z'), '');
+  verifie('rattrapage : bilan de la veille dû après 10h05', r('2026-10-11T08:50:00Z'), 'recap-veille');
+  verifie('rattrapage : le lundi, bilan de la semaine aussi', r('2026-10-12T08:50:00Z'), 'recap-veille,semaine');
+  verifie('rattrapage : le 1er, bilan du mois (heure d\'hiver)', r('2026-11-01T09:50:00Z'), 'recap-veille,mois');
+  verifie('rattrapage : plus rien après 23h', r('2026-10-11T21:10:00Z'), '');
+
+  const msg = '{"error":{"message":"Request too large for model `openai/gpt-oss-120b` in organization `org` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 9500, please reduce your message size"}}';
+  verifie('Groq 413 : réponse réduite de l\'excédent', maxTokensApres413(msg, 8000), 6300);
+  verifie('Groq 413 : prompt seul trop gros → pas de relance', maxTokensApres413(msg.replace('9500', '15000'), 8000), null);
+  verifie('Groq 413 : message illisible → pas de relance', maxTokensApres413('erreur', 8000), null);
+  verifie('panne IA reconnue (essai dans 5 min)', estPanneIA(new Error('Tous les moteurs IA ont échoué — gemini: 503')), true);
+  verifie('autre erreur : essai rapide', estPanneIA(new Error('timeout base')), false);
+}
+
+// ══════════════════════════════════════════════
 // FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
 // ══════════════════════════════════════════════
 {

@@ -207,6 +207,20 @@ async function geminiRequest(contents, { maxTokens = 8000, jsonMode = false, sea
 // ⚠️ Le mode JSON de Groq EXIGE le mot « json » quelque part dans les
 // messages, sinon HTTP 400. D'où le suffixe ajouté au system prompt.
 // (Vérifié : la casse n'a pas d'importance, « JSON » est accepté.)
+/**
+ * Réponse maximale qui ferait passer une requête refusée en 413, d'après
+ * le message de Groq (« Limit 8000, Requested 9500 »). Null si le message
+ * est illisible ou si la réponse deviendrait trop courte pour un JSON
+ * complet. Pur.
+ */
+export function maxTokensApres413(message = '', maxTokens = 8000) {
+  const m = String(message).match(/Limit\s+(\d+)\D+Requested\s+(\d+)/i);
+  if (!m) return null;
+  const exces = Number(m[2]) - Number(m[1]);
+  const reduit = Math.floor(maxTokens - exces - 200);
+  return exces > 0 && reduit >= 2000 ? reduit : null;
+}
+
 async function groqRequest(systemPrompt, userMessage, maxTokens = 8000, tentative = 1) {
   if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY manquante');
   const resp = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
@@ -231,6 +245,20 @@ async function groqRequest(systemPrompt, userMessage, maxTokens = 8000, tentativ
     console.warn(`   ⏳ Groq limite de débit — nouvelle tentative dans ${attente}s`);
     await new Promise(r => setTimeout(r, attente * 1000));
     return groqRequest(systemPrompt, userMessage, maxTokens, 2);
+  }
+
+  // Requête trop grande (413) : Groq compte la réponse maximale demandée
+  // dans sa limite par minute. Le 14/10, Gemini (503) et Gemma (500) étaient
+  // tombés ensemble et ce refus a fait échouer le job. Une seule relance,
+  // avec une réponse maximale réduite de l'excédent annoncé par Groq.
+  if (resp.status === 413 && tentative === 1) {
+    const t = await resp.text();
+    const reduit = maxTokensApres413(t, Math.min(maxTokens, 8000));
+    if (reduit) {
+      console.warn(`   ↻ Groq : requête trop grande — relance avec ${reduit} tokens de réponse`);
+      return groqRequest(systemPrompt, userMessage, reduit, 2);
+    }
+    throw new Error(`Groq HTTP 413: ${t.slice(0, 200)}`);
   }
 
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Groq HTTP ${resp.status}: ${t.slice(0, 200)}`); }
