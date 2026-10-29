@@ -27,11 +27,36 @@ const PRINCIPAUX = {
   'ligue 1': 'F1', 'ligue 2': 'F2',
   'eredivisie': 'N1', 'primeira liga': 'P1', 'jupiler pro league': 'B1',
   'scottish premiership': 'SC0', 'super lig': 'T1',
+  // Titres The Odds API, que Victor et les values enregistrent depuis que
+  // football-data.org ne sert plus la saison (le 29/10, 60 pronos sur 161
+  // étaient « compétition non couverte » pour cette seule raison).
+  'epl': 'E0', 'league 1': 'E2', 'league 2': 'E3',
+  'la liga spain': 'SP1', 'la liga 2 spain': 'SP2',
+  'bundesliga germany': 'D1', 'bundesliga 2 germany': 'D2',
+  'serie a italy': 'I1', 'serie b italy': 'I2',
+  'ligue 1 france': 'F1', 'ligue 2 france': 'F2',
+  'dutch eredivisie': 'N1', 'primeira liga portugal': 'P1', 'belgium first div': 'B1',
+};
+
+// Clé de sport The Odds API (enregistrée avec chaque value) → fichier.
+const PAR_CLE_SPORT = {
+  soccer_epl: 'E0', soccer_efl_champ: 'E1', soccer_england_league1: 'E2', soccer_england_league2: 'E3',
+  soccer_spain_la_liga: 'SP1', soccer_spain_segunda_division: 'SP2',
+  soccer_germany_bundesliga: 'D1', soccer_germany_bundesliga2: 'D2',
+  soccer_italy_serie_a: 'I1', soccer_italy_serie_b: 'I2',
+  soccer_france_ligue_one: 'F1', soccer_france_ligue_two: 'F2',
+  soccer_netherlands_eredivisie: 'N1', soccer_portugal_primeira_liga: 'P1', soccer_belgium_first_div: 'B1',
+  soccer_spl: 'SC0', soccer_turkey_super_league: 'T1',
+};
+const AUTRES_PAR_CLE = {
+  soccer_brazil_campeonato: 'BRA', soccer_argentina_primera_division: 'ARG',
+  soccer_usa_mls: 'USA', soccer_mexico_ligamx: 'MEX', soccer_japan_j_league: 'JPN',
 };
 const AUTRES = {
   'campeonato brasileiro serie a': 'BRA', 'brasileirao': 'BRA',
   'liga profesional': 'ARG', 'argentinian primera division': 'ARG',
   'major league soccer': 'USA', 'mls': 'USA', 'liga mx': 'MEX', 'j1 league': 'JPN',
+  'brazil serie a': 'BRA', 'primera division argentina': 'ARG',
 };
 
 const simplifier = (s = '') => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -45,7 +70,9 @@ export function saisonDe(dateISO) {
 }
 
 /** Fichier à lire pour un pronostic, ou null si la compétition n'est pas couverte. */
-export function fichierPour(competition, dateISO) {
+export function fichierPour(competition, dateISO, sportKey = null) {
+  if (sportKey && PAR_CLE_SPORT[sportKey]) return { cle: `${saisonDe(dateISO)}/${PAR_CLE_SPORT[sportKey]}`, url: `${BASE}/mmz4281/${saisonDe(dateISO)}/${PAR_CLE_SPORT[sportKey]}.csv` };
+  if (sportKey && AUTRES_PAR_CLE[sportKey]) return { cle: AUTRES_PAR_CLE[sportKey], url: `${BASE}/new/${AUTRES_PAR_CLE[sportKey]}.csv` };
   const c = simplifier(competition);
   if (PRINCIPAUX[c]) return { cle: `${saisonDe(dateISO)}/${PRINCIPAUX[c]}`, url: `${BASE}/mmz4281/${saisonDe(dateISO)}/${PRINCIPAUX[c]}.csv` };
   if (AUTRES[c]) return { cle: AUTRES[c], url: `${BASE}/new/${AUTRES[c]}.csv` };

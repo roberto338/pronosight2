@@ -176,11 +176,17 @@ Sois calibré, pas optimiste : si tu annonces 0.70, tu dois avoir raison
 environ 7 fois sur 10 sur la durée. Une confiance surévaluée est une faute
 plus grave qu'un pari manqué.
 
-⚠️ IMPORTANT : "probabilite" est utilisée pour CALCULER la value réelle
-(value = probabilite × cote du marché − 1). Un pari dont la value calculée
-est négative sera automatiquement rejeté. Gonfler artificiellement tes
-probabilités ne fera donc pas passer plus de paris — cela produira
-seulement des paris perdants sur la durée. Sois exact, pas généreux.
+⚠️ IMPORTANT : un pari n'est publié que si la MEILLEURE cote du marché
+dépasse le juste prix du CONSENSUS des bookmakers (leurs cotes moyennes,
+marge retirée). Ta probabilité ne fait donc pas passer un pari : seul le
+prix du marché décide. Mesuré sur 91 de nos paris face à la clôture :
+publiés en moyenne 5 % sous le juste prix. Cherche les matchs où ton
+analyse donne une vraie raison de penser que les cotes moyennes se
+trompent, pas les paris « faciles » que le marché paie déjà au plus juste.
+
+⛔ Les paris « moins de X buts » (OU:UNDER) sont SUSPENDUS : sur 22 de nos
+pronostics, 27 % de réussite pour 56 % prévus par les cotes. Ne les propose
+pas, ni en pari principal ni en value bet.
 
 ---
 
@@ -206,7 +212,7 @@ Chaque event représente un match POUR LEQUEL TU PROPOSES UN PARI.
     DC:1X | DC:X2 | DC:12               double chance
                                         (1X = dom ou nul, X2 = nul ou ext,
                                          12 = pas de nul)
-    OU:OVER:2.5 | OU:UNDER:3.5          total de buts du MATCH
+    OU:OVER:2.5                         total de buts du MATCH (OU:UNDER suspendu)
     BTTS:YES | BTTS:NO                  les deux équipes marquent
     AH:HOME:-1.5 | AH:AWAY:+2.5         handicap asiatique
     TT:HOME:OVER:0.5                    total d'UNE équipe

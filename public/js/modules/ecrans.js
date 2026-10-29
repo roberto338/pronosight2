@@ -208,6 +208,17 @@ export function htmlFiabilite(victor) {
       <span>${MOIS_COURTS[Number(m.mois.slice(5, 7)) - 1]}</span><small>${m.n ? `${m.n} paris` : ''}</small></div>`;
   }).join('')}</div>` : '';
 
+  // Par type de pari et par cote : où il gagne, où il perd.
+  const ligneGroupe = (b) => `<div class="fi-ligne ${b.n < SEUIL_ECHANTILLON ? 'maigre' : ''}">
+    <span class="fi-periode">${e(b.libelle)}</span>
+    <span>${b.n}</span><span>${pctRond(b.taux)}</span><span>${pctRond(b.attendu)}</span>
+    <b class="${b.rendement > 0 ? 'pos' : b.rendement < 0 ? 'neg' : ''}">${pct(b.rendement)}</b></div>`;
+  const groupes = (titre, liste) => (liste?.length ? `<div class="fi-sous-titre">${titre}</div>
+  <div class="fi-table">
+    <div class="fi-ligne fi-entete"><span></span><span>Paris</span><span>Gagnés</span><span>Cotes</span><span>Rendement</span></div>
+    ${liste.map(ligneGroupe).join('')}
+  </div>` : '');
+
   return `<div class="card">
   <div class="titre-section">${icone('hausse')}Sa fiabilité dans le temps</div>
   <div class="fi-table">
@@ -216,6 +227,8 @@ export function htmlFiabilite(victor) {
   </div>
   <div class="vm-note">« Cotes » : la part de paris que les cotes du bookmaker donnaient gagnants. Quand Victor gagne plus souvent que ça, il bat le bookmaker. En grisé : moins de ${SEUIL_ECHANTILLON} paris, trop peu pour conclure.</div>
   ${barres}
+  ${groupes('Par type de pari', victor.types)}
+  ${groupes('Par cote', (victor.cotes || []).map(b => ({ ...b, libelle: `Cote ${b.libelle}` })))}
 </div>`;
 }
 

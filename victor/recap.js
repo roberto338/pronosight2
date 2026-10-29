@@ -9,6 +9,7 @@
 // bilan cumulé. Gains comme pertes : c'est ce qui rend le service crédible.
 
 import { query } from '../db/database.js';
+import { coteNette } from './commission.js';
 import { bilanVictor, bilanValeursMarche, parisNotesVictor, bilanEntre, bilanParPeriodes, jourParis, decalerJour } from './valeur-suivi.js';
 
 /** Date ISO de la veille, en heure de Paris. */
@@ -28,6 +29,7 @@ export async function donneesVeille(dateISO = veilleParis()) {
     bilanVictor().catch(() => null),
     bilanValeursMarche().catch(() => null),
   ]);
+  for (const v of valeurs) v.cote_nette = coteNette(v.cote, v.bookmaker);
   return { date: dateISO, pronos, valeurs, bilan: { victor, marche } };
 }
 

@@ -19,6 +19,7 @@ import { query } from '../db/database.js';
 import { fetchWithTimeout } from './sources.js';
 import { ligueEspn, liguesCandidates, apparierEquipe } from './espn.js';
 import { evaluerCode } from './paris.js';
+import { coteNette } from './commission.js';
 
 const BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 
@@ -182,7 +183,10 @@ export function resumerBilan(rows = []) {
 /** Bilan complet et bilan des 30 derniers jours. */
 export async function bilanValeursMarche() {
   const { rows } = await query(
-    `SELECT date, cote, avantage, gagne FROM ps_valeurs_marche WHERE gagne IS NOT NULL ORDER BY date`);
+    `SELECT date, cote, bookmaker, avantage, gagne FROM ps_valeurs_marche WHERE gagne IS NOT NULL ORDER BY date`);
+  // Bilan sur la cote réellement touchée : commission des bourses retirée,
+  // y compris pour les values enregistrées avant le 29/10.
+  for (const r of rows) r.cote = coteNette(r.cote, r.bookmaker);
   const depuis30 = Date.now() - 30 * 864e5;
   return {
     total: resumerBilan(rows),
@@ -249,6 +253,46 @@ export function evolutionMensuelle(rows = [], maintenant = new Date(), nbMois = 
   return mois.map(cle => ({ mois: cle, ...resumerFiabilite(rows.filter(r => String(r.date).startsWith(cle))) }));
 }
 
+/** Famille d'un code de pari, pour le bilan par type. Pur. */
+export function familleProno(code = '') {
+  const c = String(code || '');
+  if (c.startsWith('1X2:HOME') || c.startsWith('1X2:AWAY')) return 'Victoire';
+  if (c === '1X2:DRAW') return 'Match nul';
+  if (c.startsWith('OU:OVER:')) return 'Plus de buts';
+  if (c.startsWith('OU:UNDER:')) return 'Moins de buts';
+  if (c.startsWith('BTTS:')) return 'Les deux marquent';
+  return 'Autre';
+}
+
+/** Tranches de cote du bilan. Pur. */
+export const TRANCHES_COTE = [
+  { cle: 'tres-basse', libelle: 'moins de 1,40', max: 1.40 },
+  { cle: 'basse', libelle: '1,40 à 1,69', max: 1.70 },
+  { cle: 'moyenne', libelle: '1,70 à 1,99', max: 2.00 },
+  { cle: 'haute', libelle: '2,00 et plus', max: Infinity },
+];
+export const trancheCote = (cote) => TRANCHES_COTE.find(t => Number(cote) < t.max) || null;
+
+/** Bilan par type de pari, du plus joué au moins joué. Pur. */
+export function bilanParType(rows = []) {
+  const groupes = new Map();
+  for (const r of rows) {
+    const f = familleProno(r.pari_code);
+    if (!groupes.has(f)) groupes.set(f, []);
+    groupes.get(f).push(r);
+  }
+  return [...groupes.entries()].map(([libelle, g]) => ({ libelle, ...resumerFiabilite(g) }))
+    .filter(b => b.n > 0).sort((a, b) => b.n - a.n);
+}
+
+/** Bilan par tranche de cote, dans l'ordre des cotes. Pur. */
+export function bilanParCote(rows = []) {
+  return TRANCHES_COTE.map(t => ({
+    libelle: t.libelle,
+    ...resumerFiabilite(rows.filter(r => trancheCote(r.cote)?.cle === t.cle)),
+  })).filter(b => b.n > 0);
+}
+
 /**
  * Les paris de Victor qui comptent pour le bilan, mêmes règles que /bilan :
  * cote de marché confirmée, hors doubles chances (aucune n'est cotée par
@@ -256,7 +300,7 @@ export function evolutionMensuelle(rows = [], maintenant = new Date(), nbMois = 
  */
 export async function parisNotesVictor() {
   const { rows } = await query(
-    `SELECT to_char(date, 'YYYY-MM-DD') AS date, pronostic_correct AS gagne, cote_estimee AS cote
+    `SELECT to_char(date, 'YYYY-MM-DD') AS date, pronostic_correct AS gagne, cote_estimee AS cote, pari_code
      FROM ps_pronostics
      WHERE pronostic_correct IS NOT NULL AND cote_confirmee = true
        AND cote_estimee IS NOT NULL AND pari_code NOT LIKE 'DC:%'
@@ -272,6 +316,8 @@ export async function bilanVictor(maintenant = new Date()) {
     premier: rows[0]?.date ?? null,
     periodes: bilanParPeriodes(rows, maintenant),
     mois: evolutionMensuelle(rows, maintenant),
+    types: bilanParType(rows),
+    cotes: bilanParCote(rows),
   };
 }
 
@@ -292,5 +338,6 @@ export async function valeursRecentes({ jours = 14, limite = 120 } = {}) {
 
 export default {
   enregistrerValeursMarche, lireScoresEspn, trouverScore, lecteurScoresEspn, scoreEspnProno, noterValeursMarche, resumerBilan, bilanValeursMarche,
-  jourParis, decalerJour, resumerFiabilite, bilanEntre, bilanParPeriodes, evolutionMensuelle, parisNotesVictor, bilanVictor, valeursRecentes,
+  jourParis, decalerJour, resumerFiabilite, bilanEntre, bilanParPeriodes, evolutionMensuelle, familleProno, trancheCote,
+  bilanParType, bilanParCote, parisNotesVictor, bilanVictor, valeursRecentes,
 };

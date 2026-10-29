@@ -25,6 +25,7 @@
 // Pur : reçoit les cotes déjà agrégées par victor/odds.js.
 
 import { libelleCode } from './paris.js';
+import { coteNette } from './commission.js';
 
 export const SEUIL_VALEUR_MARCHE = Number(process.env.VALEUR_MARCHE_SEUIL || 0.02);
 export const COTE_MAX_VALEUR = 10;        // au-delà, une cote isolée est plus souvent une erreur qu'une aubaine
@@ -103,7 +104,9 @@ export function detecterValeursMarche(fixtures = [], cotes = new Map(), {
     for (const [code, p] of Object.entries(justes)) {
       const meilleure = c.meilleures[code];
       if (!meilleure || !(p > 0) || meilleure.cote > coteMax) continue;
-      const avantage = meilleure.cote * p - 1;
+      // Sur la cote réellement touchée, commission des bourses retirée.
+      const nette = meilleure.nette ?? coteNette(meilleure.cote, meilleure.bookmaker);
+      const avantage = nette * p - 1;
       if (avantage <= seuil) continue;
       signaux.push({
         match: `${f.home} vs ${f.away}`,
@@ -112,7 +115,8 @@ export function detecterValeursMarche(fixtures = [], cotes = new Map(), {
         equipe_a: f.home, equipe_b: f.away,
         pari_code: code,
         libelle: libelleCode(code, f.home, f.away) || code,
-        cote: meilleure.cote,
+        cote: meilleure.cote,              // affichée par le bookmaker
+        cote_nette: Number(nette.toFixed(3)),
         bookmaker: meilleure.bookmaker,
         probaJuste: p,
         coteJuste: 1 / p,
