@@ -19,6 +19,7 @@ import { query } from '../db/database.js';
 import { fetchWithTimeout } from './sources.js';
 import { ligueEspn, liguesCandidates, apparierEquipe } from './espn.js';
 import { evaluerCode } from './paris.js';
+import { coteNette } from './commission.js';
 
 const BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 
@@ -182,7 +183,10 @@ export function resumerBilan(rows = []) {
 /** Bilan complet et bilan des 30 derniers jours. */
 export async function bilanValeursMarche() {
   const { rows } = await query(
-    `SELECT date, cote, avantage, gagne FROM ps_valeurs_marche WHERE gagne IS NOT NULL ORDER BY date`);
+    `SELECT date, cote, bookmaker, avantage, gagne FROM ps_valeurs_marche WHERE gagne IS NOT NULL ORDER BY date`);
+  // Bilan sur la cote réellement touchée : commission des bourses retirée,
+  // y compris pour les values enregistrées avant le 29/10.
+  for (const r of rows) r.cote = coteNette(r.cote, r.bookmaker);
   const depuis30 = Date.now() - 30 * 864e5;
   return {
     total: resumerBilan(rows),

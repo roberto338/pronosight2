@@ -17,6 +17,7 @@
 
 import { fetchWithTimeout, normalizeTeam, heureParis } from './sources.js';
 import { noterQuota } from './quota-cotes.js';
+import { coteNette } from './commission.js';
 
 const ODDS_KEY = process.env.ODDS_API_KEY;
 
@@ -131,11 +132,15 @@ export function agregerEvenement(ev) {
   // réponse : l'afficher ne coûte aucun crédit. La value reste calculée sur
   // la MOYENNE — plus prudente — pour ne pas laisser passer davantage de
   // paris sur la foi d'un seul bookmaker.
+  // Classée sur la cote NETTE : une bourse de paris prélève une commission
+  // sur le gain (victor/commission.js). 3,00 chez Betfair vaut 2,90, moins
+  // qu'un 2,95 chez un bookmaker classique.
   const meilleures = {};
   const noter = (cle, prix, bookmaker) => {
     const c = Number(prix);
     if (!Number.isFinite(c) || c < 1.01) return;
-    if (!meilleures[cle] || c > meilleures[cle].cote) meilleures[cle] = { cote: c, bookmaker: bookmaker || '?' };
+    const nette = coteNette(c, bookmaker);
+    if (!meilleures[cle] || nette > meilleures[cle].nette) meilleures[cle] = { cote: c, nette, bookmaker: bookmaker || '?' };
   };
 
   for (const bk of ev.bookmakers || []) {

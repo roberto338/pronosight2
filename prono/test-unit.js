@@ -921,6 +921,11 @@ verifie('fd.co.uk : Serie A = Italie', fichierPour('Serie A', '2026-09-01')?.cle
 verifie('fd.co.uk : Primera Division = Espagne', fichierPour('Primera Division', '2026-05-01')?.cle, '2526/SP1');
 verifie('fd.co.uk : Brésil, fichier unique', fichierPour('Campeonato Brasileiro Série A', '2026-09-01')?.cle, 'BRA');
 verifie('fd.co.uk : coupe d\'Europe non couverte', fichierPour('UEFA Champions League', '2026-09-01'), null);
+verifie('fd.co.uk : titre The Odds API « EPL »', fichierPour('EPL', '2026-10-20')?.cle, '2627/E0');
+verifie('fd.co.uk : titre The Odds API « League 1 » = League One', fichierPour('League 1', '2026-10-20')?.cle, '2627/E2');
+verifie('fd.co.uk : titre The Odds API « La Liga - Spain »', fichierPour('La Liga - Spain', '2026-10-20')?.cle, '2627/SP1');
+verifie('fd.co.uk : clé de sport prioritaire', fichierPour('Nom inconnu', '2026-10-20', 'soccer_efl_champ')?.cle, '2627/E1');
+verifie('fd.co.uk : Série B brésilienne non couverte', fichierPour('Brazil Série B', '2026-10-20'), null);
 
 const csv = 'Div,Date,Time,HomeTeam,AwayTeam,BFECH\nI1,20/09/2026,15:00,Frosinone,Como,2.1\nE1,"19/09/26",16:00,"Hull, City",Newcastle,3\n';
 const lignesCsv = lireCsv(csv);

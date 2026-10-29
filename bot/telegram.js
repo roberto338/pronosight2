@@ -4,6 +4,7 @@
 
 import 'dotenv/config';
 import TelegramBot from '../nexus/lib/telegramCompat.js';
+import { coteNette, commissionDe } from '../victor/commission.js';
 
 const TOKEN      = process.env.TELEGRAM_BOT_TOKEN;
 const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
@@ -104,6 +105,12 @@ export function getEmojiBySport(sport = '') {
 // ══════════════════════════════════════════════
 // BROADCAST DAILY — Analyse complète du jour
 // ══════════════════════════════════════════════
+
+/** « (2,05 après commission) » pour une bourse de paris, rien sinon. Pur. */
+export function mentionCommission(cote, bookmaker) {
+  if (!commissionDe(bookmaker)) return '';
+  return ` (${coteNette(cote, bookmaker).toFixed(2)} après commission)`;
+}
 
 export const MENTION_PREVENTION = 'Interdit aux moins de 18 ans. Jouer comporte des risques : endettement, isolement, dépendance. '
   + 'Pour être aidé, appelez le 09 74 75 13 13 (appel non surtaxé).';
@@ -240,7 +247,7 @@ export function texteRecapVeille(d) {
   const notees = (d.valeurs || []).filter(v => v.gagne === true || v.gagne === false);
   if (d.valeurs?.length) {
     const gv = notees.filter(v => v.gagne).length;
-    const pv = notees.reduce((a, v) => a + (v.gagne ? Number(v.cote) - 1 : -1), 0);
+    const pv = notees.reduce((a, v) => a + (v.gagne ? Number(v.cote_nette ?? v.cote) - 1 : -1), 0);
     t += `📈 Values hier : *${gv}/${notees.length}* gagnée${gv > 1 ? 's' : ''}`
       + `${notees.length ? ` · ${esc(u(pv))}` : ''}${notees.length < d.valeurs.length ? ` (${d.valeurs.length - notees.length} en attente)` : ''}\n`;
   }
@@ -306,7 +313,11 @@ export async function broadcastDaily(victorData) {
       // champ peut donc rester vide — afficher « ~ » ou « ~undefined »
       // à un abonné serait pire que de ne rien afficher.
       const coteAffichable = ev.cote_estimee != null && ev.cote_estimee !== '';
-      if (coteAffichable) {
+      if (coteAffichable && ev.cote_max && ev.bookmaker_max) {
+        // Depuis le 29/10 : la meilleure cote du marché, chez qui la trouver,
+        // et ce qu'elle rapporte vraiment sur une bourse de paris.
+        msgEvents += `💰 *Cote :* ${esc(Number(ev.cote_max).toFixed(2))} chez ${esc(ev.bookmaker_max)}${esc(mentionCommission(ev.cote_max, ev.bookmaker_max))} | ${esc(ev.confiance)}\n`;
+      } else if (coteAffichable) {
         msgEvents += `💰 *Cote :* ~${esc(ev.cote_estimee)} | ${esc(ev.confiance)}\n`;
       } else {
         msgEvents += `💰 *Cote :* ${esc('non disponible')} | ${esc(ev.confiance)}\n`;
@@ -327,16 +338,14 @@ export async function broadcastDaily(victorData) {
       // Mesuré le 02/10 : à cette cote, les pronostics perdaient 4,7 % face
       // au prix juste de clôture, soit à peu près la marge. Indiquer où se
       // trouve le meilleur prix réduit ce coût pour l'abonné.
-      if (ev.cote_max && ev.bookmaker_max) {
-        msgEvents += `🏷️ *Meilleure cote :* ${esc(ev.cote_max)} chez ${esc(ev.bookmaker_max)}\n`;
-      }
+      // (Elle est désormais la cote principale, ligne « Cote » ci-dessus.)
 
       // ── Prix juste et cote minimum ─────────────────────────────
       // Probabilité du consensus des bookmakers, marge retirée (méthode de
       // la puissance). En dessous de cette cote, le pari perd sur la durée
       // face au marché : l'abonné sait à partir d'où il vaut la peine.
       if (ev.cote_juste && ev.proba_juste) {
-        msgEvents += `📐 *Prix juste :* ${esc(ev.cote_juste.toFixed(2))} (${esc(Math.round(ev.proba_juste * 100))} %) — à jouer seulement au-dessus\n`;
+        msgEvents += `📐 *Prix juste :* ${esc(ev.cote_juste.toFixed(2))} — le marché lui donne ${esc(Math.round(ev.proba_juste * 100))} % de chances. À jouer seulement au-dessus de ce prix.\n`;
       }
 
       // ⚠️ Ne JAMAIS échapper les parenthèses : en Markdown v1 Telegram
@@ -367,7 +376,7 @@ export async function broadcastDaily(victorData) {
       msgEvents += `_${esc('Cotes au-dessus du prix juste du consensus des bookmakers. Calcul sans IA.')}_\n\n`;
       for (const v of valeurs) {
         msgEvents += `⚽ *${esc(v.equipe_a)} vs ${esc(v.equipe_b)}*${v.heure ? ` — ${esc(v.heure)}` : ''}\n`;
-        msgEvents += `🎯 ${esc(v.libelle)} @ *${esc(v.cote.toFixed(2))}* chez ${esc(v.bookmaker)}\n`;
+        msgEvents += `🎯 ${esc(v.libelle)} @ *${esc(v.cote.toFixed(2))}* chez ${esc(v.bookmaker)}${esc(mentionCommission(v.cote, v.bookmaker))}\n`;
         msgEvents += `📐 Prix juste ${esc(v.coteJuste.toFixed(2))} · avantage +${esc((v.avantage * 100).toFixed(1))} %\n\n`;
       }
       msgEvents += `_${esc('Sur 6 saisons : ces écarts ont battu la cote de clôture (+3,9 %). Gain non garanti, cote à vérifier avant de jouer.')}_\n`;
@@ -621,7 +630,7 @@ if (bot && process.env.NODE_ENV !== 'production') {
         }
         let txt = `📈 *Values de marché du jour*\n━━━━━━━━━━━━━\n`;
         for (const r of rows) {
-          txt += `⚽ *${esc(r.match)}*\n🎯 ${esc(r.libelle || r.pari_code)} @ ${esc(Number(r.cote).toFixed(2))} chez ${esc(r.bookmaker)}\n`;
+          txt += `⚽ *${esc(r.match)}*\n🎯 ${esc(r.libelle || r.pari_code)} @ ${esc(Number(r.cote).toFixed(2))} chez ${esc(r.bookmaker)}${esc(mentionCommission(r.cote, r.bookmaker))}\n`;
           txt += `📐 Prix juste ${esc((1 / Number(r.proba_juste)).toFixed(2))} · avantage +${esc((Number(r.avantage) * 100).toFixed(1))} %\n\n`;
         }
         txt += `_${esc(MENTION_PREVENTION)}_`;

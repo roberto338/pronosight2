@@ -18,6 +18,7 @@
 import { normalizeTeam } from './sources.js';
 import { agregerEvenement } from './odds.js';
 import { prixJuste } from './valeur.js';
+import { coteNette } from './commission.js';
 
 /** L'évènement The Odds API d'un match, ou null. Les deux équipes doivent correspondre. */
 export function trouverEvenement(equipeA, equipeB, caches = []) {
@@ -59,7 +60,8 @@ export function selectionsDuJour({ valeurs = [], pronos = [], caches = [], maint
   const pasCommence = (iso) => !iso || Date.parse(iso) > maintenant.getTime();
   const out = [];
   for (const v of valeurs) {
-    const cote = Number(v.cote), pj = Number(v.proba_juste);
+    // Cote réellement touchée : une bourse de paris prélève sa commission.
+    const cote = Number(coteNette(v.cote, v.bookmaker).toFixed(2)), pj = Number(v.proba_juste);
     if (!(cote > 1) || !pasCommence(v.debut_utc)) continue;
     out.push({
       id: `v-${v.id ?? v.match}-${v.pari_code}`, source: 'value',

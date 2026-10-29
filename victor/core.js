@@ -18,6 +18,7 @@ import {
 import { getContexteEspn } from './espn.js';
 import { scoreEspnProno, lecteurScoresEspn } from './valeur-suivi.js';
 import { detecterValeursMarche, prixJuste } from './valeur.js';
+import { coteNette, commissionDe } from './commission.js';
 import { getOdds, getOddsEvents, evaluerValue, cleMarche, sportDe } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
@@ -956,22 +957,26 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
       ev.cote_juste  = Number(pj.coteJuste.toFixed(2));
     }
 
+    // ── Règle du marché (29/10) ────────────────────────────────────
+    // Avant : la value se calculait avec la probabilité que l'IA s'attribue
+    // et la cote MOYENNE des bookmakers. Mesuré le 29/10 sur 91 paris face à
+    // la clôture Betfair : publiés 5,3 % SOUS le juste prix, 13 % seulement
+    // au-dessus, et aucun mouvement du marché dans leur sens. L'IA n'est pas
+    // calibrée ; le consensus des bookmakers l'est.
+    // Désormais : publié seulement si la MEILLEURE cote réellement touchée
+    // (commission des bourses retirée) dépasse le juste prix du consensus.
+    // C'est la règle des values de marché, la seule qui ait battu la clôture.
     if (vb) {
-      ev.cote_estimee = vb.cote;              // cote RÉELLE, plus une estimation
-      // Affichée à côté de la moyenne, jamais à sa place : voir agregerEvenement.
-      if (vb.meilleure && vb.meilleure.cote > vb.cote + 0.005) {
-        ev.cote_max = vb.meilleure.cote;
-        ev.bookmaker_max = vb.meilleure.bookmaker;
-      }
-      ev.value_calculee = vb.value;
-      ev.proba_marche   = vb.probaMarche;
-      if (vb.value <= 0) {
-        rejets.push({
-          match: ev.match,
-          motifs: [`value négative (${(vb.value * 100).toFixed(1)}% à la cote ${vb.cote})`],
-        });
+      const r = regleDuMarche(ev, cotesDuMatch);
+      if (!r.ok) {
+        rejets.push({ match: ev.match, motifs: [r.motif] });
         continue;
       }
+      ev.cote_estimee   = r.cote;             // cote réellement touchée : c'est elle qui est notée
+      ev.cote_max       = r.coteAffichee;     // affichée chez le bookmaker
+      ev.bookmaker_max  = r.bookmaker;
+      ev.value_calculee = r.valeur;
+      ev.proba_marche   = r.probaJuste;
     }
 
     events.push(ev);
@@ -1447,6 +1452,36 @@ export function normaliserPari(ev) {
  * @param {Set<string>} clesReelles  clés "domicile|exterieur" des matchs des sources
  */
 export const PROBA_MIN = Number(process.env.VICTOR_PROBA_MIN || 0.65);
+
+// Avantage minimum sur le juste prix du consensus pour publier (0 = toute
+// cote au-dessus du juste prix). Les values de marché exigent 2 %.
+export const SEUIL_VICTOR_MARCHE = Number(process.env.VICTOR_SEUIL_MARCHE || 0);
+
+// « Moins de X buts » suspendus le 29/10 : 22 paris, 27 % gagnés pour 56 %
+// prévus par les cotes (−53,6 %, z = −2,7), le seul écart net de l'analyse.
+// VICTOR_MOINS_DE_BUTS=1 les réautorise.
+export const MOINS_DE_BUTS_SUSPENDUS = process.env.VICTOR_MOINS_DE_BUTS !== '1';
+
+/**
+ * Le pari passe-t-il la règle du marché ? Pur.
+ * @returns {{ok:true, cote, coteAffichee, bookmaker, probaJuste, coteJuste, valeur} | {ok:false, motif}}
+ */
+export function regleDuMarche(ev, cotesDuMatch, { seuil = SEUIL_VICTOR_MARCHE } = {}) {
+  const code = ev?.pari_code;
+  const pj = prixJuste(cotesDuMatch, code);
+  if (!pj) return { ok: false, motif: 'pas de consensus du marché sur ce pari (moins de 5 bookmakers, ou marché incomplet)' };
+  const m = cotesDuMatch?.meilleures?.[code];
+  if (!m) return { ok: false, motif: `aucune cote de bookmaker pour "${code}"` };
+  const nette = m.nette ?? coteNette(m.cote, m.bookmaker);
+  const valeur = pj.probaJuste * nette - 1;
+  if (!(valeur > seuil)) {
+    return { ok: false, motif: `sous le juste prix du marché : meilleure cote ${nette.toFixed(2)} (${m.bookmaker}), juste prix ${pj.coteJuste.toFixed(2)}` };
+  }
+  return {
+    ok: true, cote: Number(nette.toFixed(2)), coteAffichee: m.cote, bookmaker: m.bookmaker,
+    probaJuste: pj.probaJuste, coteJuste: pj.coteJuste, valeur,
+  };
+}
 /** Matchs envoyés à l'IA au plus : au-delà, la réponse est tronquée ou vide. */
 export const MAX_MATCHS_IA = Number(process.env.VICTOR_MAX_MATCHS || 40);
 export const EXIGER_COTE_MARCHE = process.env.VICTOR_EXIGER_COTE !== 'false';
@@ -1492,9 +1527,15 @@ export function validerEvent(ev, clesReelles = null) {
   // promesse. Sous PROBA_MIN, on ne publie plus. Réglable par variable
   // d'environnement si un audit futur montre que la bande est tenue.
   const proba = Number(ev?.probabilite);
-  if ((Number.isFinite(proba) && proba < PROBA_MIN) || Number(ev?.confiance_score) === 3) {
+  if ((Number.isFinite(proba) && proba < PROBA_MIN) || Number(ev?.confiance_score) === 3
+      || /moyen|faible/i.test(String(ev?.confiance || ''))) {
     motifs.push(`confiance insuffisante (probabilité ${Number.isFinite(proba) ? proba : '?'} < ${PROBA_MIN})`);
   }
+  // Suspendus le 29/10 (voir MOINS_DE_BUTS_SUSPENDUS).
+  if (MOINS_DE_BUTS_SUSPENDUS && /^OU:UNDER:/.test(String(ev?.pari_code || ''))) {
+    motifs.push('« moins de X buts » suspendus : 27 % de réussite pour 56 % prévus par les cotes (22 paris)');
+  }
+
 
   // La cote doit rester dans le domaine du plausible
   const cote = Number(ev?.cote_estimee);

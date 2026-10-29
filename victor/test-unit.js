@@ -1434,6 +1434,63 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// RÈGLE DU MARCHÉ (29/10) : meilleure cote nette, juste prix, commission
+// ══════════════════════════════════════════════
+{
+  const { commissionDe, coteNette } = await import('./commission.js');
+  const { agregerEvenement } = await import('./odds.js');
+  const { detecterValeursMarche } = await import('./valeur.js');
+  const { regleDuMarche, MOINS_DE_BUTS_SUSPENDUS } = await import('./core.js');
+  const { mentionCommission } = await import('../bot/telegram.js');
+  const { selectionsDuJour } = await import('./combines.js');
+  const proche = (a, b, e = 1e-9) => Math.abs(a - b) < e;
+
+  verifie('commission : Betfair 5 %', commissionDe('Betfair'), 0.05);
+  verifie('commission : Matchbook 2 %', commissionDe('Matchbook'), 0.02);
+  verifie('commission : Betfair Sportsbook, aucune', commissionDe('Betfair Sportsbook'), 0);
+  verifie('commission : bookmaker classique, aucune', commissionDe('Unibet'), 0);
+  verifie('cote nette : 3,00 chez Betfair = 2,90', proche(coteNette(3, 'Betfair'), 2.9), true);
+  verifie('cote nette : inchangée ailleurs', coteNette(2.5, 'Winamax'), 2.5);
+  verifie('mention : bourse de paris', mentionCommission(3, 'Betfair'), ' (2.90 après commission)');
+  verifie('mention : bookmaker classique', mentionCommission(3, 'Unibet'), '');
+
+  const evt = { home_team: 'Lens', away_team: 'Lille', bookmakers: [
+    { title: 'Betfair', markets: [{ key: 'h2h', outcomes: [{ name: 'Lens', price: 3.00 }, { name: 'Lille', price: 2.5 }, { name: 'Draw', price: 3.2 }] }] },
+    { title: 'Unibet', markets: [{ key: 'h2h', outcomes: [{ name: 'Lens', price: 2.95 }, { name: 'Lille', price: 2.4 }, { name: 'Draw', price: 3.1 }] }] },
+  ] };
+  const agr = agregerEvenement(evt);
+  verifie('meilleure cote : classée sur la cote nette (2,95 Unibet > 3,00 Betfair)', agr.meilleures['1X2:HOME'].bookmaker, 'Unibet');
+  verifie('meilleure cote : nette indiquée', proche(agr.meilleures['1X2:AWAY'].nette, 1 + 1.5 * 0.95), true);
+
+  const marches = { '1X2:HOME': 2.00, '1X2:DRAW': 3.50, '1X2:AWAY': 4.00, 'OU:OVER:2.5': 1.90, 'OU:UNDER:2.5': 2.00 };
+  const fx = [{ fixtureId: 'e1', home: 'Lens', away: 'Lille' }];
+  const surBourse = { marches, bookmakers: 9, meilleures: { '1X2:HOME': { cote: 2.12, nette: coteNette(2.12, 'Betfair'), bookmaker: 'Betfair' } } };
+  const sansCommission = { marches, bookmakers: 9, meilleures: { '1X2:HOME': { cote: 2.12, nette: 2.12, bookmaker: 'Betclic' } } };
+  verifie('value : la commission peut l\'annuler', detecterValeursMarche(fx, new Map([['e1', surBourse]]), { seuil: 0.02 }).length, 0);
+  verifie('value : même cote sans commission, signal', detecterValeursMarche(fx, new Map([['e1', sansCommission]]), { seuil: 0.02 }).length, 1);
+
+  const bon = regleDuMarche({ pari_code: '1X2:HOME' }, sansCommission);
+  verifie('règle du marché : au-dessus du juste prix, publié', bon.ok, true);
+  verifie('règle du marché : cote notée = cote touchée', bon.cote, 2.12);
+  verifie('règle du marché : bookmaker indiqué', bon.bookmaker, 'Betclic');
+  const juste = regleDuMarche({ pari_code: '1X2:HOME' }, { marches, bookmakers: 9, meilleures: { '1X2:HOME': { cote: 2.00, nette: 2.00, bookmaker: 'X' } } });
+  verifie('règle du marché : à la cote moyenne, rejeté', juste.ok, false);
+  verifie('règle du marché : motif lisible', /sous le juste prix/.test(juste.motif), true);
+  verifie('règle du marché : sans consensus, rejeté', regleDuMarche({ pari_code: '1X2:HOME' }, { ...sansCommission, bookmakers: 3 }).ok, false);
+  verifie('règle du marché : ligne sans cote, rejeté', regleDuMarche({ pari_code: 'OU:OVER:2.5' }, sansCommission).ok, false);
+
+  verifie('moins de buts suspendus par défaut', MOINS_DE_BUTS_SUSPENDUS, true);
+  verifie('validation : « moins de 2,5 buts » rejeté', validerEvent(ev({ pari_code: 'OU:UNDER:2.5', pronostic_principal: 'Moins de 2.5 buts' }), cles)
+    .some(m => /suspendus/.test(m)), true);
+  verifie('validation : « plus de 2,5 buts » accepté', validerEvent(ev({ pari_code: 'OU:OVER:2.5', pronostic_principal: 'Plus de 2.5 buts' }), cles)
+    .some(m => /suspendus/.test(m)), false);
+  verifie('validation : confiance « Moyenne » rejetée', validerEvent(ev({ confiance: 'Moyenne' }), cles).some(m => /confiance/.test(m)), true);
+
+  const sel = selectionsDuJour({ valeurs: [{ id: 1, match: 'A vs B', pari_code: '1X2:HOME', cote: 3, bookmaker: 'Betfair', proba_juste: 0.36 }] });
+  verifie('combinés : cote nette d\'une value sur bourse', sel[0]?.cote, 2.9);
+}
+
+// ══════════════════════════════════════════════
 // FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
 // ══════════════════════════════════════════════
 {
