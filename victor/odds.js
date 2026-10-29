@@ -17,7 +17,15 @@
 
 import { fetchWithTimeout, normalizeTeam, heureParis } from './sources.js';
 import { noterQuota } from './quota-cotes.js';
-import { coteNette } from './commission.js';
+import { coteNette, commissionDe } from './commission.js';
+
+// Les bourses de paris (Betfair, Matchbook…) ne sont PAS des candidates à la
+// « meilleure cote ». Mesuré le 29/10 face à la clôture Betfair : les values
+// trouvées sur une bourse perdaient 4 à 6 % (36 values), celles des
+// bookmakers classiques gagnaient environ 1 % (14). Une bourse est le marché
+// le plus juste : quand elle paie plus que la moyenne des bookmakers, c'est
+// la moyenne qui se trompe, pas elle. VALEURS_AVEC_BOURSES=1 les réadmet.
+export const BOURSES_CANDIDATES = process.env.VALEURS_AVEC_BOURSES === '1';
 
 const ODDS_KEY = process.env.ODDS_API_KEY;
 
@@ -139,6 +147,7 @@ export function agregerEvenement(ev) {
   const noter = (cle, prix, bookmaker) => {
     const c = Number(prix);
     if (!Number.isFinite(c) || c < 1.01) return;
+    if (!BOURSES_CANDIDATES && commissionDe(bookmaker)) return;
     const nette = coteNette(c, bookmaker);
     if (!meilleures[cle] || nette > meilleures[cle].nette) meilleures[cle] = { cote: c, nette, bookmaker: bookmaker || '?' };
   };

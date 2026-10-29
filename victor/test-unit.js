@@ -1460,7 +1460,8 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   ] };
   const agr = agregerEvenement(evt);
   verifie('meilleure cote : classée sur la cote nette (2,95 Unibet > 3,00 Betfair)', agr.meilleures['1X2:HOME'].bookmaker, 'Unibet');
-  verifie('meilleure cote : nette indiquée', proche(agr.meilleures['1X2:AWAY'].nette, 1 + 1.5 * 0.95), true);
+  verifie('meilleure cote : une bourse n\'est jamais candidate (2,50 Betfair écarté, 2,40 Unibet)', agr.meilleures['1X2:AWAY'].bookmaker, 'Unibet');
+  verifie('meilleure cote : nette = affichée hors bourse', agr.meilleures['1X2:AWAY'].nette, 2.4);
 
   const marches = { '1X2:HOME': 2.00, '1X2:DRAW': 3.50, '1X2:AWAY': 4.00, 'OU:OVER:2.5': 1.90, 'OU:UNDER:2.5': 2.00 };
   const fx = [{ fixtureId: 'e1', home: 'Lens', away: 'Lille' }];
