@@ -18,7 +18,7 @@ import {
 import { getContexteEspn } from './espn.js';
 import { scoreEspnProno, lecteurScoresEspn } from './valeur-suivi.js';
 import { detecterValeursMarche, prixJuste } from './valeur.js';
-import { coteNette, commissionDe } from './commission.js';
+import { coteNette } from './commission.js';
 import { getOdds, getOddsEvents, evaluerValue, cleMarche, sportDe } from './odds.js';
 import { codeValide, evaluerCode, libelleCode, codeDepuisTexte } from './paris.js';
 
@@ -965,7 +965,10 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
     // calibrée ; le consensus des bookmakers l'est.
     // Désormais : publié seulement si la MEILLEURE cote réellement touchée
     // (commission des bourses retirée) dépasse le juste prix du consensus.
-    // C'est la règle des values de marché, la seule qui ait battu la clôture.
+    // C'est la règle des values de marché (CLV +3,9 % sur six saisons en
+    // test ; en réel, mesurée en continu par prono/clv-valeurs.js : −3,3 %
+    // le 29/10 tant que les bourses de paris étaient candidates, d'où leur
+    // exclusion dans victor/odds.js).
     if (vb) {
       const r = regleDuMarche(ev, cotesDuMatch);
       if (!r.ok) {
