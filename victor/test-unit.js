@@ -1407,6 +1407,33 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// BILAN PAR TYPE DE PARI ET PAR COTE
+// ══════════════════════════════════════════════
+{
+  const VS = await import('./valeur-suivi.js');
+  const { texteBilan } = await import('../bot/telegram.js');
+  const EC = await import('../public/js/modules/ecrans.js');
+  verifie('famille : victoire', [VS.familleProno('1X2:HOME'), VS.familleProno('1X2:AWAY')].join(), 'Victoire,Victoire');
+  verifie('famille : buts', [VS.familleProno('OU:OVER:2.5'), VS.familleProno('OU:UNDER:2.5')].join(), 'Plus de buts,Moins de buts');
+  verifie('famille : inconnue', VS.familleProno(null), 'Autre');
+  verifie('tranche de cote : bornes', [1.39, 1.40, 1.99, 2.00].map(c => VS.trancheCote(c).cle).join(), 'tres-basse,basse,moyenne,haute');
+  const rows = [
+    { gagne: true, cote: '1.50', pari_code: 'OU:OVER:2.5' }, { gagne: true, cote: '1.45', pari_code: 'OU:OVER:2.5' },
+    { gagne: false, cote: '1.80', pari_code: 'OU:UNDER:2.5' }, { gagne: true, cote: '2.10', pari_code: '1X2:AWAY' },
+  ];
+  const types = VS.bilanParType(rows);
+  verifie('par type : du plus joué au moins joué', types.map(b => `${b.libelle}:${b.n}`).join(), 'Plus de buts:2,Moins de buts:1,Victoire:1');
+  verifie('par type : rendement des « moins de buts »', types[1].rendement, -1);
+  verifie('par cote : tranches vides retirées', VS.bilanParCote(rows).map(b => `${b.libelle}:${b.n}`).join('|'), '1,40 à 1,69:2|1,70 à 1,99:1|2,00 et plus:1');
+  const per = VS.bilanParPeriodes(rows.map(r => ({ ...r, date: '2026-10-28' })), new Date('2026-10-29T12:00:00Z'));
+  const tb = texteBilan({ victor: { ...VS.resumerFiabilite(rows), periodes: per, types, cotes: VS.bilanParCote(rows) } });
+  verifie('/bilan : par type de pari', tb.includes('Par type de pari') && tb.includes('Moins de buts : 1 paris'), true);
+  verifie('/bilan : par cote', tb.includes('Cote 2,00 et plus'), true);
+  const hf = EC.htmlFiabilite({ ...VS.resumerFiabilite(rows), periodes: per, mois: [], types, cotes: VS.bilanParCote(rows) });
+  verifie('écran Victor : tableaux par type et par cote', hf.includes('Par type de pari') && hf.includes('Cote 1,40 à 1,69'), true);
+}
+
+// ══════════════════════════════════════════════
 // FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
 // ══════════════════════════════════════════════
 {

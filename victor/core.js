@@ -268,6 +268,12 @@ async function groqRequest(systemPrompt, userMessage, maxTokens = 8000, tentativ
   return { candidates: [{ content: { parts: [{ text: data.choices?.[0]?.message?.content || '' }] } }] };
 }
 
+/** Modèle exact derrière un moteur de la cascade, pour ps_pronostics.modele. */
+function modeleDuMoteur(moteur) {
+  const m = { gemini: GEMINI_MODEL, gemma: GEMMA_MODEL, groq: GROQ_MODEL }[moteur];
+  return m ? String(m).slice(0, 64) : null;
+}
+
 // ── callAI : cascade Gemini JSON → Gemma → Groq ───────────────
 //
 // La découverte des matchs ne passe PLUS par googleSearch (quota
@@ -1024,9 +1030,9 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            stats_cles, analyse_tactique, pronostic_principal, cote_estimee,
            confiance, value_bet, cote_value, pari_a_eviter, score_predit,
            confiance_score, analyse_courte, phrase_signature, pari_code,
-           cote_confirmee)
+           cote_confirmee, moteur, modele)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+                 $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
          -- Un seul pronostic par match et par jour (migration 010).
          -- Les jobs de 7h et de 13h analysent tous deux la journée : sans
          -- cette clause, le second insérait un doublon et un pari gagnant
@@ -1053,6 +1059,8 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
            phrase_signature    = EXCLUDED.phrase_signature,
            pari_code           = EXCLUDED.pari_code,
            cote_confirmee      = EXCLUDED.cote_confirmee,
+           moteur              = EXCLUDED.moteur,
+           modele              = EXCLUDED.modele,
            updated_at          = NOW()
          WHERE ps_pronostics.resultat_reel IS NULL` : ''}
          RETURNING id`,
@@ -1085,6 +1093,10 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
           // Booléen brut : `|| null` transformerait false en NULL, et on
           // perdrait justement l'information qu'on cherche à conserver.
           ev.cote_confirmee ?? null,
+          // Quel moteur a écrit ce prono : sans lui, impossible de comparer
+          // Gemini et Groq (l'analyse du 29/10 n'en trouvait aucun).
+          moteur === 'inconnu' ? null : String(moteur).slice(0, 24),
+          modeleDuMoteur(moteur),
         ]
       );
       // Aucune ligne renvoyée = ON CONFLICT DO NOTHING, le pronostic

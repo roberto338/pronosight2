@@ -140,6 +140,14 @@ export function texteBilan({ victor = [], marche = null } = {}) {
     t += `\n📈 *Fiabilité dans la durée*\n`;
     for (const cle of ['semaine', 'mois', 'sixMois', 'annee']) t += ligneFiabilite(bv.periodes[cle].libelle, bv.periodes[cle]);
   }
+  if (n && bv?.types?.length) {
+    t += `\n🎯 *Par type de pari*\n`;
+    for (const b of bv.types) t += ligneFiabilite(b.libelle, b);
+  }
+  if (n && bv?.cotes?.length) {
+    t += `\n💶 *Par cote*\n`;
+    for (const b of bv.cotes) t += ligneFiabilite(`Cote ${b.libelle}`, b);
+  }
   t += `\n📈 *Values de marché (sans IA)*\n`;
   if (marche?.total?.n) {
     const b = marche.total;
