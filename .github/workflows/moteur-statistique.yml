@@ -443,6 +443,23 @@ jobs:
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
+      - name: Analyse complète de Victor (lecture seule)
+        if: steps.choix.outputs.etape == 'analyse'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          {
+            echo '```'
+            node scripts/analyse-victor.js
+            echo
+            echo '══════ Audit (bootstrap du rendement) ══════'
+            node prono/audit-victor.js || echo "audit indisponible"
+            echo
+            echo '══════ CLV (cote de clôture) ══════'
+            node prono/clv.js || echo "CLV indisponible"
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
       - name: Audit de Victor
         if: steps.choix.outputs.etape == 'audit'
         env:
