@@ -14,6 +14,7 @@ import { htmlUne, htmlAAnalyser, ligneMatch, rangCompet, analysable } from './mo
 import { htmlLive, htmlAujourdhui, htmlCompetitions, htmlMesParis, htmlVictor } from './modules/ecrans.js';
 import { creerPari, bilanParis, courbeBankroll, versCsv, codeDepuisMarche, parisARegler, appliquerReglements } from './modules/paris.js';
 import { htmlCombines, genererCombines, evaluerCombine } from './modules/combines.js';
+import { MENTION_COURTE } from './modules/prevention.js';
 // ══════════════════════════════════════════════
 // VARIABLES GLOBALES
 // ══════════════════════════════════════════════
@@ -1984,7 +1985,7 @@ async function shareAnalysis() {
     ctx.fillText('Probabilités tirées des cotes réelles, marge des bookmakers retirée.', 24, 296);
   }
   ctx.font = '600 11px Barlow, sans-serif'; ctx.fillStyle = '#6f8577';
-  ctx.fillText(`${new Date().toLocaleDateString('fr-FR')} · ${location.host} · 18+ · Jouer comporte des risques : 09 74 75 13 13`, 24, 324);
+  ctx.fillText(`${new Date().toLocaleDateString('fr-FR')} · ${location.host} · ${MENTION_COURTE}`, 24, 324);
 
   canvas.toBlob(async blob => {
     const file = new File([blob], 'pronosight-analyse.png', { type: 'image/png' });
