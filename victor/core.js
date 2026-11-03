@@ -259,7 +259,7 @@ async function groqRequest(systemPrompt, userMessage, maxTokens = 8000, tentativ
       console.warn(`   ↻ Groq : requête trop grande — relance avec ${reduit} tokens de réponse`);
       return groqRequest(systemPrompt, userMessage, reduit, 2);
     }
-    throw new Error(`Groq HTTP 413: ${t.slice(0, 200)}`);
+    throw new Error(`Groq HTTP 413: ${t.slice(0, 400)}`);
   }
 
   if (!resp.ok) { const t = await resp.text(); throw new Error(`Groq HTTP ${resp.status}: ${t.slice(0, 200)}`); }
@@ -281,7 +281,7 @@ function modeleDuMoteur(moteur) {
 // épuisé + matchs hallucinés). Les faits arrivent déjà dans
 // `userMessage`, construits par victor/sources.js. L'IA ne fait
 // plus qu'analyser des données réelles.
-async function callAI(systemPrompt, userMessage, maxTokens = 8000, { noThinking = false } = {}) {
+async function callAI(systemPrompt, userMessage, maxTokens = 8000, { noThinking = false, messagesGroq = [] } = {}) {
   const erreurs = [];
 
   // ── 1. Gemini en mode JSON strict (primaire) ──
@@ -322,17 +322,31 @@ async function callAI(systemPrompt, userMessage, maxTokens = 8000, { noThinking 
   }
 
   // ── 3. Groq (fournisseur différent : survit à une panne Google) ──
+  // Le 14/10 et le 03/11, Gemini (503) et Gemma (500) sont tombés ensemble et
+  // Groq a refusé une requête trop grande (413) : sa limite par minute est
+  // plus basse que la taille d'une journée à 40 matchs. Il reçoit alors des
+  // versions allégées du message (moins de matchs, sans le contexte), dans
+  // l'ordre — mieux vaut une analyse sur 12 matchs qu'aucune.
   if (GROQ_API_KEY) {
-    try {
-      const data = await groqRequest(
-        `${systemPrompt}\n\nRéponds UNIQUEMENT avec du JSON valide.`,
-        userMessage,
-        maxTokens
-      );
-      console.log(`   🤖 Moteur : Groq (${GROQ_MODEL})`);
-      return { source: 'groq', data };
-    } catch (err) {
-      erreurs.push(`groq: ${err.message}`);
+    const versions = [userMessage, ...messagesGroq];
+    for (let i = 0; i < versions.length; i++) {
+      try {
+        const data = await groqRequest(
+          `${systemPrompt}\n\nRéponds UNIQUEMENT avec du JSON valide.`,
+          versions[i],
+          maxTokens
+        );
+        console.log(`   🤖 Moteur : Groq (${GROQ_MODEL})${i ? ` — version allégée n° ${i}` : ''}`);
+        return { source: 'groq', data };
+      } catch (err) {
+        const tropGrand = /Groq HTTP 413/.test(err.message);
+        if (tropGrand && i < versions.length - 1) {
+          console.warn(`   ↻ Groq : requête trop grande — nouvel essai avec un message allégé`);
+          continue;
+        }
+        erreurs.push(`groq: ${err.message}`);
+        break;
+      }
     }
   }
 
@@ -806,7 +820,14 @@ Lance l'analyse complète et retourne le JSON. Réponds UNIQUEMENT avec ce JSON 
   await etape(75, `appel IA (${aAnalyser.length} matchs)`);
   let claudeResp;
   try {
-    claudeResp = await callAI(VICTOR_PROMPT, userMessage, 8000);
+    // Versions allégées pour Groq (voir callAI) : les matchs les mieux
+    // documentés d'abord, sans briefing ni patterns.
+    const versionCourte = (n) => userMessage
+      .replace(briefing, () => '')
+      .replace(patternsTexte, () => '')
+      .replace(matchsReels, () => formatFixturesForPrompt(aAnalyser.slice(0, n), { forme, classement, h2h, buteurs, cotes }));
+    const messagesGroq = MATCHS_GROQ.filter(n => n < aAnalyser.length).map(versionCourte);
+    claudeResp = await callAI(VICTOR_PROMPT, userMessage, 8000, { messagesGroq });
   } catch (err) {
     console.error('❌ Erreur IA API:', err.message);
     throw err;
@@ -1487,6 +1508,8 @@ export function regleDuMarche(ev, cotesDuMatch, { seuil = SEUIL_VICTOR_MARCHE } 
 }
 /** Matchs envoyés à l'IA au plus : au-delà, la réponse est tronquée ou vide. */
 export const MAX_MATCHS_IA = Number(process.env.VICTOR_MAX_MATCHS || 40);
+// Tailles des messages allégés proposés à Groq quand il refuse le message complet.
+export const MATCHS_GROQ = [12, 6];
 export const EXIGER_COTE_MARCHE = process.env.VICTOR_EXIGER_COTE !== 'false';
 
 /**

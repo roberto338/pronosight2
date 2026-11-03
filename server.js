@@ -308,7 +308,7 @@ app.get('/api/odds/:sportKey', oddsLimiter, async (req, res) => {
       if (perime) return res.set('X-Cotes-Cache', 'perime').json(perime);
       return res.status(503).json({ error: sitePeutAcheter()
         ? 'Cotes momentanément indisponibles (quota du jour atteint)'
-        : 'Cotes réservées aux analyses de Victor jusqu\'à la fin du mois' });
+        : 'Cotes réservées aux analyses de Victor pour aujourd\'hui (quota mensuel limité) : réessaie demain' });
     }
 
     const params = new URLSearchParams({

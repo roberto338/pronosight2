@@ -1,4 +1,4 @@
-pannes 21
+rien
 
 # ── Comment s'en servir depuis un téléphone ──
 #

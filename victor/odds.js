@@ -16,7 +16,7 @@
 // ══════════════════════════════════════════════
 
 import { fetchWithTimeout, normalizeTeam, heureParis } from './sources.js';
-import { noterQuota } from './quota-cotes.js';
+import { noterQuota, victorPeutAcheter, noterAchatVictor } from './quota-cotes.js';
 import { coteNette, commissionDe } from './commission.js';
 
 // Les bourses de paris (Betfair, Matchbook…) ne sont PAS des candidates à la
@@ -65,7 +65,16 @@ export function cacheVider() { _cacheCotes.clear(); }
 
 export function cacheLire(sport) {
   const e = _cacheCotes.get(sport);
-  if (!e || Date.now() > e.expire) { _cacheCotes.delete(sport); return null; }
+  if (!e || Date.now() > e.expire) return null;
+  return e.evenements;
+}
+
+// Cotes plus anciennes que le cache, gardées pour le jour où le budget de
+// crédits ne permet pas de les racheter (victor/quota-cotes.js).
+const PERIME_MAX_MS = 24 * 3600_000;
+export function cacheLirePerime(sport) {
+  const e = _cacheCotes.get(sport);
+  if (!e || Date.now() > e.expire - CACHE_COTES_MS + PERIME_MAX_MS) return null;
   return e.evenements;
 }
 
@@ -311,13 +320,19 @@ export async function getOdds(fixtures = []) {
     return out;
   }
 
-  let restants = null, payees = 0, recyclees = 0;
+  let restants = null, payees = 0, recyclees = 0, perimees = 0, horsBudget = 0;
 
   for (const sport of sports) {
     try {
       let evenements = cacheLire(sport);
       if (evenements) {
         recyclees++;
+      } else if (!victorPeutAcheter(CREDITS_PAR_COMPET)) {
+        // Budget du jour consommé : les cotes du matin plutôt que rien, et
+        // rien plutôt qu'un mois à sec.
+        evenements = cacheLirePerime(sport);
+        if (!evenements) { horsBudget++; continue; }
+        perimees++;
       } else {
         const url = `https://api.the-odds-api.com/v4/sports/${sport}/odds/`
           + `?apiKey=${ODDS_KEY}&regions=eu&markets=h2h,totals&oddsFormat=decimal`;
@@ -331,6 +346,7 @@ export async function getOdds(fixtures = []) {
 
         evenements = await resp.json();
         cacheEcrire(sport, evenements);
+        noterAchatVictor();
         payees++;
       }
 
@@ -369,6 +385,8 @@ export async function getOdds(fixtures = []) {
   const consommes = payees * CREDITS_PAR_COMPET;
   console.log(`   💰 Cotes: ${out.size} match(s) cotés sur ${sports.length} compétition(s)`
     + ` — ${payees} interrogée(s), ${recyclees} depuis le cache`
+    + (perimees ? `, ${perimees} relue(s) du matin (budget du jour)` : '')
+    + (horsBudget ? `, ${horsBudget} sautée(s) faute de budget` : '')
     + ` · ${consommes} crédit(s) consommé(s)`
     + (restants != null ? `, ${restants} restant(s) ce mois` : ''));
   return out;
