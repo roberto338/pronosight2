@@ -474,6 +474,19 @@ jobs:
             echo '```'
           } | tee -a $GITHUB_STEP_SUMMARY
 
+      - name: Enquête quota de cotes et pannes IA (lecture seule)
+        if: steps.choix.outputs.etape == 'pannes'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APP: https://pronosight2.onrender.com
+        run: |
+          {
+            echo "Quota de cotes vu par la prod : $(curl -sS --max-time 90 "$APP/api/status" | jq -c '.cotes_quota // "injoignable"')"
+            echo '```'
+            node scripts/enquete-pannes.js --jours=${{ steps.choix.outputs.jours }}
+            echo '```'
+          } | tee -a $GITHUB_STEP_SUMMARY
+
       - name: Audit de Victor
         if: steps.choix.outputs.etape == 'audit'
         env:
