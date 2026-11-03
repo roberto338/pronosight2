@@ -1492,6 +1492,25 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
 }
 
 // ══════════════════════════════════════════════
+// PUBLIC MONDIAL : juste prix d'abord, prévention multi-pays
+// ══════════════════════════════════════════════
+{
+  const PR = await import('../public/js/modules/prevention.js');
+  const { ligneValeur, AVERTISSEMENT_VALEURS } = await import('../bot/telegram.js');
+  const VA = await import('../public/js/modules/valeurs.js');
+  verifie('prévention : plusieurs pays', ['France', 'Belgique', 'Québec', 'Royaume-Uni', 'États-Unis'].every(p => PR.MENTION_PREVENTION.includes(p)), true);
+  verifie('prévention : âge selon le pays', /18 ans, 21 dans certains pays/.test(PR.MENTION_PREVENTION), true);
+  const lv = ligneValeur({ equipe_a: 'Lens', equipe_b: 'Lille', libelle: 'Victoire Lens', cote: 2.3, bookmaker: '1xBet', coteJuste: 2.1, avantage: 0.095 });
+  verifie('value : le juste prix avant la meilleure cote', lv.indexOf('à jouer au-dessus de 2.10') >= 0 && lv.indexOf('à jouer au-dessus') < lv.indexOf('Meilleure cote vue'), true);
+  verifie('value : jamais « chez » le bookmaker de la meilleure cote', /chez 1xBet/.test(lv), false);
+  verifie('value : bookmaker autorisé dans son pays', lv.includes('autorisé dans ton pays'), true);
+  verifie('value : avantage réel présenté comme non prouvé', /pas encore prouvé/.test(AVERTISSEMENT_VALEURS), true);
+  const carte = VA.carteValeur({ match: 'Lens vs Lille', equipe_a: 'Lens', equipe_b: 'Lille', cote: 2.3, proba_juste: 0.476, bookmaker: '1xBet', avantage: 0.095 });
+  verifie('écran values : juste prix et bookmaker autorisé', carte.includes('À jouer au-dessus de <b>2.10</b>') && carte.includes('autorisé dans ton pays'), true);
+  verifie('écran values : plus d\'avantage présenté comme prouvé', /pas encore prouvé/.test(VA.htmlEcranValeurs({ valeurs: { aujourdhui: [] } })), true);
+}
+
+// ══════════════════════════════════════════════
 // FIABILITÉ DE VICTOR DANS LE TEMPS — semaine, mois, 6 mois, année
 // ══════════════════════════════════════════════
 {

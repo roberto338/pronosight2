@@ -12,6 +12,7 @@
 
 import { echapperHtml as e } from './securite.js';
 import { icone, ecusson } from './icones.js';
+import { MENTION_PREVENTION, CONSEIL_BOOKMAKER } from './prevention.js';
 
 const pct = (x, d = 1) => (x == null || !Number.isFinite(Number(x))
   ? '—'
@@ -54,6 +55,7 @@ export function carteValeur(v, { bankroll = null, index = null } = {}) {
     <div><span>Prix juste</span><b>${prixJuste}</b><small>${pj > 0 ? `${(pj * 100).toFixed(0)} % de chances` : ''}</small></div>
     <div><span>Consensus</span><b>${v.nb_bookmakers ?? '—'}</b><small>bookmakers</small></div>
   </div>
+  ${pj > 0 ? `<div class="vm-note" style="margin:8px 0 0">À jouer au-dessus de <b>${prixJuste}</b>, ${CONSEIL_BOOKMAKER}. La meilleure cote ci-dessus n'est qu'un repère.</div>` : ''}
   ${mise ? `<div class="vm-mise">Mise fixe conseillée : <b>${String(mise).replace('.', ',')} €</b> (1 % de ta bankroll)</div>` : ''}
   ${index != null ? `<button class="bouton-jouer" onclick="jouerPari('value', ${Number(index)})">${icone('portefeuille', { taille: 16 })}Je joue ce pari</button>` : ''}
 </div>`;
@@ -107,7 +109,7 @@ export function htmlEcranValeurs({ valeurs = null, bilan = null, bankroll = null
         <div class="etat-vide-texte">Aucun bookmaker ne paie au-dessus du prix juste du marché. C'est fréquent, et c'est voulu : on ne force jamais un signal.</div></div>`;
   return `<div class="card">
   <div class="card-title">${icone('flamme')}Values du jour</div>
-  <div class="vm-intro">Un bookmaker paie <b>au-dessus du prix juste</b>, calculé sur le consensus d'au moins 5 bookmakers, marge retirée. Aucun avis d'IA : seulement les cotes. Sur six saisons, ces paris ont battu la cote de clôture de <b>+3,9 %</b> en moyenne — un avantage mesuré, pas une garantie de gain.</div>
+  <div class="vm-intro">Un bookmaker paie <b>au-dessus du prix juste</b>, calculé sur le consensus d'au moins 5 bookmakers, marge retirée. Aucun avis d'IA : seulement les cotes. Testé sur six saisons, ces écarts battaient la cote de clôture de +3,9 %. <b>En réel, l'avantage n'est pas encore prouvé</b> : les bourses de paris, qui faussaient le calcul, sont écartées depuis le 29/10, et le suivi continue.</div>
   ${liste}
 </div>
 <div class="card">
@@ -118,7 +120,7 @@ ${valeurs?.notees?.length ? `<div class="card">
   <div class="card-title">${icone('historique')}Dernières values notées</div>
   ${htmlNotees(valeurs.notees)}
 </div>` : ''}
-<div class="vm-note" style="text-align:center;margin:8px 0 24px">Jeu interdit aux moins de 18 ans. Jouer comporte des risques : endettement, dépendance. Appelez le 09 74 75 13 13 (appel non surtaxé).</div>`;
+<div class="vm-note" style="text-align:center;margin:8px 0 24px">${MENTION_PREVENTION}</div>`;
 }
 
 export default { miseConseillee, carteValeur, htmlBilan, htmlNotees, htmlEcranValeurs };
