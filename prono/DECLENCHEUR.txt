@@ -17,6 +17,7 @@ rien
 #   orientation 45 doublons dans les deux sens, pronos notés à l'envers (lecture seule)
 #   analyse        où Victor gagne et perd : type de pari, cote, compétition, moteur… + audit + CLV (lecture seule)
 #   clv-valeurs    les values de marché battent-elles la cote de clôture ? commission retirée (lecture seule)
+#   pannes 21      quota de cotes épuisé, moteurs IA en panne : ce que la base en garde (lecture seule)
 #   sondes         football-data répond-il encore ? (2 requêtes)
 #   publiques      quelles sources gratuites couvrent la saison en cours
 #   site           le site n'affiche-t-il que du réel ? compétitions, cotes, routes (lecture seule)

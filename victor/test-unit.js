@@ -1218,14 +1218,39 @@ verifie('secours : plafond compatible avec 10 req/min', MAX_LIGUES_SECOURS <= 9,
   const QC = await import('./quota-cotes.js');
   QC.reinitialiserQuota();
   const entetes = (o) => ({ get: (k) => (k in o ? o[k] : null) });
-  verifie('quota : inconnu → le site peut acheter', QC.sitePeutAcheter(), true);
-  QC.noterQuota(entetes({ 'x-requests-remaining': '320', 'x-requests-used': '180' }));
-  verifie('quota : solde lu dans les en-têtes', [QC.etatQuota().restants, QC.etatQuota().utilises].join(','), '320,180');
-  verifie('quota : au-dessus de la réserve → achat permis', QC.sitePeutAcheter(), true);
-  QC.noterQuota(entetes({ 'x-requests-remaining': String(QC.RESERVE_VICTOR) }));
-  verifie('quota : à la réserve → achat refusé au site', QC.sitePeutAcheter(), false);
-  QC.noterQuota(entetes({}));
-  verifie('quota : réponse sans en-tête → solde conservé', QC.etatQuota().restants, QC.RESERVE_VICTOR);
+  const apm = new Date('2026-11-03T15:00:00Z');   // 16h à Paris : Victor a déjà fait son matin
+  verifie('quota : inconnu → le site peut acheter', QC.sitePeutAcheter(apm), true);
+  QC.noterQuota(entetes({ 'x-requests-remaining': '320', 'x-requests-used': '180' }), apm);
+  verifie('quota : solde lu dans les en-têtes', [QC.etatQuota(apm).restants, QC.etatQuota(apm).utilises].join(','), '320,180');
+  verifie('quota : au-dessus de la réserve → achat permis', QC.sitePeutAcheter(apm), true);
+  QC.noterQuota(entetes({ 'x-requests-remaining': String(QC.RESERVE_VICTOR) }), apm);
+  verifie('quota : à la réserve → achat refusé au site', QC.sitePeutAcheter(apm), false);
+  QC.noterQuota(entetes({}), apm);
+  verifie('quota : réponse sans en-tête → solde conservé', QC.etatQuota(apm).restants, QC.RESERVE_VICTOR);
+  QC.reinitialiserQuota();
+
+  // ── Budget du jour (03/11) : le solde réparti sur les jours qui restent ──
+  verifie('budget : jours restants (3 novembre → 28)', QC.joursRestantsDuMois(new Date('2026-11-03T12:00:00Z')), 28);
+  verifie('budget : dernier jour du mois → 1', QC.joursRestantsDuMois(new Date('2026-10-31T12:00:00Z')), 1);
+  const matin = new Date('2026-11-03T05:30:00Z'), treize = new Date('2026-11-03T12:00:00Z');
+  verifie('budget : inconnu tant qu\'aucun solde lu', QC.budgetDuJour(matin), null);
+  QC.noterQuota(entetes({ 'x-requests-remaining': '430' }), matin);           // (430 − 10) / 28 = 15 par jour
+  verifie('budget : allocation du jour', QC.budgetDuJour(matin).allocation, 15);
+  verifie('budget : avant 7h, le site laisse sa part à Victor', QC.sitePeutAcheter(matin), true);
+  QC.noterQuota(entetes({ 'x-requests-remaining': '426' }), matin);           // le site a dépensé 4 : 11 restent, Victor en veut 12
+  verifie('budget : le site ne mange pas le matin de Victor', QC.sitePeutAcheter(matin), false);
+  verifie('budget : le premier achat de Victor passe toujours', QC.victorPeutAcheter(2, matin), true);
+  QC.noterAchatVictor(matin);
+  QC.noterQuota(entetes({ 'x-requests-remaining': '414' }), matin);           // Victor : 12 crédits
+  verifie('budget : dépense lue dans l\'en-tête', QC.budgetDuJour(matin).depense, 16);
+  verifie('budget : à 13h, budget dépassé → Victor relit les cotes du matin', QC.victorPeutAcheter(2, treize), false);
+  verifie('budget : le site aussi s\'arrête', QC.sitePeutAcheter(treize), false);
+  const demain = new Date('2026-11-04T05:30:00Z');
+  QC.noterQuota(entetes({ 'x-requests-remaining': '414' }), demain);
+  verifie('budget : le lendemain, nouveau budget', QC.budgetDuJour(demain).reste, Math.floor((414 - 10) / 27));
+  verifie('budget : mois à sec → plus aucun achat', (QC.noterQuota(entetes({ 'x-requests-remaining': '11' }), demain), QC.victorPeutAcheter(2, demain)), false);
+  QC.noterQuota(entetes({ 'x-requests-remaining': '500' }), new Date('2026-12-01T05:30:00Z'));
+  verifie('budget : quota rechargé le 1er → nouveau départ', QC.budgetDuJour(new Date('2026-12-01T05:30:00Z')).allocation, Math.floor(490 / 31));
   QC.reinitialiserQuota();
 
   // ── Combinés honnêtes ──
